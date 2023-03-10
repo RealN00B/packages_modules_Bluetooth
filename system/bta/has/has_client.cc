@@ -24,6 +24,7 @@
 
 #include <list>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,7 @@ extern bool gatt_profile_get_eatt_support(const RawAddress& remote_bda);
 namespace {
 class HasClientImpl;
 HasClientImpl* instance;
+std::mutex instance_mutex;
 
 /**
  * -----------------------------------------------------------------------------
@@ -2032,6 +2034,7 @@ alarm_callback_t HasCtpGroupOpCoordinator::cb = [](void*) {};
 
 void HasClient::Initialize(bluetooth::has::HasClientCallbacks* callbacks,
                            base::Closure initCb) {
+  std::scoped_lock<std::mutex> lock(instance_mutex);
   if (instance) {
     LOG(ERROR) << "Already initialized!";
     return;
@@ -2060,6 +2063,7 @@ void HasClient::AddFromStorage(const RawAddress& addr, uint8_t features,
 };
 
 void HasClient::CleanUp() {
+  std::scoped_lock<std::mutex> lock(instance_mutex);
   HasClientImpl* ptr = instance;
   instance = nullptr;
 
@@ -2072,6 +2076,7 @@ void HasClient::CleanUp() {
 };
 
 void HasClient::DebugDump(int fd) {
+  std::scoped_lock<std::mutex> lock(instance_mutex);
   dprintf(fd, "Hearing Access Service Client:\n");
   if (instance)
     instance->Dump(fd);
