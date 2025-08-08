@@ -16,6 +16,10 @@
 
 #include "async_manager.h"
 
+#include <fcntl.h>
+#include <sys/select.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -23,10 +27,19 @@
 #include <thread>
 #include <vector>
 
-#include "fcntl.h"
 #include "log.h"
-#include "sys/select.h"
-#include "unistd.h"
+
+#ifndef TEMP_FAILURE_RETRY
+/* Used to retry syscalls that can return EINTR. */
+#define TEMP_FAILURE_RETRY(exp)            \
+  ({                                       \
+    __typeof__(exp) _rc;                   \
+    do {                                   \
+      _rc = (exp);                         \
+    } while (_rc == -1 && errno == EINTR); \
+    _rc;                                   \
+  })
+#endif  // TEMP_FAILURE_RETRY
 
 namespace rootcanal {
 // Implementation of AsyncManager is divided between two classes, three if
@@ -74,8 +87,7 @@ namespace rootcanal {
 
 // This number also states the maximum number of scheduled tasks we can handle
 // at a given time
-static const uint16_t kMaxTaskId =
-    -1; /* 2^16 - 1, permisible ids are {1..2^16-1}*/
+static const uint16_t kMaxTaskId = -1; /* 2^16 - 1, permisible ids are {1..2^16-1}*/
 static inline AsyncTaskId NextAsyncTaskId(const AsyncTaskId id) {
   return (id == kMaxTaskId) ? 1 : id + 1;
 }
@@ -93,9 +105,9 @@ static const int kNotificationBufferSize = 10;
 
 // Async File Descriptor Watcher Implementation:
 class AsyncManager::AsyncFdWatcher {
- public:
-  int WatchFdForNonBlockingReads(
-      int file_descriptor, const ReadCallback& on_read_fd_ready_callback) {
+public:
+  int WatchFdForNonBlockingReads(int file_descriptor,
+                                 const ReadCallback& on_read_fd_ready_callback) {
     // add file descriptor and callback
     {
       std::unique_lock<std::recursive_mutex> guard(internal_mutex_);
@@ -136,8 +148,7 @@ class AsyncManager::AsyncFdWatcher {
     if (std::this_thread::get_id() != thread_.get_id()) {
       thread_.join();
     } else {
-      WARNING("{}: Starting thread stop from inside the reading thread itself",
-              __func__);
+      WARNING("{}: Starting thread stop from inside the reading thread itself", __func__);
     }
 
     {
@@ -148,7 +159,7 @@ class AsyncManager::AsyncFdWatcher {
     return 0;
   }
 
- private:
+private:
   // Make sure to call this with at least one file descriptor ready to be
   // watched upon or the thread routine will return immediately
   int tryStartThread() {
@@ -157,13 +168,20 @@ class AsyncManager::AsyncFdWatcher {
     }
     // set up the communication channel
     int pipe_fds[2];
-    if (pipe2(pipe_fds, O_NONBLOCK)) {
-      ERROR(
-          "{}: Unable to establish a communication channel to the reading "
-          "thread",
-          __func__);
+    if (pipe(pipe_fds)) {
+      ERROR("{}: Unable to establish a communication channel to the reading "
+            "thread",
+            __func__);
       return -1;
     }
+    // configure the fds as non blocking.
+    if (fcntl(pipe_fds[0], F_SETFL, O_NONBLOCK) || fcntl(pipe_fds[1], F_SETFL, O_NONBLOCK)) {
+      ERROR("{}: Unable to configure the communication channel to the reading "
+            "thread",
+            __func__);
+      return -1;
+    }
+
     notification_listen_fd_ = pipe_fds[0];
     notification_write_fd_ = pipe_fds[1];
 
@@ -204,8 +222,7 @@ class AsyncManager::AsyncFdWatcher {
   bool consumeThreadNotifications(fd_set& read_fds) const {
     if (FD_ISSET(notification_listen_fd_, &read_fds)) {
       char buffer[kNotificationBufferSize];
-      while (TEMP_FAILURE_RETRY(read(notification_listen_fd_, buffer,
-                                     kNotificationBufferSize)) ==
+      while (TEMP_FAILURE_RETRY(read(notification_listen_fd_, buffer, kNotificationBufferSize)) ==
              kNotificationBufferSize) {
       }
       return true;
@@ -236,10 +253,9 @@ class AsyncManager::AsyncFdWatcher {
       // wait until there is data available to read on some FD
       int retval = select(nfds + 1, &read_fds, NULL, NULL, NULL);
       if (retval <= 0) {  // there was some error or a timeout
-        ERROR(
-            "{}: There was an error while waiting for data on the file "
-            "descriptors: {}",
-            __func__, strerror(errno));
+        ERROR("{}: There was an error while waiting for data on the file "
+              "descriptors: {}",
+              __func__, strerror(errno));
         continue;
       }
 
@@ -267,21 +283,20 @@ class AsyncManager::AsyncFdWatcher {
 
 // Async task manager implementation
 class AsyncManager::AsyncTaskManager {
- public:
+public:
   AsyncUserId GetNextUserId() { return lastUserId_++; }
 
   AsyncTaskId ExecAsync(AsyncUserId user_id, std::chrono::milliseconds delay,
                         const TaskCallback& callback) {
-    return scheduleTask(std::make_shared<Task>(
-        std::chrono::steady_clock::now() + delay, callback, user_id));
+    return scheduleTask(
+            std::make_shared<Task>(std::chrono::steady_clock::now() + delay, callback, user_id));
   }
 
-  AsyncTaskId ExecAsyncPeriodically(AsyncUserId user_id,
-                                    std::chrono::milliseconds delay,
+  AsyncTaskId ExecAsyncPeriodically(AsyncUserId user_id, std::chrono::milliseconds delay,
                                     std::chrono::milliseconds period,
                                     const TaskCallback& callback) {
-    return scheduleTask(std::make_shared<Task>(
-        std::chrono::steady_clock::now() + delay, period, callback, user_id));
+    return scheduleTask(std::make_shared<Task>(std::chrono::steady_clock::now() + delay, period,
+                                               callback, user_id));
   }
 
   bool CancelAsyncTask(AsyncTaskId async_task_id) {
@@ -329,37 +344,29 @@ class AsyncManager::AsyncTaskManager {
     if (std::this_thread::get_id() != thread_.get_id()) {
       thread_.join();
     } else {
-      WARNING("{}: Starting thread stop from inside the task thread itself",
-              __func__);
+      WARNING("{}: Starting thread stop from inside the task thread itself", __func__);
     }
     return 0;
   }
 
- private:
+private:
   // Holds the data for each task
   class Task {
-   public:
-    Task(std::chrono::steady_clock::time_point time,
-         std::chrono::milliseconds period, const TaskCallback& callback,
-         AsyncUserId user)
+  public:
+    Task(std::chrono::steady_clock::time_point time, std::chrono::milliseconds period,
+         const TaskCallback& callback, AsyncUserId user)
         : time(time),
           periodic(true),
           period(period),
           callback(callback),
           task_id(kInvalidTaskId),
           user_id(user) {}
-    Task(std::chrono::steady_clock::time_point time,
-         const TaskCallback& callback, AsyncUserId user)
-        : time(time),
-          periodic(false),
-          callback(callback),
-          task_id(kInvalidTaskId),
-          user_id(user) {}
+    Task(std::chrono::steady_clock::time_point time, const TaskCallback& callback, AsyncUserId user)
+        : time(time), periodic(false), callback(callback), task_id(kInvalidTaskId), user_id(user) {}
 
     // Operators needed to be in a collection
     bool operator<(const Task& another) const {
-      return std::make_pair(time, task_id) <
-             std::make_pair(another.time, another.task_id);
+      return std::make_pair(time, task_id) < std::make_pair(another.time, another.task_id);
     }
 
     bool isPeriodic() const { return periodic; }
@@ -369,7 +376,7 @@ class AsyncManager::AsyncTaskManager {
     std::chrono::steady_clock::time_point time;
     bool periodic;
     std::chrono::milliseconds period{};
-    std::mutex in_callback; // Taken when the callback is active
+    std::mutex in_callback;  // Taken when the callback is active
     TaskCallback callback;
     AsyncTaskId task_id;
     AsyncUserId user_id;
@@ -377,8 +384,7 @@ class AsyncManager::AsyncTaskManager {
 
   // A comparator class to put shared pointers to tasks in an ordered set
   struct task_p_comparator {
-    bool operator()(const std::shared_ptr<Task>& t1,
-                    const std::shared_ptr<Task>& t2) const {
+    bool operator()(const std::shared_ptr<Task>& t1, const std::shared_ptr<Task>& t2) const {
       return *t1 < *t2;
     }
   };
@@ -434,9 +440,7 @@ class AsyncManager::AsyncTaskManager {
     return task->task_id;
   }
 
-  bool isTaskIdInUse(const AsyncTaskId& task_id) const {
-    return tasks_by_id_.count(task_id) != 0;
-  }
+  bool isTaskIdInUse(const AsyncTaskId& task_id) const { return tasks_by_id_.count(task_id) != 0; }
 
   int tryStartThread() {
     // need the lock because of the running flag and the cond var
@@ -494,8 +498,7 @@ class AsyncManager::AsyncTaskManager {
           // Make a copy of the time_point because wait_until takes a reference
           // to it and may read it after waiting, by which time the task may
           // have been freed (e.g. via CancelAsyncTask).
-          std::chrono::steady_clock::time_point time =
-              (*task_queue_.begin())->time;
+          std::chrono::steady_clock::time_point time = (*task_queue_.begin())->time;
           internal_cond_var_.wait_until(guard, time);
         } else {
           internal_cond_var_.wait(guard);
@@ -519,8 +522,7 @@ class AsyncManager::AsyncTaskManager {
 
 // Async Manager Implementation:
 AsyncManager::AsyncManager()
-    : fdWatcher_p_(new AsyncFdWatcher()),
-      taskManager_p_(new AsyncTaskManager()) {}
+    : fdWatcher_p_(new AsyncFdWatcher()), taskManager_p_(new AsyncTaskManager()) {}
 
 AsyncManager::~AsyncManager() {
   // Make sure the threads are stopped before destroying the object.
@@ -533,31 +535,27 @@ AsyncManager::~AsyncManager() {
   taskManager_p_->stopThread();
 }
 
-int AsyncManager::WatchFdForNonBlockingReads(
-    int file_descriptor, const ReadCallback& on_read_fd_ready_callback) {
-  return fdWatcher_p_->WatchFdForNonBlockingReads(file_descriptor,
-                                                  on_read_fd_ready_callback);
+int AsyncManager::WatchFdForNonBlockingReads(int file_descriptor,
+                                             const ReadCallback& on_read_fd_ready_callback) {
+  return fdWatcher_p_->WatchFdForNonBlockingReads(file_descriptor, on_read_fd_ready_callback);
 }
 
 void AsyncManager::StopWatchingFileDescriptor(int file_descriptor) {
   fdWatcher_p_->StopWatchingFileDescriptor(file_descriptor);
 }
 
-AsyncUserId AsyncManager::GetNextUserId() {
-  return taskManager_p_->GetNextUserId();
-}
+AsyncUserId AsyncManager::GetNextUserId() { return taskManager_p_->GetNextUserId(); }
 
-AsyncTaskId AsyncManager::ExecAsync(AsyncUserId user_id,
-                                    std::chrono::milliseconds delay,
+AsyncTaskId AsyncManager::ExecAsync(AsyncUserId user_id, std::chrono::milliseconds delay,
                                     const TaskCallback& callback) {
   return taskManager_p_->ExecAsync(user_id, delay, callback);
 }
 
-AsyncTaskId AsyncManager::ExecAsyncPeriodically(
-    AsyncUserId user_id, std::chrono::milliseconds delay,
-    std::chrono::milliseconds period, const TaskCallback& callback) {
-  return taskManager_p_->ExecAsyncPeriodically(user_id, delay, period,
-                                               callback);
+AsyncTaskId AsyncManager::ExecAsyncPeriodically(AsyncUserId user_id,
+                                                std::chrono::milliseconds delay,
+                                                std::chrono::milliseconds period,
+                                                const TaskCallback& callback) {
+  return taskManager_p_->ExecAsyncPeriodically(user_id, delay, period, callback);
 }
 
 bool AsyncManager::CancelAsyncTask(AsyncTaskId async_task_id) {

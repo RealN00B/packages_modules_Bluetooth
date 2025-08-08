@@ -20,11 +20,15 @@
 
 #include "os/wakelock_manager.h"
 
+#include <bluetooth/log.h>
+
 #include <cerrno>
 #include <mutex>
 
 #include "os/internal/wakelock_native.h"
-#include "os/log.h"
+
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
 
 namespace bluetooth {
 namespace os {
@@ -35,7 +39,7 @@ using StatusCode = WakelockNative::StatusCode;
 uint64_t now_ms() {
   struct timespec ts = {};
   if (clock_gettime(CLOCK_BOOTTIME, &ts) == -1) {
-    LOG_ERROR("unable to get current time: %s", strerror(errno));
+    log::error("unable to get current time: {}", strerror(errno));
     return 0;
   }
   return (ts.tv_sec * 1000LL) + (ts.tv_nsec / 1000000LL);
@@ -130,9 +134,10 @@ struct WakelockManager::Stats {
     total_acquired_interval_ms += delta_ms;
   }
 
-  flatbuffers::Offset<WakelockManagerData> GetDumpsysData(
-      flatbuffers::FlatBufferBuilder* fb_builder, bool is_native) const {
+  template <typename OutputT>
+  void Dump(OutputT&& out, bool is_native) {
     const uint64_t just_now_ms = now_ms();
+
     // Compute the last acquired interval if the wakelock is still acquired
     uint64_t delta_ms = 0;
     uint64_t last_interval_ms = last_acquired_interval_ms;
@@ -150,46 +155,52 @@ struct WakelockManager::Stats {
       }
       last_interval_ms = delta_ms;
     }
+
     uint64_t total_interval_ms = total_acquired_interval_ms + delta_ms;
 
     if (acquired_count > 0) {
       avg_interval_ms = total_interval_ms / acquired_count;
     }
 
-    WakelockManagerDataBuilder builder(*fb_builder);
-    builder.add_title(fb_builder->CreateString("Bluetooth Wakelock Statistics"));
-    builder.add_is_acquired(is_acquired);
-    builder.add_is_native(is_native);
-    builder.add_acquired_count(acquired_count);
-    builder.add_released_count(released_count);
-    builder.add_acquired_error_count(acquired_errors);
-    builder.add_released_error_count(released_errors);
-    builder.add_last_acquire_error_code(last_acquired_error);
-    builder.add_last_release_error_code(last_released_error);
-    builder.add_last_acquired_timestamp_millis(last_interval_ms);
-    builder.add_last_released_timestamp_millis(last_released_timestamp_ms);
-    builder.add_last_interval_millis(last_acquired_interval_ms);
-    builder.add_max_interval_millis(max_interval_ms);
-    builder.add_min_interval_millis(min_interval_ms);
-    builder.add_avg_interval_millis(avg_interval_ms);
-    builder.add_total_interval_millis(total_interval_ms);
-    builder.add_total_time_since_reset_millis(just_now_ms - last_reset_timestamp_ms);
-    return builder.Finish();
+    std::format_to(out, "\nWakelock Dumpsys:\n");
+    std::format_to(out,
+                   "    is_acquired: {}\n"
+                   "    is_native: {}\n"
+                   "    acquired_count: {}\n"
+                   "    released_count: {}\n"
+                   "    acquired_error_count: {}\n"
+                   "    released_error_count: {}\n"
+                   "    last_acquired_error_code: {}\n"
+                   "    last_released_error_code: {}\n"
+                   "    last_acquired_timestamp_ms: {}\n"
+                   "    last_released_timestamp_ms: {}\n"
+                   "    last_interval_ms: {}\n"
+                   "    max_interval_ms: {}\n"
+                   "    min_interval_ms: {}\n"
+                   "    avg_interval_ms: {}\n"
+                   "    total_interval_ms: {}\n"
+                   "    total_time_since_reeset_ms: {}\n",
+                   is_acquired, is_native, acquired_count, released_count, acquired_errors,
+                   released_errors, last_acquired_error, last_released_error, last_interval_ms,
+                   last_released_timestamp_ms, last_acquired_interval_ms, max_interval_ms,
+                   min_interval_ms, avg_interval_ms, total_interval_ms,
+                   just_now_ms - last_reset_timestamp_ms);
   }
 };
 
 void WakelockManager::SetOsCallouts(OsCallouts* callouts, Handler* handler) {
   std::lock_guard<std::recursive_mutex> lock_guard(mutex_);
   if (initialized_) {
-    LOG_WARN("Setting OS callouts after initialization can lead to wakelock leak!");
+    log::warn("Setting OS callouts after initialization can lead to wakelock leak!");
   }
   os_callouts_ = callouts;
   os_callouts_handler_ = handler;
   is_native_ = (os_callouts_ == nullptr);
   if (is_native_) {
-    ASSERT_LOG(os_callouts_handler_ != nullptr, "handler must not be null when callout is not null");
+    log::assert_that(os_callouts_handler_ != nullptr,
+                     "handler must not be null when callout is not null");
   }
-  LOG_INFO("set to %s", is_native_ ? "native" : "non-native");
+  log::info("set to {}", is_native_ ? "native" : "non-native");
 }
 
 bool WakelockManager::Acquire() {
@@ -212,7 +223,7 @@ bool WakelockManager::Acquire() {
   pstats_->UpdateAcquiredStats(status);
 
   if (status != StatusCode::SUCCESS) {
-    LOG_ERROR("unable to acquire wake lock, error code: %u", status);
+    log::error("unable to acquire wake lock, error code: {}", status);
   }
 
   return status == StatusCode ::SUCCESS;
@@ -238,7 +249,7 @@ bool WakelockManager::Release() {
   pstats_->UpdateReleasedStats(status);
 
   if (status != StatusCode::SUCCESS) {
-    LOG_ERROR("unable to release wake lock, error code: %u", status);
+    log::error("unable to release wake lock, error code: {}", status);
   }
 
   return status == StatusCode ::SUCCESS;
@@ -247,11 +258,11 @@ bool WakelockManager::Release() {
 void WakelockManager::CleanUp() {
   std::lock_guard<std::recursive_mutex> lock_guard(mutex_);
   if (!initialized_) {
-    LOG_ERROR("Already uninitialized");
+    log::error("Already uninitialized");
     return;
   }
   if (pstats_->is_acquired) {
-    LOG_ERROR("Releasing wake lock as part of cleanup");
+    log::error("Releasing wake lock as part of cleanup");
     Release();
   }
   if (is_native_) {
@@ -261,9 +272,11 @@ void WakelockManager::CleanUp() {
   initialized_ = false;
 }
 
-flatbuffers::Offset<WakelockManagerData> WakelockManager::GetDumpsysData(flatbuffers::FlatBufferBuilder* fb_builder) {
+void WakelockManager::Dump(int fd) const {
   std::lock_guard<std::recursive_mutex> lock_guard(mutex_);
-  return pstats_->GetDumpsysData(fb_builder, is_native_);
+  std::string out;
+  pstats_->Dump(std::back_inserter(out), is_native_);
+  dprintf(fd, "%s", out.c_str());
 }
 
 WakelockManager::WakelockManager() : pstats_(std::make_unique<Stats>()) {}

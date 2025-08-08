@@ -19,24 +19,24 @@
 #include <functional>
 #include <mutex>
 
-#include "gd/module.h"
-#include "gd/os/handler.h"
-#include "gd/os/thread.h"
-#include "gd/stack_manager.h"
-#include "main/shim/acl.h"
-#include "main/shim/btm.h"
-#include "main/shim/link_policy_interface.h"
+#include "module.h"
+#include "os/handler.h"
+#include "os/thread.h"
+#include "stack_manager.h"
 
 // The shim layer implementation on the Gd stack side.
 namespace bluetooth {
 namespace shim {
 
+class Acl;
+class Btm;
+
 // GD shim stack, having modes corresponding to legacy stack
 class Stack {
- public:
+public:
   static Stack* GetInstance();
 
-  Stack() = default;
+  Stack();
   Stack(const Stack&) = delete;
   Stack& operator=(const Stack&) = delete;
 
@@ -52,23 +52,37 @@ class Stack {
   StackManager* GetStackManager();
   const StackManager* GetStackManager() const;
 
-  legacy::Acl* GetAcl();
-  LinkPolicyInterface* LinkPolicy();
+  Acl* GetAcl();
 
-  Btm* GetBtm();
   os::Handler* GetHandler();
 
-  void LockForDumpsys(std::function<void()> dumpsys_callback);
+  bool LockForDumpsys(std::function<void()> dumpsys_callback);
 
- private:
+  // Start the list of modules with the given stack manager thread
+  void StartModuleStack(const ModuleList* modules, const os::Thread* thread);
+
+  // Run the callable object on the module instance
+  template <typename T>
+  bool CallOnModule(std::function<void(T* mod)> run) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (is_running_) {
+      run(stack_manager_.GetInstance<T>());
+    }
+    return is_running_;
+  }
+
+  size_t NumModules() const { return num_modules_; }
+
+private:
+  struct impl;
+  std::shared_ptr<impl> pimpl_;
+
   mutable std::recursive_mutex mutex_;
   StackManager stack_manager_;
   bool is_running_ = false;
   os::Thread* stack_thread_ = nullptr;
   os::Handler* stack_handler_ = nullptr;
-  legacy::Acl* acl_ = nullptr;
-  Btm* btm_ = nullptr;
-
+  size_t num_modules_{0};
   void Start(ModuleList* modules);
 };
 

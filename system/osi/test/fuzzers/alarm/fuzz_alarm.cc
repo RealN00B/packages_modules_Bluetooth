@@ -16,12 +16,11 @@
 
 #include <fcntl.h>
 #include <fuzzer/FuzzedDataProvider.h>
-#include "osi/include/alarm.h"
 
 #include "common/message_loop_thread.h"
+#include "osi/include/alarm.h"
 
 using base::Closure;
-using base::TimeDelta;
 using bluetooth::common::MessageLoopThread;
 
 #define MAX_CONCURRENT_ALARMS 25
@@ -29,7 +28,7 @@ using bluetooth::common::MessageLoopThread;
 #define MAX_ALARM_DURATION 25
 
 class btsemaphore {
- public:
+public:
   void post() {
     std::lock_guard<std::mutex> lock(mMutex);
     ++mCount;
@@ -53,10 +52,10 @@ class btsemaphore {
     return false;
   }
 
- private:
+private:
   std::mutex mMutex;
   std::condition_variable mCondition;
-  unsigned long mCount = 0;
+  uint64_t mCount = 0;
 };
 static btsemaphore semaphore;
 static int cb_counter;
@@ -64,21 +63,18 @@ static MessageLoopThread* thread = new MessageLoopThread("fake main thread");
 
 bluetooth::common::MessageLoopThread* get_main_thread() { return thread; }
 
-static void cb(void* data) {
+static void cb(void* /*data*/) {
   ++cb_counter;
   semaphore.post();
 }
 
-void setup() {
-  cb_counter = 0;
-}
-void teardown() { }
+void setup() { cb_counter = 0; }
+void teardown() {}
 
 alarm_t* fuzz_init_alarm(FuzzedDataProvider* dataProvider) {
-  size_t name_len =
-      dataProvider->ConsumeIntegralInRange<size_t>(0, MAX_BUFFER_LEN);
+  size_t name_len = dataProvider->ConsumeIntegralInRange<size_t>(0, MAX_BUFFER_LEN);
   std::vector<char> alarm_name_vect =
-      dataProvider->ConsumeBytesWithTerminator<char>(name_len, '\0');
+          dataProvider->ConsumeBytesWithTerminator<char>(name_len, '\0');
   char* alarm_name = alarm_name_vect.data();
 
   // Determine if our alarm will be periodic
@@ -93,15 +89,13 @@ bool fuzz_set_alarm(alarm_t* alarm, uint64_t interval, alarm_callback_t cb,
                     FuzzedDataProvider* dataProvider) {
   // Generate a random buffer (or null)
   void* data_buffer = nullptr;
-  size_t buff_len =
-      dataProvider->ConsumeIntegralInRange<size_t>(1, MAX_BUFFER_LEN);
+  size_t buff_len = dataProvider->ConsumeIntegralInRange<size_t>(1, MAX_BUFFER_LEN);
   if (buff_len == 0) {
     return false;
   }
 
   // allocate our space
-  std::vector<uint8_t> data_vector =
-      dataProvider->ConsumeBytes<uint8_t>(buff_len);
+  std::vector<uint8_t> data_vector = dataProvider->ConsumeBytes<uint8_t>(buff_len);
   data_buffer = data_vector.data();
 
   // Make sure alarm is non-null
@@ -135,6 +129,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size) {
   // Alarm must be non-null, or set() will trigger assert
   if (alarm) {
     if (!fuzz_set_alarm(alarm, MAX_ALARM_DURATION, cb, &dataProvider)) {
+      alarm_free(alarm);
       return 0;
     }
     alarm_cancel(alarm);
@@ -145,13 +140,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* Data, size_t Size) {
 
   if (alarm) {
     // Set up another set of alarms & let these ones run
-    int num_alarms =
-        dataProvider.ConsumeIntegralInRange<uint8_t>(0, MAX_CONCURRENT_ALARMS);
+    int num_alarms = dataProvider.ConsumeIntegralInRange<uint8_t>(0, MAX_CONCURRENT_ALARMS);
     for (int i = 0; i < num_alarms; i++) {
-      uint64_t interval =
-          dataProvider.ConsumeIntegralInRange<uint64_t>(0, MAX_ALARM_DURATION);
-      if (fuzz_set_alarm(alarm, interval, cb, &dataProvider)) {
-        return 0;
+      uint64_t interval = dataProvider.ConsumeIntegralInRange<uint64_t>(0, MAX_ALARM_DURATION);
+      if (!fuzz_set_alarm(alarm, interval, cb, &dataProvider)) {
+        num_alarms = i;
+        break;
       }
       alarm_get_remaining_ms(alarm);
     }

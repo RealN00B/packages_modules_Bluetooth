@@ -20,9 +20,10 @@
 
 #include <vector>
 
-#include "bt_target.h"
+#include "btm_api_types.h"
 #include "device/include/esco_parameters.h"
-#include "raw_address.h"
+#include "internal_include/bt_target.h"
+#include "types/raw_address.h"
 
 // Used by the Bluetooth stack to get WBS supported and codec, or notify SCO
 // connection change to lower layer (kernel) when SCO-over-HCI is used. So far
@@ -48,7 +49,7 @@ struct bt_codecs {
 };
 
 // Use default packet size for codec if this value is given.
-constexpr int kDefaultPacketSize = 0;
+constexpr size_t kDefaultPacketSize = 0;
 
 constexpr inline int esco_coding_to_codec(esco_coding_format_t esco_coding) {
   switch (esco_coding) {
@@ -69,6 +70,9 @@ constexpr inline int esco_coding_to_codec(esco_coding_format_t esco_coding) {
 // Initialize the SCO HFP HAL module
 void init();
 
+// Check if specified coding format is supported by the adapter.
+bool is_coding_format_supported(esco_coding_format_t coding_format);
+
 // Check if wideband speech is supported on local device.
 bool get_wbs_supported();
 
@@ -88,14 +92,13 @@ bool get_offload_enabled();
 bool enable_offload(bool enable);
 
 // Notify the codec datapath to lower layer for offload mode.
-void set_codec_datapath(int codec_uuid);
+void set_codec_datapath(tBTA_AG_UUID_CODEC codec_uuid);
 
 // Get the maximum supported packet size from the lower layer.
-int get_packet_size(int codec);
+size_t get_packet_size(int codec);
 
 // Notify the lower layer about SCO connection change.
-void notify_sco_connection_change(RawAddress device, bool is_connected,
-                                  int codec);
+void notify_sco_connection_change(RawAddress device, bool is_connected, int codec);
 
 // Update eSCO parameters
 void update_esco_parameters(enh_esco_params_t* p_parms);

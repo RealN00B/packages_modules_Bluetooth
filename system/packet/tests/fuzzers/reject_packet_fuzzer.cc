@@ -22,6 +22,9 @@
 #include "avrcp_test_packets.h"
 #include "packet_test_helper.h"
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 namespace bluetooth {
 namespace avrcp {
 
@@ -36,8 +39,7 @@ extern "C" int LLVMFuzzerTestOneInput(const char* data, size_t size) {
       rejected_volume_changed_notification.push_back(data[x]);
     }
 
-    auto test_packet =
-        TestAvrcpPacket::Make(rejected_volume_changed_notification);
+    auto test_packet = TestAvrcpPacket::Make(rejected_volume_changed_notification);
 
     test_packet->GetData();
   }

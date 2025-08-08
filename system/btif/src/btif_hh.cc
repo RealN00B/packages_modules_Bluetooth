@@ -29,22 +29,42 @@
 
 #include "btif/include/btif_hh.h"
 
-#include <base/logging.h>
+#include <base/functional/bind.h>
+#include <bluetooth/log.h>
+#include <com_android_bluetooth_flags.h>
+#include <frameworks/proto_logging/stats/enums/bluetooth/enums.pb.h>
+#include <unistd.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 
-#include "bta_sec_api.h"
+#include "bt_device_type.h"
+#include "bta_api.h"
+#include "bta_hh_api.h"
 #include "bta_hh_co.h"
+#include "bta_sec_api.h"
 #include "btif/include/btif_common.h"
+#include "btif/include/btif_dm.h"
+#include "btif/include/btif_hd.h"
+#include "btif/include/btif_metrics_logging.h"
 #include "btif/include/btif_profile_storage.h"
+#include "btif/include/btif_storage.h"
 #include "btif/include/btif_util.h"
+#include "hardware/bluetooth.h"
 #include "include/hardware/bt_hh.h"
+#include "internal_include/bt_target.h"
 #include "main/shim/dumpsys.h"
+#include "osi/include/alarm.h"
 #include "osi/include/allocator.h"
-#include "osi/include/log.h"
 #include "stack/include/bt_hdr.h"
+#include "stack/include/bt_uuid16.h"
+#include "stack/include/btm_client_interface.h"
 #include "stack/include/hidh_api.h"
-#include "stack/include/l2c_api.h"
+#include "types/ble_address_with_type.h"
+#include "types/bluetooth/uuid.h"
+#include "types/bt_transport.h"
 #include "types/raw_address.h"
 
 #define COD_HID_KEYBOARD 0x0540
@@ -61,6 +81,8 @@
 
 #define LOGITECH_KB_MX5500_VENDOR_ID 0x046D
 #define LOGITECH_KB_MX5500_PRODUCT_ID 0xB30B
+
+using namespace bluetooth;
 
 static int btif_hh_keylockstates = 0;  // The current key state of each key
 
@@ -93,44 +115,47 @@ typedef struct hid_kb_list {
 btif_hh_cb_t btif_hh_cb;
 
 static bthh_callbacks_t* bt_hh_callbacks = NULL;
-static bthh_profile_enable_t bt_hh_enable_type = {.hidp_enabled = true,
-                                                  .hogp_enabled = true};
+static bthh_profile_enable_t bt_hh_enable_type = {.hidp_enabled = true, .hogp_enabled = true};
 
 /* List of HID keyboards for which the NUMLOCK state needs to be
  * turned ON by default. Add devices to this list to apply the
  * NUMLOCK state toggle on fpr first connect.*/
-static tHID_KB_LIST hid_kb_numlock_on_list[] = {{LOGITECH_KB_MX5500_PRODUCT_ID,
-                                                 LOGITECH_KB_MX5500_VENDOR_ID,
-                                                 "Logitech MX5500 Keyboard"}};
+static tHID_KB_LIST hid_kb_numlock_on_list[] = {
+        {LOGITECH_KB_MX5500_PRODUCT_ID, LOGITECH_KB_MX5500_VENDOR_ID, "Logitech MX5500 Keyboard"}};
 
-#define CHECK_BTHH_INIT()                                   \
-  do {                                                      \
-    if (bt_hh_callbacks == NULL) {                          \
-      LOG_WARN("BTHH: %s: BTHH not initialized", __func__); \
-      return BT_STATUS_NOT_READY;                           \
-    }                                                       \
+#define CHECK_BTHH_INIT()                 \
+  do {                                    \
+    if (bt_hh_callbacks == NULL) {        \
+      log::error("BTHH not initialized"); \
+      return BT_STATUS_NOT_READY;         \
+    }                                     \
+  } while (0)
+
+#define BTHH_CHECK_NOT_DISABLED()                                           \
+  do {                                                                      \
+    if (btif_hh_cb.status == BTIF_HH_DISABLED) {                            \
+      log::error("HH status = {}", btif_hh_status_text(btif_hh_cb.status)); \
+      return BT_STATUS_UNEXPECTED_STATE;                                    \
+    }                                                                       \
+  } while (0)
+
+#define BTHH_LOG_UNKNOWN_LINK(_link_spec) log::error("Unknown link: {}", (_link_spec))
+#define BTHH_LOG_LINK(_link_spec) log::verbose("link spec: {}", (_link_spec))
+
+#define BTHH_STATE_UPDATE(_link_spec, _state)                                                  \
+  do {                                                                                         \
+    log::verbose("link spec: {} state: {}", (_link_spec), bthh_connection_state_text(_state)); \
+    HAL_CBACK(bt_hh_callbacks, connection_state_cb, &(_link_spec).addrt.bda,                   \
+              (_link_spec).addrt.type, (_link_spec).transport, (_state));                      \
   } while (0)
 
 /*******************************************************************************
  *  Static functions
  ******************************************************************************/
 
-/*******************************************************************************
- *  Externs
- ******************************************************************************/
-bool check_cod(const RawAddress* remote_bdaddr, uint32_t cod);
-bool check_cod_hid(const RawAddress* remote_bdaddr);
-bool check_cod_hid_major(const RawAddress& bd_addr, uint32_t cod);
-void bta_hh_co_close(btif_hh_device_t* p_dev);
-void bta_hh_co_send_hid_info(btif_hh_device_t* p_dev, const char* dev_name,
-                             uint16_t vendor_id, uint16_t product_id,
-                             uint16_t version, uint8_t ctry_code, int dscp_len,
-                             uint8_t* p_dscp);
-void bta_hh_co_write(int fd, uint8_t* rpt, uint16_t len);
+static void btif_hh_transport_select(tAclLinkSpec& link_spec);
+static void btif_hh_timer_timeout(void* data);
 static void bte_hh_evt(tBTA_HH_EVT event, tBTA_HH* p_data);
-void btif_dm_hh_open_failed(RawAddress* bdaddr);
-void btif_hd_service_registration();
-void btif_hh_timer_timeout(void* data);
 
 /*******************************************************************************
  *  Functions
@@ -139,7 +164,9 @@ void btif_hh_timer_timeout(void* data);
 static int get_keylockstates() { return btif_hh_keylockstates; }
 
 static void set_keylockstate(int keymask, bool isSet) {
-  if (isSet) btif_hh_keylockstates |= keymask;
+  if (isSet) {
+    btif_hh_keylockstates |= keymask;
+  }
 }
 
 /*******************************************************************************
@@ -160,8 +187,7 @@ static void set_keylockstate(int keymask, bool isSet) {
  ******************************************************************************/
 
 static void toggle_os_keylockstates(int fd, int changedlockstates) {
-  LOG_VERBOSE("%s: fd = %d, changedlockstates = 0x%x", __func__, fd,
-              changedlockstates);
+  log::verbose("fd = {}, changedlockstates = 0x{:x}", fd, changedlockstates);
   uint8_t hidreport[9];
   int reportIndex;
   memset(hidreport, 0, 9);
@@ -169,40 +195,32 @@ static void toggle_os_keylockstates(int fd, int changedlockstates) {
   reportIndex = 4;
 
   if (changedlockstates & BTIF_HH_KEYSTATE_MASK_CAPSLOCK) {
-    LOG_VERBOSE("%s Setting CAPSLOCK", __func__);
+    log::verbose("Setting CAPSLOCK");
     hidreport[reportIndex++] = (uint8_t)HID_REPORT_CAPSLOCK;
   }
 
   if (changedlockstates & BTIF_HH_KEYSTATE_MASK_NUMLOCK) {
-    LOG_VERBOSE("%s Setting NUMLOCK", __func__);
+    log::verbose("Setting NUMLOCK");
     hidreport[reportIndex++] = (uint8_t)HID_REPORT_NUMLOCK;
   }
 
   if (changedlockstates & BTIF_HH_KEYSTATE_MASK_SCROLLLOCK) {
-    LOG_VERBOSE("%s Setting SCROLLLOCK", __func__);
+    log::verbose("Setting SCROLLLOCK");
     hidreport[reportIndex++] = (uint8_t)HID_REPORT_SCROLLLOCK;
   }
 
-  LOG_VERBOSE(
-      "Writing hidreport #1 to os: "
-      "%s:  %x %x %x",
-      __func__, hidreport[0], hidreport[1], hidreport[2]);
-  LOG_VERBOSE("%s:  %x %x %x", __func__, hidreport[3], hidreport[4],
-              hidreport[5]);
-  LOG_VERBOSE("%s:  %x %x %x", __func__, hidreport[6], hidreport[7],
-              hidreport[8]);
+  log::verbose("Writing hidreport #1 to os:");
+  log::verbose("| {:x} {:x} {:x}", hidreport[0], hidreport[1], hidreport[2]);
+  log::verbose("| {:x} {:x} {:x}", hidreport[3], hidreport[4], hidreport[5]);
+  log::verbose("| {:x} {:x} {:x}", hidreport[6], hidreport[7], hidreport[8]);
   bta_hh_co_write(fd, hidreport, sizeof(hidreport));
   usleep(200000);
   memset(hidreport, 0, 9);
   hidreport[0] = 1;
-  LOG_VERBOSE(
-      "Writing hidreport #2 to os: "
-      "%s:  %x %x %x",
-      __func__, hidreport[0], hidreport[1], hidreport[2]);
-  LOG_VERBOSE("%s:  %x %x %x", __func__, hidreport[3], hidreport[4],
-              hidreport[5]);
-  LOG_VERBOSE("%s:  %x %x %x ", __func__, hidreport[6], hidreport[7],
-              hidreport[8]);
+  log::verbose("Writing hidreport #2 to os:");
+  log::verbose("| {:x} {:x} {:x}", hidreport[0], hidreport[1], hidreport[2]);
+  log::verbose("| {:x} {:x} {:x}", hidreport[3], hidreport[4], hidreport[5]);
+  log::verbose("| {:x} {:x} {:x}", hidreport[6], hidreport[7], hidreport[8]);
   bta_hh_co_write(fd, hidreport, sizeof(hidreport));
 }
 
@@ -237,18 +255,18 @@ static BT_HDR* create_pbuf(uint16_t len, uint8_t* data) {
 static void update_keyboard_lockstates(btif_hh_device_t* p_dev) {
   uint8_t len = 2; /* reportid + 1 byte report*/
   BT_HDR* p_buf;
-  uint8_t data[] = {0x01, /* report id */
+  uint8_t data[] = {0x01,                                         /* report id */
                     static_cast<uint8_t>(btif_hh_keylockstates)}; /* keystate */
 
   /* Set report for other keyboards */
-  LOG_VERBOSE("%s: setting report on dev_handle %d to 0x%x", __func__,
-              p_dev->dev_handle, btif_hh_keylockstates);
+  log::verbose("setting report on dev_handle {} to 0x{:x}", p_dev->dev_handle,
+               btif_hh_keylockstates);
 
   /* Get SetReport buffer */
   p_buf = create_pbuf(len, data);
   if (p_buf != NULL) {
     p_buf->layer_specific = BTA_HH_RPTT_OUTPUT;
-    BTA_HhSendData(p_dev->dev_handle, p_dev->bd_addr, p_buf);
+    BTA_HhSendData(p_dev->dev_handle, p_dev->link_spec, p_buf);
   }
 }
 
@@ -262,33 +280,46 @@ static void update_keyboard_lockstates(btif_hh_device_t* p_dev) {
  *
  * Returns          void
  ******************************************************************************/
-static void sync_lockstate_on_connect(btif_hh_device_t* p_dev) {
-  int keylockstates;
+static void sync_lockstate_on_connect(btif_hh_device_t* p_dev, tBTA_HH_DEV_DSCP_INFO& dscp_info) {
+  for (unsigned int i = 0; i < sizeof(hid_kb_numlock_on_list) / sizeof(tHID_KB_LIST); i++) {
+    tHID_KB_LIST& kb = hid_kb_numlock_on_list[i];
+    if (dscp_info.vendor_id == kb.version_id && dscp_info.product_id == kb.product_id) {
+      log::verbose("idx[{}] Enabling NUMLOCK for device {} {}", i, p_dev->link_spec, kb.kb_name);
+      // Enable NUMLOCK by default so that numeric keys work from first keyboard connect
+      set_keylockstate(BTIF_HH_KEYSTATE_MASK_NUMLOCK, true);
+      update_keyboard_lockstates(p_dev);
 
-  LOG_VERBOSE(
-      "%s: Syncing keyboard lock states after "
-      "reconnect...",
-      __func__);
-  /*If the device is connected, update keyboard state */
-  update_keyboard_lockstates(p_dev);
-
-  /*Check if the lockstate of caps,scroll,num is set.
-   If so, send a report to the kernel
-  so the lockstate is in sync */
-  keylockstates = get_keylockstates();
-  if (keylockstates) {
-    LOG_VERBOSE(
-        "%s: Sending hid report to kernel "
-        "indicating lock key state 0x%x",
-        __func__, keylockstates);
-    usleep(200000);
-    toggle_os_keylockstates(p_dev->fd, keylockstates);
-  } else {
-    LOG_VERBOSE(
-        "%s: NOT sending hid report to kernel "
-        "indicating lock key state 0x%x",
-        __func__, keylockstates);
+      // If the lockstate of caps, scroll or num is set, send a report to the kernel
+      int keylockstates = get_keylockstates();
+      if (keylockstates) {
+        log::verbose("Sending HID report to kernel indicating lock key state 0x{:x} for device {}",
+                     keylockstates, p_dev->link_spec);
+        usleep(200000);
+        int fd = (com::android::bluetooth::flags::hid_report_queuing() ? p_dev->internal_send_fd
+                                                                       : p_dev->uhid.fd);
+        toggle_os_keylockstates(fd, keylockstates);
+      }
+      break;
+    }
   }
+}
+
+/*******************************************************************************
+ *
+ * Function         btif_hh_find_added_dev
+ *
+ * Description      Return the added device pointer of the specified link spec
+ *
+ * Returns          Added device entry
+ ******************************************************************************/
+static btif_hh_added_device_t* btif_hh_find_added_dev(const tAclLinkSpec& link_spec) {
+  for (int i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
+    btif_hh_added_device_t* added_dev = &btif_hh_cb.added_devices[i];
+    if (added_dev->link_spec == link_spec) {
+      return added_dev;
+    }
+  }
+  return NULL;
 }
 
 /*******************************************************************************
@@ -313,17 +344,54 @@ btif_hh_device_t* btif_hh_find_connected_dev_by_handle(uint8_t handle) {
 
 /*******************************************************************************
  *
- * Function         btif_hh_find_dev_by_bda
+ * Function         btif_hh_find_dev_by_handle
  *
- * Description      Return the device pointer of the specified RawAddress.
+ * Description      Return the device pointer of the specified device handle
  *
  * Returns          Device entry pointer in the device table
  ******************************************************************************/
-static btif_hh_device_t* btif_hh_find_dev_by_bda(const RawAddress& bd_addr) {
+btif_hh_device_t* btif_hh_find_dev_by_handle(uint8_t handle) {
+  for (int i = 0; i < BTIF_HH_MAX_HID; i++) {
+    btif_hh_device_t* p_dev = &btif_hh_cb.devices[i];
+    if (p_dev->dev_status != BTHH_CONN_STATE_UNKNOWN && p_dev->dev_handle == handle) {
+      return p_dev;
+    }
+  }
+  return nullptr;
+}
+
+/*******************************************************************************
+ *
+ * Function         btif_hh_find_empty_dev
+ *
+ * Description      Return an empty device
+ *
+ * Returns          Device entry pointer in the device table
+ ******************************************************************************/
+btif_hh_device_t* btif_hh_find_empty_dev(void) {
+  for (int i = 0; i < BTIF_HH_MAX_HID; i++) {
+    btif_hh_device_t* p_dev = &btif_hh_cb.devices[i];
+    if (p_dev->dev_status == BTHH_CONN_STATE_UNKNOWN) {
+      return p_dev;
+    }
+  }
+  return nullptr;
+}
+
+/*******************************************************************************
+ *
+ * Function         btif_hh_find_dev_by_link_spec
+ *
+ * Description      Return the device pointer of the specified ACL link
+ *                  specification.
+ *
+ * Returns          Device entry pointer in the device table
+ ******************************************************************************/
+static btif_hh_device_t* btif_hh_find_dev_by_link_spec(const tAclLinkSpec& link_spec) {
   uint32_t i;
   for (i = 0; i < BTIF_HH_MAX_HID; i++) {
     if (btif_hh_cb.devices[i].dev_status != BTHH_CONN_STATE_UNKNOWN &&
-        btif_hh_cb.devices[i].bd_addr == bd_addr) {
+        btif_hh_cb.devices[i].link_spec == link_spec) {
       return &btif_hh_cb.devices[i];
     }
   }
@@ -332,19 +400,18 @@ static btif_hh_device_t* btif_hh_find_dev_by_bda(const RawAddress& bd_addr) {
 
 /*******************************************************************************
  *
- * Function         btif_hh_find_connected_dev_by_bda
+ * Function         btif_hh_find_connected_dev_by_link_spec
  *
- * Description      Return the connected device pointer of the specified
- *                  RawAddress.
+ * Description      Return the connected device pointer of the specified ACL
+ *                  link specification.
  *
  * Returns          Device entry pointer in the device table
  ******************************************************************************/
-static btif_hh_device_t* btif_hh_find_connected_dev_by_bda(
-    const RawAddress& bd_addr) {
+static btif_hh_device_t* btif_hh_find_connected_dev_by_link_spec(const tAclLinkSpec& link_spec) {
   uint32_t i;
   for (i = 0; i < BTIF_HH_MAX_HID; i++) {
     if (btif_hh_cb.devices[i].dev_status == BTHH_CONN_STATE_CONNECTED &&
-        btif_hh_cb.devices[i].bd_addr == bd_addr) {
+        btif_hh_cb.devices[i].link_spec == link_spec) {
       return &btif_hh_cb.devices[i];
     }
   }
@@ -355,15 +422,15 @@ static btif_hh_device_t* btif_hh_find_connected_dev_by_bda(
  *
  * Function      btif_hh_stop_vup_timer
  *
- * Description  stop vitual unplug timer
+ * Description  stop virtual unplug timer
  *
  * Returns      void
  ******************************************************************************/
-static void btif_hh_stop_vup_timer(RawAddress* bd_addr) {
-  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+static void btif_hh_stop_vup_timer(const tAclLinkSpec& link_spec) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
 
   if (p_dev != NULL) {
-    LOG_VERBOSE("stop VUP timer");
+    log::verbose("stop VUP timer");
     alarm_free(p_dev->vup_timer);
     p_dev->vup_timer = NULL;
   }
@@ -376,106 +443,493 @@ static void btif_hh_stop_vup_timer(RawAddress* bd_addr) {
  *
  * Returns      void
  ******************************************************************************/
-static void btif_hh_start_vup_timer(const RawAddress* bd_addr) {
-  LOG_VERBOSE("%s", __func__);
+static void btif_hh_start_vup_timer(const tAclLinkSpec& link_spec) {
+  log::verbose("");
 
-  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
-  CHECK(p_dev != NULL);
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
+  log::assert_that(p_dev != NULL, "assert failed: p_dev != NULL");
 
   alarm_free(p_dev->vup_timer);
   p_dev->vup_timer = alarm_new("btif_hh.vup_timer");
-  alarm_set_on_mloop(p_dev->vup_timer, BTIF_TIMEOUT_VUP_MS,
-                     btif_hh_timer_timeout, p_dev);
+  alarm_set_on_mloop(p_dev->vup_timer, BTIF_TIMEOUT_VUP_MS, btif_hh_timer_timeout, p_dev);
 }
 
-static void hh_connect_complete(uint8_t handle, RawAddress& bda,
-                                BTIF_HH_STATUS status) {
-  bthh_connection_state_t state = BTHH_CONN_STATE_CONNECTED;
-  btif_hh_cb.status = status;
-
-  if (status != BTIF_HH_DEV_CONNECTED) {
-    state = BTHH_CONN_STATE_DISCONNECTED;
-    BTA_HhClose(handle);
+static bthh_connection_state_t hh_get_state_on_disconnect(tAclLinkSpec& link_spec) {
+  if (!com::android::bluetooth::flags::allow_switching_hid_and_hogp()) {
+    return BTHH_CONN_STATE_ACCEPTING;
   }
-  HAL_CBACK(bt_hh_callbacks, connection_state_cb, &bda, state);
+
+  btif_hh_added_device_t* added_dev = btif_hh_find_added_dev(link_spec);
+  if (added_dev != nullptr) {
+    return added_dev->reconnect_allowed ? BTHH_CONN_STATE_ACCEPTING : BTHH_CONN_STATE_DISCONNECTED;
+  } else {
+    return BTHH_CONN_STATE_DISCONNECTED;
+  }
 }
 
-static void hh_open_handler(tBTA_HH_CONN& conn) {
-  LOG_DEBUG("status = %d, handle = %d", conn.status, conn.handle);
-
-  HAL_CBACK(bt_hh_callbacks, connection_state_cb, (RawAddress*)&conn.bda,
-            BTHH_CONN_STATE_CONNECTING);
-  btif_hh_cb.pending_conn_address = RawAddress::kEmpty;
-
-  if (conn.status != BTA_HH_OK) {
-    btif_dm_hh_open_failed(&conn.bda);
-    btif_hh_device_t* p_dev = btif_hh_find_dev_by_bda(conn.bda);
-    if (p_dev != NULL) {
-      btif_hh_stop_vup_timer(&(p_dev->bd_addr));
-      p_dev->dev_status = BTHH_CONN_STATE_DISCONNECTED;
+static void hh_connect_complete(tBTA_HH_CONN& conn, bthh_connection_state_t state) {
+  if (state != BTHH_CONN_STATE_CONNECTED) {
+    if (!com::android::bluetooth::flags::close_hid_only_if_connected() ||
+        conn.status == BTA_HH_OK) {
+      BTA_HhClose(conn.handle);
     }
-    hh_connect_complete(conn.handle, conn.bda, BTIF_HH_DEV_DISCONNECTED);
-    return;
   }
-
-  /* Initialize device driver */
-  if (!bta_hh_co_open(conn.handle, conn.sub_class, conn.attr_mask,
-                      conn.app_id)) {
-    LOG_WARN("Failed to find the uhid driver");
-    hh_connect_complete(conn.handle, conn.bda, BTIF_HH_DEV_DISCONNECTED);
-    return;
-  }
-
-  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(conn.handle);
-  if (p_dev == NULL) {
-    /* The connect request must have come from device side and exceeded the
-     * connected HID device number. */
-    LOG_WARN("Cannot find device with handle %d", conn.handle);
-    hh_connect_complete(conn.handle, conn.bda, BTIF_HH_DEV_DISCONNECTED);
-    return;
-  }
-
-  LOG_INFO("Found device, getting dscp info for handle %d", conn.handle);
-
-  p_dev->bd_addr = conn.bda;
-  p_dev->dev_status = BTHH_CONN_STATE_CONNECTED;
-  hh_connect_complete(conn.handle, conn.bda, BTIF_HH_DEV_CONNECTED);
-  // Send set_idle if the peer_device is a keyboard
-  if (check_cod_hid_major(conn.bda, COD_HID_KEYBOARD) ||
-      check_cod_hid_major(conn.bda, COD_HID_COMBO)) {
-    BTA_HhSetIdle(conn.handle, 0);
-  }
-  BTA_HhGetDscpInfo(conn.handle);
+  BTHH_STATE_UPDATE(conn.link_spec, state);
 }
 
 /*******************************************************************************
  *
- * Function         btif_hh_add_added_dev
+ * Function         hh_add_device
  *
  * Description      Add a new device to the added device list.
  *
  * Returns          true if add successfully, otherwise false.
  ******************************************************************************/
-bool btif_hh_add_added_dev(const RawAddress& bda, tBTA_HH_ATTR_MASK attr_mask) {
+static bool hh_add_device(const tAclLinkSpec& link_spec, tBTA_HH_ATTR_MASK attr_mask,
+                          bool reconnect_allowed) {
   int i;
-  for (i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
-    if (btif_hh_cb.added_devices[i].bd_addr == bda) {
-      LOG(WARNING) << " Device " << ADDRESS_TO_LOGGABLE_STR(bda) << " already added";
-      return false;
-    }
+
+  // Check if already added
+  if (btif_hh_find_added_dev(link_spec) != nullptr) {
+    log::warn("Device {} already added", link_spec);
+    return false;
   }
+
+  // Use an empty slot for the new device
   for (i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
-    if (btif_hh_cb.added_devices[i].bd_addr.IsEmpty()) {
-      LOG(WARNING) << " Added device " << ADDRESS_TO_LOGGABLE_STR(bda);
-      btif_hh_cb.added_devices[i].bd_addr = bda;
-      btif_hh_cb.added_devices[i].dev_handle = BTA_HH_INVALID_HANDLE;
-      btif_hh_cb.added_devices[i].attr_mask = attr_mask;
+    btif_hh_added_device_t& dev = btif_hh_cb.added_devices[i];
+    if (dev.link_spec.addrt.bda.IsEmpty()) {
+      log::info("Added device {}", link_spec);
+      dev.link_spec = link_spec;
+      dev.dev_handle = BTA_HH_INVALID_HANDLE;
+      dev.attr_mask = attr_mask;
+      dev.reconnect_allowed = reconnect_allowed;
       return true;
     }
   }
 
-  LOG_WARN("%s: Error, out of space to add device", __func__);
+  log::error("Out of space to add device");
+  log_counter_metrics_btif(
+          android::bluetooth::CodePathCounterKeyEnum::HIDH_COUNT_MAX_ADDED_DEVICE_LIMIT_REACHED, 1);
   return false;
+}
+
+/*******************************************************************************
+ *  BTA_HH event handlers
+ ******************************************************************************/
+static void hh_enable_handler(tBTA_HH_STATUS& status) {
+  log::verbose("Status ={}", status);
+  if (status == BTA_HH_OK) {
+    btif_hh_cb.status = BTIF_HH_ENABLED;
+    log::verbose("Loading added devices");
+    /* Add hid descriptors for already bonded hid devices*/
+    btif_storage_load_bonded_hid_info();
+  } else {
+    btif_hh_cb.status = BTIF_HH_DISABLED;
+    log::warn("HH enabling failed, status = {}", status);
+  }
+}
+
+static void hh_disable_handler(tBTA_HH_STATUS& status) {
+  if (btif_hh_cb.status == BTIF_HH_DISABLING) {
+    bt_hh_callbacks = NULL;
+  }
+
+  btif_hh_cb.status = BTIF_HH_DISABLED;
+  if (btif_hh_cb.service_dereg_active) {
+    log::verbose("Enabling HID Device service");
+    btif_hd_service_registration();
+    btif_hh_cb.service_dereg_active = FALSE;
+  }
+  if (status == BTA_HH_OK) {
+    int i;
+    // Clear the control block
+    for (i = 0; i < BTIF_HH_MAX_HID; i++) {
+      alarm_free(btif_hh_cb.devices[i].vup_timer);
+    }
+    btif_hh_cb = {};
+    for (i = 0; i < BTIF_HH_MAX_HID; i++) {
+      btif_hh_cb.devices[i].dev_status = BTHH_CONN_STATE_UNKNOWN;
+    }
+  } else {
+    log::warn("HH disabling failed, status = {}", status);
+  }
+}
+
+static void hh_open_handler(tBTA_HH_CONN& conn) {
+  log::debug("link spec = {}, status = {}, handle = {}", conn.link_spec, conn.status, conn.handle);
+
+  if (com::android::bluetooth::flags::allow_switching_hid_and_hogp()) {
+    // Initialize with disconnected/accepting state based on reconnection policy
+    bthh_connection_state_t dev_status = hh_get_state_on_disconnect(conn.link_spec);
+
+    // Use current state if the device instance already exists
+    btif_hh_device_t* p_dev = btif_hh_find_dev_by_link_spec(conn.link_spec);
+    if (p_dev != nullptr) {
+      log::debug("Device instance found: {}, state: {}", p_dev->link_spec,
+                 bthh_connection_state_text(p_dev->dev_status));
+      dev_status = p_dev->dev_status;
+    }
+
+    if (std::find(btif_hh_cb.pending_connections.begin(), btif_hh_cb.pending_connections.end(),
+                  conn.link_spec) != btif_hh_cb.pending_connections.end()) {
+      log::verbose("Device connection was pending for: {}, status: {}", conn.link_spec,
+                   btif_hh_status_text(btif_hh_cb.status));
+      dev_status = BTHH_CONN_STATE_CONNECTING;
+    }
+
+    if (dev_status != BTHH_CONN_STATE_ACCEPTING && dev_status != BTHH_CONN_STATE_CONNECTING) {
+      log::warn("Reject Incoming HID Connection, device: {}, state: {}", conn.link_spec,
+                bthh_connection_state_text(dev_status));
+      log_counter_metrics_btif(
+              android::bluetooth::CodePathCounterKeyEnum::HIDH_COUNT_INCOMING_CONNECTION_REJECTED,
+              1);
+
+      if (p_dev != nullptr) {
+        p_dev->dev_status = BTHH_CONN_STATE_DISCONNECTED;
+      }
+
+      if (!com::android::bluetooth::flags::suppress_hid_rejection_broadcast()) {
+        hh_connect_complete(conn, BTHH_CONN_STATE_DISCONNECTED);
+        return;
+      }
+      BTA_HhClose(conn.handle);
+      return;
+    }
+  }
+
+  if (!com::android::bluetooth::flags::allow_switching_hid_and_hogp()) {
+    BTHH_STATE_UPDATE(conn.link_spec, BTHH_CONN_STATE_CONNECTING);
+  }
+
+  btif_hh_cb.pending_connections.remove(conn.link_spec);
+
+  if (conn.status != BTA_HH_OK) {
+    btif_dm_hh_open_failed(&conn.link_spec.addrt.bda);
+    btif_hh_device_t* p_dev = btif_hh_find_dev_by_link_spec(conn.link_spec);
+    if (p_dev != nullptr) {
+      btif_hh_stop_vup_timer(p_dev->link_spec);
+
+      p_dev->dev_status = hh_get_state_on_disconnect(p_dev->link_spec);
+    }
+    hh_connect_complete(conn, BTHH_CONN_STATE_DISCONNECTED);
+    return;
+  }
+
+  /* Initialize device driver */
+  if (!bta_hh_co_open(conn.handle, conn.sub_class, conn.attr_mask, conn.app_id, conn.link_spec)) {
+    log::warn("Failed to find the uhid driver");
+    hh_connect_complete(conn, BTHH_CONN_STATE_DISCONNECTED);
+    return;
+  }
+
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(conn.handle);
+  if (p_dev == nullptr) {
+    /* The connect request must have come from device side and exceeded the
+     * connected HID device number. */
+    log::warn("Cannot find device with handle {}", conn.handle);
+    hh_connect_complete(conn, BTHH_CONN_STATE_DISCONNECTED);
+    return;
+  }
+
+  log::info("Found device, getting dscp info for handle {}", conn.handle);
+
+  if (!com::android::bluetooth::flags::hid_report_queuing()) {
+    // link_spec and status is to be set in bta_hh_co_open instead.
+    p_dev->link_spec = conn.link_spec;
+    p_dev->dev_status = BTHH_CONN_STATE_CONNECTED;
+  }
+  hh_connect_complete(conn, BTHH_CONN_STATE_CONNECTED);
+
+  if (!com::android::bluetooth::flags::dont_send_hid_set_idle()) {
+    // Send set_idle if the peer_device is a keyboard
+    // TODO (b/307923455): clean this, set idle is deprecated in HID spec v1.1.1
+    if (check_cod_hid_major(conn.link_spec.addrt.bda, COD_HID_KEYBOARD) ||
+        check_cod_hid_major(conn.link_spec.addrt.bda, COD_HID_COMBO)) {
+      BTA_HhSetIdle(conn.handle, 0);
+    }
+  }
+  BTA_HhGetDscpInfo(conn.handle);
+}
+
+static void hh_close_handler(tBTA_HH_CBDATA& dev_status) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(dev_status.handle);
+  if (p_dev == nullptr) {
+    log::warn("Unknown device handle {}", dev_status.handle);
+    return;
+  }
+
+  log::verbose("device {} status {}", p_dev->link_spec, dev_status.status);
+  BTHH_STATE_UPDATE(p_dev->link_spec, BTHH_CONN_STATE_DISCONNECTING);
+  btif_hh_stop_vup_timer(p_dev->link_spec);
+
+  /* Remove device if locally initiated VUP */
+  if (p_dev->local_vup) {
+    log::info("Removing device {} after virtual unplug", p_dev->link_spec);
+    p_dev->local_vup = false;
+    btif_hh_remove_device(p_dev->link_spec);
+    BTA_DmRemoveDevice(p_dev->link_spec.addrt.bda);
+  } else if (dev_status.status == BTA_HH_HS_SERVICE_CHANGED) {
+    /* Local disconnection due to service change in the HOGP device.
+       HID descriptor would be read again, so remove it from cache. */
+    log::warn("Removing cached descriptor due to service change, device {}", p_dev->link_spec);
+    btif_storage_remove_hid_info(p_dev->link_spec);
+  }
+
+  p_dev->dev_status = hh_get_state_on_disconnect(p_dev->link_spec);
+  bta_hh_co_close(p_dev);
+  BTHH_STATE_UPDATE(p_dev->link_spec, p_dev->dev_status);
+}
+
+static void hh_get_rpt_handler(tBTA_HH_HSDATA& hs_data) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(hs_data.handle);
+  if (p_dev == nullptr) {
+    log::warn("Unknown device handle {}", hs_data.handle);
+    return;
+  }
+
+  log::verbose("Status = {}, handle = {}", hs_data.status, hs_data.handle);
+  BT_HDR* hdr = hs_data.rsp_data.p_rpt_data;
+
+  if (hdr) { /* Get report response */
+    uint8_t* data = (uint8_t*)(hdr + 1) + hdr->offset;
+    uint16_t len = hdr->len;
+    HAL_CBACK(bt_hh_callbacks, get_report_cb, (RawAddress*)&(p_dev->link_spec.addrt.bda),
+              p_dev->link_spec.addrt.type, p_dev->link_spec.transport,
+              (bthh_status_t)hs_data.status, data, len);
+
+    bta_hh_co_get_rpt_rsp(p_dev->dev_handle, (tBTA_HH_STATUS)hs_data.status, data, len);
+  } else { /* Handshake */
+    HAL_CBACK(bt_hh_callbacks, handshake_cb, (RawAddress*)&(p_dev->link_spec.addrt.bda),
+              p_dev->link_spec.addrt.type, p_dev->link_spec.transport,
+              (bthh_status_t)hs_data.status);
+    if (com::android::bluetooth::flags::forward_get_set_report_failure_to_uhid()) {
+      bta_hh_co_get_rpt_rsp(p_dev->dev_handle, (tBTA_HH_STATUS)hs_data.status, NULL, 0);
+    }
+  }
+}
+
+static void hh_set_rpt_handler(tBTA_HH_CBDATA& dev_status) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(dev_status.handle);
+  if (p_dev == nullptr) {
+    log::warn("Unknown device handle {}", dev_status.handle);
+    return;
+  }
+
+  log::verbose("Status = {}, handle = {}", dev_status.status, dev_status.handle);
+  HAL_CBACK(bt_hh_callbacks, handshake_cb, (RawAddress*)&(p_dev->link_spec.addrt.bda),
+            p_dev->link_spec.addrt.type, p_dev->link_spec.transport,
+            (bthh_status_t)dev_status.status);
+
+  bta_hh_co_set_rpt_rsp(p_dev->dev_handle, dev_status.status);
+}
+
+static void hh_get_proto_handler(tBTA_HH_HSDATA& hs_data) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(hs_data.handle);
+  if (p_dev == nullptr) {
+    log::warn("Unknown device handle {}", hs_data.handle);
+    return;
+  }
+
+  log::info("Status = {}, handle = {}, proto = [{}], {}", hs_data.status, hs_data.handle,
+            hs_data.rsp_data.proto_mode,
+            (hs_data.rsp_data.proto_mode == BTA_HH_PROTO_RPT_MODE)    ? "Report Mode"
+            : (hs_data.rsp_data.proto_mode == BTA_HH_PROTO_BOOT_MODE) ? "Boot Mode"
+                                                                      : "Unsupported");
+  if (hs_data.rsp_data.proto_mode != BTA_HH_PROTO_UNKNOWN) {
+    HAL_CBACK(bt_hh_callbacks, protocol_mode_cb, (RawAddress*)&(p_dev->link_spec.addrt.bda),
+              p_dev->link_spec.addrt.type, p_dev->link_spec.transport,
+              (bthh_status_t)hs_data.status, (bthh_protocol_mode_t)hs_data.rsp_data.proto_mode);
+  } else {
+    HAL_CBACK(bt_hh_callbacks, handshake_cb, (RawAddress*)&(p_dev->link_spec.addrt.bda),
+              p_dev->link_spec.addrt.type, p_dev->link_spec.transport,
+              (bthh_status_t)hs_data.status);
+  }
+}
+
+static void hh_set_proto_handler(tBTA_HH_CBDATA& dev_status) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(dev_status.handle);
+  if (p_dev == nullptr) {
+    log::warn("Unknown device handle {}", dev_status.handle);
+    return;
+  }
+
+  log::verbose("Status = {}, handle = {}", dev_status.status, dev_status.handle);
+  HAL_CBACK(bt_hh_callbacks, handshake_cb, (RawAddress*)&(p_dev->link_spec.addrt.bda),
+            p_dev->link_spec.addrt.type, p_dev->link_spec.transport,
+            (bthh_status_t)dev_status.status);
+}
+
+static void hh_get_idle_handler(tBTA_HH_HSDATA& hs_data) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(hs_data.handle);
+  if (p_dev == nullptr) {
+    log::warn("Unknown device handle {}", hs_data.handle);
+    return;
+  }
+
+  log::verbose("Handle = {}, status = {}, rate = {}", hs_data.handle, hs_data.status,
+               hs_data.rsp_data.idle_rate);
+  HAL_CBACK(bt_hh_callbacks, idle_time_cb, (RawAddress*)&(p_dev->link_spec.addrt.bda),
+            p_dev->link_spec.addrt.type, p_dev->link_spec.transport, (bthh_status_t)hs_data.status,
+            hs_data.rsp_data.idle_rate);
+}
+
+static void hh_set_idle_handler(tBTA_HH_CBDATA& dev_status) {
+  log::verbose("Status = {}, handle = {}", dev_status.status, dev_status.handle);
+}
+
+static void hh_get_dscp_handler(tBTA_HH_DEV_DSCP_INFO& dscp_info) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(dscp_info.hid_handle);
+  if (p_dev == nullptr) {
+    log::error("Unknown device handle {}", dscp_info.hid_handle);
+    return;
+  }
+
+  log::verbose("Len = {}, handle = {}", dscp_info.descriptor.dl_len, dscp_info.hid_handle);
+  int fd = (com::android::bluetooth::flags::hid_report_queuing() ? p_dev->internal_send_fd
+                                                                 : p_dev->uhid.fd);
+  if (fd < 0) {
+    log::error("Failed to find the uhid driver for device {}", p_dev->link_spec);
+    return;
+  }
+
+  const char* cached_name = nullptr;
+  bt_bdname_t bdname = {};
+  bt_property_t prop_name = {};
+  BTIF_STORAGE_FILL_PROPERTY(&prop_name, BT_PROPERTY_BDNAME, sizeof(bt_bdname_t), &bdname);
+  if (btif_storage_get_remote_device_property(&p_dev->link_spec.addrt.bda, &prop_name) ==
+      BT_STATUS_SUCCESS) {
+    cached_name = (char*)bdname.name;
+  } else {
+    cached_name = "Bluetooth HID";
+  }
+  log::info("Retrieved the cached name:{} for device {}", cached_name, p_dev->link_spec);
+  bta_hh_co_send_hid_info(p_dev, cached_name, dscp_info.vendor_id, dscp_info.product_id,
+                          dscp_info.version, dscp_info.ctry_code, dscp_info.descriptor.dl_len,
+                          dscp_info.descriptor.dsc_list);
+  if (hh_add_device(p_dev->link_spec, p_dev->attr_mask, true)) {
+    bt_status_t ret;
+    BTA_HhAddDev(p_dev->link_spec, p_dev->attr_mask, p_dev->sub_class, p_dev->app_id, dscp_info);
+    // Save HID info in the persistent storage
+    ret = btif_storage_add_hid_device_info(
+            p_dev->link_spec, p_dev->attr_mask, p_dev->sub_class, p_dev->app_id,
+            dscp_info.vendor_id, dscp_info.product_id, dscp_info.version, dscp_info.ctry_code,
+            dscp_info.ssr_max_latency, dscp_info.ssr_min_tout, dscp_info.descriptor.dl_len,
+            dscp_info.descriptor.dsc_list);
+
+    // Allow incoming connections
+    if (com::android::bluetooth::flags::allow_switching_hid_and_hogp() &&
+        com::android::bluetooth::flags::save_initial_hid_connection_policy()) {
+      btif_storage_set_hid_connection_policy(p_dev->link_spec, true);
+    }
+
+    ASSERTC(ret == BT_STATUS_SUCCESS, "storing hid info failed", ret);
+    log::info("Added device {}", p_dev->link_spec);
+  } else {
+    log::warn("Device {} already added", p_dev->link_spec);
+  }
+
+  /* Sync HID Keyboard lockstates */
+  sync_lockstate_on_connect(p_dev, dscp_info);
+}
+
+static void hh_add_dev_handler(tBTA_HH_DEV_INFO& dev_info) {
+  btif_hh_added_device_t* added_dev = btif_hh_find_added_dev(dev_info.link_spec);
+  if (added_dev == nullptr) {
+    log::error("Unknown device {}", dev_info.link_spec);
+    return;
+  }
+
+  log::info("Status = {}, handle = {}", dev_info.status, dev_info.handle);
+  if (dev_info.status == BTA_HH_OK) {
+    added_dev->dev_handle = dev_info.handle;
+  } else {
+    added_dev->link_spec = {};
+    added_dev->dev_handle = BTA_HH_INVALID_HANDLE;
+  }
+}
+
+static void hh_rmv_dev_handler(tBTA_HH_DEV_INFO& dev_info) {
+  log::verbose("Status = {}, handle = {}, device = {}", dev_info.status, dev_info.handle,
+               dev_info.link_spec);
+}
+
+static void hh_vc_unplug_handler(tBTA_HH_CBDATA& dev_status) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_handle(dev_status.handle);
+  if (p_dev == nullptr) {
+    log::error("Unknown device handle {}", dev_status.handle);
+    return;
+  }
+
+  if (!com::android::bluetooth::flags::remove_input_device_on_vup() &&
+      p_dev->link_spec.transport == BT_TRANSPORT_LE) {
+    log::error("Unexpected for {}", p_dev->link_spec);
+    return;
+  }
+
+  log::info("Device {} status {}", p_dev->link_spec, dev_status.status);
+
+  /* Stop the VUP timer */
+  btif_hh_stop_vup_timer(p_dev->link_spec);
+  p_dev->dev_status = hh_get_state_on_disconnect(p_dev->link_spec);
+  BTHH_STATE_UPDATE(p_dev->link_spec, p_dev->dev_status);
+
+  if (!com::android::bluetooth::flags::remove_input_device_on_vup()) {
+    if (p_dev->local_vup || check_cod_hid(p_dev->link_spec.addrt.bda)) {
+      p_dev->local_vup = false;
+      BTA_DmRemoveDevice(p_dev->link_spec.addrt.bda);
+    } else {
+      log_counter_metrics_btif(android::bluetooth::CodePathCounterKeyEnum::
+                                       HIDH_COUNT_VIRTUAL_UNPLUG_REQUESTED_BY_REMOTE_DEVICE,
+                               1);
+      btif_hh_remove_device(p_dev->link_spec);
+    }
+    return;
+  }
+
+  if (!p_dev->local_vup) {
+    log_counter_metrics_btif(android::bluetooth::CodePathCounterKeyEnum::
+                                     HIDH_COUNT_VIRTUAL_UNPLUG_REQUESTED_BY_REMOTE_DEVICE,
+                             1);
+  }
+
+  // Remove the HID device
+  btif_hh_remove_device(p_dev->link_spec);
+  if (p_dev->local_vup || check_cod_hid(p_dev->link_spec.addrt.bda)) {
+    // Remove the bond if locally initiated or remote device has major class HID
+    p_dev->local_vup = false;
+    BTA_DmRemoveDevice(p_dev->link_spec.addrt.bda);
+  }
+}
+
+void btif_hh_load_bonded_dev(const tAclLinkSpec& link_spec_ref, tBTA_HH_ATTR_MASK attr_mask,
+                             uint8_t sub_class, uint8_t app_id, tBTA_HH_DEV_DSCP_INFO dscp_info,
+                             bool reconnect_allowed) {
+  btif_hh_device_t* p_dev;
+  uint8_t i;
+  tAclLinkSpec link_spec = link_spec_ref;
+
+  if (com::android::bluetooth::flags::allow_switching_hid_and_hogp() &&
+      link_spec.transport == BT_TRANSPORT_AUTO) {
+    log::warn("Resolving link spec {} transport to BREDR/LE", link_spec);
+    btif_hh_transport_select(link_spec);
+    reconnect_allowed = true;
+    btif_storage_set_hid_connection_policy(link_spec, reconnect_allowed);
+
+    // remove and re-write the hid info
+    btif_storage_remove_hid_info(link_spec);
+    btif_storage_add_hid_device_info(link_spec, attr_mask, sub_class, app_id, dscp_info.vendor_id,
+                                     dscp_info.product_id, dscp_info.version, dscp_info.ctry_code,
+                                     dscp_info.ssr_max_latency, dscp_info.ssr_min_tout,
+                                     dscp_info.descriptor.dl_len, dscp_info.descriptor.dsc_list);
+  }
+
+  if (hh_add_device(link_spec, attr_mask, reconnect_allowed)) {
+    if (com::android::bluetooth::flags::allow_switching_hid_and_hogp() && reconnect_allowed) {
+      BTHH_STATE_UPDATE(link_spec, BTHH_CONN_STATE_ACCEPTING);
+    }
+    BTA_HhAddDev(link_spec, attr_mask, sub_class, app_id, dscp_info);
+  }
 }
 
 /*******************************************************************************
@@ -486,70 +940,64 @@ bool btif_hh_add_added_dev(const RawAddress& bda, tBTA_HH_ATTR_MASK attr_mask) {
  **
  ** Returns          void
  ******************************************************************************/
-void btif_hh_remove_device(RawAddress bd_addr) {
-  int i;
-  btif_hh_device_t* p_dev;
-  btif_hh_added_device_t* p_added_dev;
+void btif_hh_remove_device(const tAclLinkSpec& link_spec) {
+  BTHH_LOG_LINK(link_spec);
+  bool announce_vup = false;
 
-  LOG(INFO) << __func__ << ": bda = " << ADDRESS_TO_LOGGABLE_STR(bd_addr);
-
-  for (i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
-    p_added_dev = &btif_hh_cb.added_devices[i];
-    if (p_added_dev->bd_addr == bd_addr) {
+  for (int i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
+    btif_hh_added_device_t* p_added_dev = &btif_hh_cb.added_devices[i];
+    if (p_added_dev->link_spec == link_spec) {
+      announce_vup = true;
       BTA_HhRemoveDev(p_added_dev->dev_handle);
-      btif_storage_remove_hid_info(p_added_dev->bd_addr);
-      p_added_dev->bd_addr = RawAddress::kEmpty;
+      btif_storage_remove_hid_info(p_added_dev->link_spec);
+      p_added_dev->link_spec = {};
       p_added_dev->dev_handle = BTA_HH_INVALID_HANDLE;
-      break;
+
+      /* Look for other instances only if AUTO transport was used */
+      if (link_spec.transport != BT_TRANSPORT_AUTO) {
+        break;
+      }
     }
   }
 
-  p_dev = btif_hh_find_dev_by_bda(bd_addr);
-  if (p_dev == NULL) {
-    LOG(WARNING) << " Oops, can't find device " << ADDRESS_TO_LOGGABLE_STR(bd_addr);
-    return;
+  /* Remove all connections instances related to link_spec. If AUTO transport is
+   * used, btif_hh_find_dev_by_link_spec() finds both HID and HOGP instances */
+  btif_hh_device_t* p_dev;
+  while ((p_dev = btif_hh_find_dev_by_link_spec(link_spec)) != nullptr) {
+    announce_vup = true;
+    // Notify upper layers of disconnection to avoid getting states out of sync
+    do_in_jni_thread(base::Bind(
+            [](tAclLinkSpec link_spec) {
+              BTHH_STATE_UPDATE(link_spec, BTHH_CONN_STATE_DISCONNECTED);
+            },
+            link_spec));
+
+    if (btif_hh_cb.device_num > 0) {
+      btif_hh_cb.device_num--;
+    } else {
+      log::warn("device_num = 0");
+    }
+
+    if (com::android::bluetooth::flags::remove_pending_hid_connection()) {
+      BTA_HhRemoveDev(p_dev->dev_handle);  // Remove the connection, in case it was pending
+    }
+
+    bta_hh_co_close(p_dev);
+    p_dev->dev_status = BTHH_CONN_STATE_UNKNOWN;
+    p_dev->dev_handle = BTA_HH_INVALID_HANDLE;
+    if (!com::android::bluetooth::flags::hid_report_queuing()) {
+      p_dev->uhid.ready_for_data = false;
+    }
   }
 
-  /* need to notify up-layer device is disconnected to avoid state out of sync
-   * with up-layer */
-
-  do_in_jni_thread(base::Bind(
-      [](RawAddress bd_addr) {
-        HAL_CBACK(bt_hh_callbacks, connection_state_cb, &bd_addr,
-                  BTHH_CONN_STATE_DISCONNECTED);
-      },
-      p_dev->bd_addr));
-
-  p_dev->dev_status = BTHH_CONN_STATE_UNKNOWN;
-  p_dev->dev_handle = BTA_HH_INVALID_HANDLE;
-  p_dev->ready_for_data = false;
-
-  if (btif_hh_cb.device_num > 0) {
-    btif_hh_cb.device_num--;
-  } else {
-    LOG_WARN("%s: device_num = 0", __func__);
+  if (com::android::bluetooth::flags::remove_input_device_on_vup() && announce_vup) {
+    do_in_jni_thread(base::Bind(
+            [](tAclLinkSpec link_spec) {
+              HAL_CBACK(bt_hh_callbacks, virtual_unplug_cb, &link_spec.addrt.bda,
+                        link_spec.addrt.type, link_spec.transport, BTHH_OK);
+            },
+            link_spec));
   }
-
-  bta_hh_co_close(p_dev);
-}
-
-bool btif_hh_copy_hid_info(tBTA_HH_DEV_DSCP_INFO* dest,
-                           tBTA_HH_DEV_DSCP_INFO* src) {
-  memset(dest, 0, sizeof(tBTA_HH_DEV_DSCP_INFO));
-  dest->descriptor.dl_len = 0;
-  if (src->descriptor.dl_len > 0) {
-    dest->descriptor.dsc_list = (uint8_t*)osi_malloc(src->descriptor.dl_len);
-  }
-  memcpy(dest->descriptor.dsc_list, src->descriptor.dsc_list,
-         src->descriptor.dl_len);
-  dest->descriptor.dl_len = src->descriptor.dl_len;
-  dest->vendor_id = src->vendor_id;
-  dest->product_id = src->product_id;
-  dest->version = src->version;
-  dest->ctry_code = src->ctry_code;
-  dest->ssr_max_latency = src->ssr_max_latency;
-  dest->ssr_min_tout = src->ssr_min_tout;
-  return true;
 }
 
 /*******************************************************************************
@@ -563,47 +1011,62 @@ bool btif_hh_copy_hid_info(tBTA_HH_DEV_DSCP_INFO* dest,
  *
  ******************************************************************************/
 
-bt_status_t btif_hh_virtual_unplug(const RawAddress* bd_addr) {
-  LOG_VERBOSE("%s", __func__);
-  btif_hh_device_t* p_dev;
-  p_dev = btif_hh_find_dev_by_bda(*bd_addr);
-  if ((p_dev != NULL) && (p_dev->dev_status == BTHH_CONN_STATE_CONNECTED) &&
-      (p_dev->attr_mask & HID_VIRTUAL_CABLE)) {
-    LOG_VERBOSE("%s: Sending BTA_HH_CTRL_VIRTUAL_CABLE_UNPLUG for: %s",
-                __func__, ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-    /* start the timer */
-    btif_hh_start_vup_timer(bd_addr);
-    p_dev->local_vup = true;
-    BTA_HhSendCtrl(p_dev->dev_handle, BTA_HH_CTRL_VIRTUAL_CABLE_UNPLUG);
-    return BT_STATUS_SUCCESS;
-  } else if ((p_dev != NULL) &&
-             (p_dev->dev_status == BTHH_CONN_STATE_CONNECTED)) {
-    LOG_ERROR("%s: Virtual unplug not supported, disconnecting device: %s",
-              __func__, ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-    /* start the timer */
-    btif_hh_start_vup_timer(bd_addr);
-    p_dev->local_vup = true;
-    BTA_HhClose(p_dev->dev_handle);
-    return BT_STATUS_SUCCESS;
-  } else {
-    LOG_ERROR("%s: Error, device %s not opened, status = %d", __func__,
-              ADDRESS_TO_LOGGABLE_CSTR(*bd_addr), btif_hh_cb.status);
-    if ((btif_hh_cb.pending_conn_address == *bd_addr) &&
-        (btif_hh_cb.status == BTIF_HH_DEV_CONNECTING)) {
-      btif_hh_cb.status = (BTIF_HH_STATUS)BTIF_HH_DEV_DISCONNECTED;
-      btif_hh_cb.pending_conn_address = RawAddress::kEmpty;
+bt_status_t btif_hh_virtual_unplug(const tAclLinkSpec& link_spec) {
+  BTHH_LOG_LINK(link_spec);
 
-      /* need to notify up-layer device is disconnected to avoid
-       * state out of sync with up-layer */
-      do_in_jni_thread(base::Bind(
-            [](RawAddress bd_addrcb) {
-              HAL_CBACK(bt_hh_callbacks, connection_state_cb, &bd_addrcb,
-                        BTHH_CONN_STATE_DISCONNECTED);
-            },
-           *bd_addr));
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
+  if (p_dev != nullptr) {
+    // Device is connected, send the VUP command and disconnect
+    btif_hh_start_vup_timer(link_spec);
+    p_dev->local_vup = true;
+    if (p_dev->attr_mask & HID_VIRTUAL_CABLE) {
+      log::info("Sending BTA_HH_CTRL_VIRTUAL_CABLE_UNPLUG for: {}", link_spec);
+      BTA_HhSendCtrl(p_dev->dev_handle, BTA_HH_CTRL_VIRTUAL_CABLE_UNPLUG);
+    } else {
+      log::info("Virtual unplug not supported, disconnecting device: {}", link_spec);
+      BTA_HhClose(p_dev->dev_handle);
     }
-    return BT_STATUS_FAIL;
+    return BT_STATUS_SUCCESS;
   }
+
+  log::info("Device {} not opened, state = {}", link_spec, btif_hh_status_text(btif_hh_cb.status));
+
+  // Remove the connecting or added device
+  if (com::android::bluetooth::flags::remove_input_device_on_vup()) {
+    if (btif_hh_find_dev_by_link_spec(link_spec) != nullptr ||
+        btif_hh_find_added_dev(link_spec) != nullptr) {
+      // Remove pending connection if address matches
+      btif_hh_cb.pending_connections.remove_if(
+              [link_spec](auto ls) { return ls.addrt.bda == link_spec.addrt.bda; });
+
+      btif_hh_remove_device(link_spec);
+      BTA_DmRemoveDevice(link_spec.addrt.bda);
+      return BT_STATUS_SUCCESS;
+    }
+  }
+
+  // Abort outgoing initial connection attempt
+  bool pending_connection = false;
+  for (auto ls : btif_hh_cb.pending_connections) {
+    if (ls.addrt.bda == link_spec.addrt.bda) {
+      pending_connection = true;
+      break;
+    }
+  }
+
+  if (pending_connection) {
+    btif_hh_cb.pending_connections.remove_if(
+            [link_spec](auto ls) { return ls.addrt.bda == link_spec.addrt.bda; });
+
+    /* need to notify up-layer device is disconnected to avoid
+     * state out of sync with up-layer */
+    do_in_jni_thread(base::Bind(
+            [](tAclLinkSpec link_spec) {
+              BTHH_STATE_UPDATE(link_spec, BTHH_CONN_STATE_DISCONNECTED);
+            },
+            link_spec));
+  }
+  return BT_STATUS_DEVICE_NOT_FOUND;
 }
 
 /*******************************************************************************
@@ -616,60 +1079,57 @@ bt_status_t btif_hh_virtual_unplug(const RawAddress* bd_addr) {
  *
  ******************************************************************************/
 
-bt_status_t btif_hh_connect(const RawAddress* bd_addr) {
-  btif_hh_added_device_t* added_dev = NULL;
+bt_status_t btif_hh_connect(const tAclLinkSpec& link_spec) {
   CHECK_BTHH_INIT();
-  LOG_VERBOSE("BTHH: %s", __func__);
-  btif_hh_device_t* dev = btif_hh_find_dev_by_bda(*bd_addr);
-  if (!dev && btif_hh_cb.device_num >= BTIF_HH_MAX_HID) {
+  log::verbose("BTHH");
+  btif_hh_device_t* p_dev = btif_hh_find_dev_by_link_spec(link_spec);
+  if (!p_dev && btif_hh_cb.device_num >= BTIF_HH_MAX_HID) {
     // No space for more HID device now.
-    LOG_WARN("%s: Error, exceeded the maximum supported HID device number %d",
-             __func__, BTIF_HH_MAX_HID);
+    log::warn("Error, exceeded the maximum supported HID device number {}", BTIF_HH_MAX_HID);
+    log_counter_metrics_btif(android::bluetooth::CodePathCounterKeyEnum::
+                                     HIDH_COUNT_CONNECT_REQ_WHEN_MAX_DEVICE_LIMIT_REACHED,
+                             1);
     return BT_STATUS_NOMEM;
   }
 
-  for (int i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
-    if (btif_hh_cb.added_devices[i].bd_addr == *bd_addr) {
-      added_dev = &btif_hh_cb.added_devices[i];
-      LOG(WARNING) << __func__ << ": Device " << ADDRESS_TO_LOGGABLE_STR(*bd_addr)
-                   << " already added, attr_mask = 0x" << std::hex
-                   << added_dev->attr_mask;
-    }
-  }
+  btif_hh_added_device_t* added_dev = btif_hh_find_added_dev(link_spec);
+  if (added_dev != nullptr) {
+    log::info("Device {} already added, attr_mask = 0x{:x}", link_spec, added_dev->attr_mask);
 
-  if (added_dev != NULL) {
     if (added_dev->dev_handle == BTA_HH_INVALID_HANDLE) {
       // No space for more HID device now.
-      LOG(ERROR) << __func__ << ": Error, device "
-                 << ADDRESS_TO_LOGGABLE_STR(*bd_addr)
-                 << " added but addition failed";
-      added_dev->bd_addr = RawAddress::kEmpty;
+      log::error("Device {} added but addition failed", link_spec);
+      added_dev->link_spec = {};
       added_dev->dev_handle = BTA_HH_INVALID_HANDLE;
       return BT_STATUS_NOMEM;
     }
+
+    // Reset the connection policy to allow incoming reconnections
+    if (com::android::bluetooth::flags::allow_switching_hid_and_hogp()) {
+      added_dev->reconnect_allowed = true;
+      btif_storage_set_hid_connection_policy(link_spec, true);
+    }
   }
 
-  if (dev && dev->dev_status == BTHH_CONN_STATE_CONNECTED) {
-    LOG_DEBUG("HidHost profile already connected for %s",
-              ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
+  if (p_dev && p_dev->dev_status == BTHH_CONN_STATE_CONNECTED) {
+    log::debug("HidHost profile already connected for {}", link_spec);
     return BT_STATUS_SUCCESS;
   }
 
+  if (p_dev) {
+    p_dev->dev_status = BTHH_CONN_STATE_CONNECTING;
+  }
+
   /* Not checking the NORMALLY_Connectible flags from sdp record, and anyways
-   sending this
-   request from host, for subsequent user initiated connection. If the remote is
-   not in
-   pagescan mode, we will do 2 retries to connect before giving up */
-  btif_hh_cb.status = BTIF_HH_DEV_CONNECTING;
-  btif_hh_cb.pending_conn_address = *bd_addr;
-  BTA_HhOpen(*bd_addr);
+   sending this request from host, for subsequent user initiated connection.
+   If the remote is not in pagescan mode, we will do 2 retries to connect before
+   giving up */
+  btif_hh_cb.pending_connections.push_back(link_spec);
+  BTA_HhOpen(link_spec);
 
   do_in_jni_thread(base::Bind(
-      [](RawAddress bd_addr) {
-        HAL_CBACK(bt_hh_callbacks, connection_state_cb, &bd_addr,
-                  BTHH_CONN_STATE_CONNECTING);
-      },
-      *bd_addr));
+          [](tAclLinkSpec link_spec) { BTHH_STATE_UPDATE(link_spec, BTHH_CONN_STATE_CONNECTING); },
+          link_spec));
   return BT_STATUS_SUCCESS;
 }
 
@@ -682,16 +1142,13 @@ bt_status_t btif_hh_connect(const RawAddress* bd_addr) {
  * Returns          void
  *
  ******************************************************************************/
-void btif_hh_disconnect(RawAddress* bd_addr) {
-  CHECK(bd_addr != nullptr);
-  const btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+static void btif_hh_disconnect(const tAclLinkSpec& link_spec) {
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
   if (p_dev == nullptr) {
-    LOG_DEBUG("Unable to disconnect unknown HID device:%s",
-              ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
+    log::warn("Unable to disconnect unknown HID device:{}", link_spec);
     return;
   }
-  LOG_DEBUG("Disconnect and close request for HID device:%s",
-            ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
+  log::debug("Disconnect and close request for HID device:{}", link_spec);
   BTA_HhClose(p_dev->dev_handle);
 }
 
@@ -699,40 +1156,38 @@ void btif_hh_disconnect(RawAddress* bd_addr) {
  *
  * Function         btif_btif_hh_setreport
  *
- * Description      setreport initiated from the BTIF thread context
+ * Description      setreport initiated from the UHID thread context
  *
  * Returns          void
  *
  ******************************************************************************/
-void btif_hh_setreport(btif_hh_device_t* p_dev, bthh_report_type_t r_type,
-                       uint16_t size, uint8_t* report) {
+void btif_hh_setreport(btif_hh_uhid_t* p_uhid, bthh_report_type_t r_type, uint16_t size,
+                       uint8_t* report) {
   BT_HDR* p_buf = create_pbuf(size, report);
   if (p_buf == NULL) {
-    LOG_ERROR("%s: Error, failed to allocate RPT buffer, size = %d", __func__,
-              size);
+    log::error("Error, failed to allocate RPT buffer, size = {}", size);
     return;
   }
-  BTA_HhSetReport(p_dev->dev_handle, r_type, p_buf);
+  BTA_HhSetReport(p_uhid->dev_handle, r_type, p_buf);
 }
 
 /*******************************************************************************
  *
  * Function         btif_btif_hh_senddata
  *
- * Description      senddata initiated from the BTIF thread context
+ * Description      senddata initiated from the UHID thread context
  *
  * Returns          void
  *
  ******************************************************************************/
-void btif_hh_senddata(btif_hh_device_t* p_dev, uint16_t size, uint8_t* report) {
+void btif_hh_senddata(btif_hh_uhid_t* p_uhid, uint16_t size, uint8_t* report) {
   BT_HDR* p_buf = create_pbuf(size, report);
   if (p_buf == NULL) {
-    LOG_ERROR("%s: Error, failed to allocate RPT buffer, size = %d", __func__,
-              size);
+    log::error("Error, failed to allocate RPT buffer, size = {}", size);
     return;
   }
   p_buf->layer_specific = BTA_HH_RPTT_OUTPUT;
-  BTA_HhSendData(p_dev->dev_handle, p_dev->bd_addr, p_buf);
+  BTA_HhSendData(p_uhid->dev_handle, p_uhid->link_spec, p_buf);
 }
 
 /*******************************************************************************
@@ -745,9 +1200,9 @@ void btif_hh_senddata(btif_hh_device_t* p_dev, uint16_t size, uint8_t* report) {
  *
  ******************************************************************************/
 void btif_hh_service_registration(bool enable) {
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
-  LOG_VERBOSE("enable = %d", enable);
+  log::verbose("enable = {}", enable);
   if (bt_hh_callbacks == NULL) {
     // The HID Host service was never initialized (it is either disabled or not
     // available in this build). We should proceed directly to changing the HID
@@ -756,8 +1211,7 @@ void btif_hh_service_registration(bool enable) {
       btif_hd_service_registration();
     }
   } else if (enable) {
-    BTA_HhEnable(bte_hh_evt, bt_hh_enable_type.hidp_enabled,
-                 bt_hh_enable_type.hogp_enabled);
+    BTA_HhEnable(bte_hh_evt, bt_hh_enable_type.hidp_enabled, bt_hh_enable_type.hogp_enabled);
   } else {
     btif_hh_cb.service_dereg_active = TRUE;
     BTA_HhDisable();
@@ -769,14 +1223,14 @@ void btif_hh_service_registration(bool enable) {
  *
  * Function         btif_hh_getreport
  *
- * Description      getreport initiated from the BTIF thread context
+ * Description      getreport initiated from the UHID thread context
  *
  * Returns          void
  *
  ******************************************************************************/
-void btif_hh_getreport(btif_hh_device_t* p_dev, bthh_report_type_t r_type,
-                       uint8_t reportId, uint16_t bufferSize) {
-  BTA_HhGetReport(p_dev->dev_handle, r_type, reportId, bufferSize);
+void btif_hh_getreport(btif_hh_uhid_t* p_uhid, bthh_report_type_t r_type, uint8_t reportId,
+                       uint16_t bufferSize) {
+  BTA_HhGetReport(p_uhid->dev_handle, r_type, reportId, bufferSize);
 }
 
 /*****************************************************************************
@@ -800,334 +1254,59 @@ void btif_hh_getreport(btif_hh_device_t* p_dev, bthh_report_type_t r_type,
  ******************************************************************************/
 static void btif_hh_upstreams_evt(uint16_t event, char* p_param) {
   tBTA_HH* p_data = (tBTA_HH*)p_param;
-  btif_hh_device_t* p_dev = NULL;
-  int i;
-  int len, tmplen;
-
-  LOG_VERBOSE("%s: event=%s dereg = %d", __func__, dump_hh_event(event),
-              btif_hh_cb.service_dereg_active);
+  log::verbose("event={} dereg = {}", bta_hh_event_text(event), btif_hh_cb.service_dereg_active);
 
   switch (event) {
     case BTA_HH_ENABLE_EVT:
-      LOG_VERBOSE("%s: BTA_HH_ENABLE_EVT: status =%d", __func__,
-                  p_data->status);
-      if (p_data->status == BTA_HH_OK) {
-        btif_hh_cb.status = BTIF_HH_ENABLED;
-        LOG_VERBOSE("%s--Loading added devices", __func__);
-        /* Add hid descriptors for already bonded hid devices*/
-        btif_storage_load_bonded_hid_info();
-      } else {
-        btif_hh_cb.status = BTIF_HH_DISABLED;
-        LOG_WARN("BTA_HH_ENABLE_EVT: Error, HH enabling failed, status = %d",
-                 p_data->status);
-      }
+      hh_enable_handler(p_data->status);
       break;
-
     case BTA_HH_DISABLE_EVT:
-      if (btif_hh_cb.status == BTIF_HH_DISABLING) {
-        bt_hh_callbacks = NULL;
-      }
-
-      btif_hh_cb.status = BTIF_HH_DISABLED;
-      if (btif_hh_cb.service_dereg_active) {
-        LOG_VERBOSE("BTA_HH_DISABLE_EVT: enabling HID Device service");
-        btif_hd_service_registration();
-        btif_hh_cb.service_dereg_active = FALSE;
-      }
-      if (p_data->status == BTA_HH_OK) {
-        int i;
-        // Clear the control block
-        for (i = 0; i < BTIF_HH_MAX_HID; i++) {
-          alarm_free(btif_hh_cb.devices[i].vup_timer);
-        }
-        memset(&btif_hh_cb, 0, sizeof(btif_hh_cb));
-        for (i = 0; i < BTIF_HH_MAX_HID; i++) {
-          btif_hh_cb.devices[i].dev_status = BTHH_CONN_STATE_UNKNOWN;
-        }
-      } else
-        LOG_WARN("BTA_HH_DISABLE_EVT: Error, HH disabling failed, status = %d",
-                 p_data->status);
+      hh_disable_handler(p_data->status);
       break;
-
     case BTA_HH_OPEN_EVT:
       hh_open_handler(p_data->conn);
       break;
-
     case BTA_HH_CLOSE_EVT:
-      LOG_VERBOSE("BTA_HH_CLOSE_EVT: status = %d, handle = %d",
-                  p_data->dev_status.status, p_data->dev_status.handle);
-      p_dev = btif_hh_find_connected_dev_by_handle(p_data->dev_status.handle);
-      if (p_dev != NULL) {
-        HAL_CBACK(bt_hh_callbacks, connection_state_cb, &(p_dev->bd_addr),
-                  BTHH_CONN_STATE_DISCONNECTING);
-        LOG_VERBOSE("%s: uhid fd=%d local_vup=%d", __func__, p_dev->fd,
-                    p_dev->local_vup);
-        btif_hh_stop_vup_timer(&(p_dev->bd_addr));
-        /* If this is a locally initiated VUP, remove the bond as ACL got
-         *  disconnected while VUP being processed.
-         */
-        if (p_dev->local_vup) {
-          p_dev->local_vup = false;
-          BTA_DmRemoveDevice(p_dev->bd_addr);
-        } else if (p_data->dev_status.status == BTA_HH_HS_SERVICE_CHANGED) {
-          /* Local disconnection due to service change in the HOGP device.
-             HID descriptor would be read again, so remove it from cache. */
-          LOG_WARN(
-              "Removing cached descriptor due to service change, handle = %d",
-              p_data->dev_status.handle);
-          btif_storage_remove_hid_info(p_dev->bd_addr);
-        }
-
-        btif_hh_cb.status = (BTIF_HH_STATUS)BTIF_HH_DEV_DISCONNECTED;
-        p_dev->dev_status = BTHH_CONN_STATE_DISCONNECTED;
-
-        bta_hh_co_close(p_dev);
-        HAL_CBACK(bt_hh_callbacks, connection_state_cb, &(p_dev->bd_addr),
-                  p_dev->dev_status);
-      } else {
-        LOG_WARN("Error: cannot find device with handle %d",
-                 p_data->dev_status.handle);
-      }
+      hh_close_handler(p_data->dev_status);
       break;
-
-    case BTA_HH_GET_RPT_EVT: {
-      LOG_VERBOSE("BTA_HH_GET_RPT_EVT: status = %d, handle = %d",
-                  p_data->hs_data.status, p_data->hs_data.handle);
-      p_dev = btif_hh_find_connected_dev_by_handle(p_data->hs_data.handle);
-      if (p_dev) {
-        BT_HDR* hdr = p_data->hs_data.rsp_data.p_rpt_data;
-
-        if (hdr) { /* Get report response */
-          uint8_t* data = (uint8_t*)(hdr + 1) + hdr->offset;
-          uint16_t len = hdr->len;
-          HAL_CBACK(bt_hh_callbacks, get_report_cb,
-                    (RawAddress*)&(p_dev->bd_addr),
-                    (bthh_status_t)p_data->hs_data.status, data, len);
-
-          bta_hh_co_get_rpt_rsp(p_dev->dev_handle,
-                                (tBTA_HH_STATUS)p_data->hs_data.status, data,
-                                len);
-        } else { /* Handshake */
-          HAL_CBACK(bt_hh_callbacks, handshake_cb,
-                    (RawAddress*)&(p_dev->bd_addr),
-                    (bthh_status_t)p_data->hs_data.status);
-        }
-      } else {
-        LOG_WARN("Error: cannot find device with handle %d",
-                 p_data->hs_data.handle);
-      }
+    case BTA_HH_GET_RPT_EVT:
+      hh_get_rpt_handler(p_data->hs_data);
       break;
-    }
-
     case BTA_HH_SET_RPT_EVT:
-      LOG_VERBOSE("BTA_HH_SET_RPT_EVT: status = %d, handle = %d",
-                  p_data->dev_status.status, p_data->dev_status.handle);
-      p_dev = btif_hh_find_connected_dev_by_handle(p_data->dev_status.handle);
-      if (p_dev != NULL) {
-        HAL_CBACK(bt_hh_callbacks, handshake_cb, (RawAddress*)&(p_dev->bd_addr),
-                  (bthh_status_t)p_data->hs_data.status);
-
-        bta_hh_co_set_rpt_rsp(p_dev->dev_handle, p_data->dev_status.status);
-      }
+      hh_set_rpt_handler(p_data->dev_status);
       break;
-
     case BTA_HH_GET_PROTO_EVT:
-      p_dev = btif_hh_find_connected_dev_by_handle(p_data->hs_data.handle);
-      if (p_dev == NULL) {
-        LOG_WARN(
-            "BTA_HH_GET_PROTO_EVT: Error, cannot find device with handle %d",
-            p_data->hs_data.handle);
-        return;
-      }
-      LOG_WARN(
-          "BTA_HH_GET_PROTO_EVT: status = %d, handle = %d, proto = [%d], %s",
-          p_data->hs_data.status, p_data->hs_data.handle,
-          p_data->hs_data.rsp_data.proto_mode,
-          (p_data->hs_data.rsp_data.proto_mode == BTA_HH_PROTO_RPT_MODE)
-              ? "Report Mode"
-          : (p_data->hs_data.rsp_data.proto_mode == BTA_HH_PROTO_BOOT_MODE)
-              ? "Boot Mode"
-              : "Unsupported");
-      if (p_data->hs_data.rsp_data.proto_mode != BTA_HH_PROTO_UNKNOWN) {
-        HAL_CBACK(bt_hh_callbacks, protocol_mode_cb,
-                  (RawAddress*)&(p_dev->bd_addr),
-                  (bthh_status_t)p_data->hs_data.status,
-                  (bthh_protocol_mode_t)p_data->hs_data.rsp_data.proto_mode);
-      } else {
-        HAL_CBACK(bt_hh_callbacks, handshake_cb, (RawAddress*)&(p_dev->bd_addr),
-                  (bthh_status_t)p_data->hs_data.status);
-      }
+      hh_get_proto_handler(p_data->hs_data);
       break;
-
     case BTA_HH_SET_PROTO_EVT:
-      LOG_VERBOSE("BTA_HH_SET_PROTO_EVT: status = %d, handle = %d",
-                  p_data->dev_status.status, p_data->dev_status.handle);
-      p_dev = btif_hh_find_connected_dev_by_handle(p_data->dev_status.handle);
-      if (p_dev) {
-        HAL_CBACK(bt_hh_callbacks, handshake_cb, (RawAddress*)&(p_dev->bd_addr),
-                  (bthh_status_t)p_data->hs_data.status);
-      }
+      hh_set_proto_handler(p_data->dev_status);
       break;
-
     case BTA_HH_GET_IDLE_EVT:
-      LOG_VERBOSE("BTA_HH_GET_IDLE_EVT: handle = %d, status = %d, rate = %d",
-                  p_data->hs_data.handle, p_data->hs_data.status,
-                  p_data->hs_data.rsp_data.idle_rate);
-      p_dev = btif_hh_find_connected_dev_by_handle(p_data->hs_data.handle);
-      if (p_dev) {
-        HAL_CBACK(bt_hh_callbacks, idle_time_cb, (RawAddress*)&(p_dev->bd_addr),
-                  (bthh_status_t)p_data->hs_data.status,
-                  p_data->hs_data.rsp_data.idle_rate);
-      }
+      hh_get_idle_handler(p_data->hs_data);
       break;
-
     case BTA_HH_SET_IDLE_EVT:
-      LOG_VERBOSE("BTA_HH_SET_IDLE_EVT: status = %d, handle = %d",
-                  p_data->dev_status.status, p_data->dev_status.handle);
+      hh_set_idle_handler(p_data->dev_status);
       break;
-
     case BTA_HH_GET_DSCP_EVT:
-      len = p_data->dscp_info.descriptor.dl_len;
-      LOG_VERBOSE("BTA_HH_GET_DSCP_EVT: len = %d", len);
-      p_dev =
-          btif_hh_find_connected_dev_by_handle(p_data->dscp_info.hid_handle);
-      if (p_dev == NULL) {
-        LOG_ERROR("BTA_HH_GET_DSCP_EVT: No HID device is currently connected");
-        p_data->dscp_info.hid_handle = BTA_HH_INVALID_HANDLE;
-        return;
-      }
-      if (p_dev->fd < 0) {
-        LOG_ERROR(
-
-            "BTA_HH_GET_DSCP_EVT: Error, failed to find the uhid driver...");
-        return;
-      }
-      {
-        const char* cached_name = NULL;
-        bt_bdname_t bdname;
-        bt_property_t prop_name;
-        BTIF_STORAGE_FILL_PROPERTY(&prop_name, BT_PROPERTY_BDNAME,
-                                   sizeof(bt_bdname_t), &bdname);
-        if (btif_storage_get_remote_device_property(
-                &p_dev->bd_addr, &prop_name) == BT_STATUS_SUCCESS) {
-          cached_name = (char*)bdname.name;
-        } else {
-          cached_name = "Bluetooth HID";
-        }
-
-        LOG_WARN("%s: name = %s", __func__, cached_name);
-        bta_hh_co_send_hid_info(p_dev, cached_name, p_data->dscp_info.vendor_id,
-                                p_data->dscp_info.product_id,
-                                p_data->dscp_info.version,
-                                p_data->dscp_info.ctry_code, len,
-                                p_data->dscp_info.descriptor.dsc_list);
-        if (btif_hh_add_added_dev(p_dev->bd_addr, p_dev->attr_mask)) {
-          tBTA_HH_DEV_DSCP_INFO dscp_info;
-          bt_status_t ret;
-          btif_hh_copy_hid_info(&dscp_info, &p_data->dscp_info);
-          VLOG(1) << "BTA_HH_GET_DSCP_EVT:bda = "
-                  << ADDRESS_TO_LOGGABLE_STR(p_dev->bd_addr);
-          BTA_HhAddDev(p_dev->bd_addr, p_dev->attr_mask, p_dev->sub_class,
-                       p_dev->app_id, dscp_info);
-          // write hid info to nvram
-          ret = btif_storage_add_hid_device_info(
-              &(p_dev->bd_addr), p_dev->attr_mask, p_dev->sub_class,
-              p_dev->app_id, p_data->dscp_info.vendor_id,
-              p_data->dscp_info.product_id, p_data->dscp_info.version,
-              p_data->dscp_info.ctry_code, p_data->dscp_info.ssr_max_latency,
-              p_data->dscp_info.ssr_min_tout, len,
-              p_data->dscp_info.descriptor.dsc_list);
-
-          ASSERTC(ret == BT_STATUS_SUCCESS, "storing hid info failed", ret);
-          LOG_WARN("BTA_HH_GET_DSCP_EVT: Called add device");
-
-          // Free buffer created for dscp_info;
-          if (dscp_info.descriptor.dl_len > 0 &&
-              dscp_info.descriptor.dsc_list != NULL) {
-            osi_free_and_reset((void**)&dscp_info.descriptor.dsc_list);
-            dscp_info.descriptor.dl_len = 0;
-          }
-        } else {
-          // Device already added.
-          LOG_WARN("%s: Device already added ", __func__);
-        }
-        /*Sync HID Keyboard lockstates */
-        tmplen = sizeof(hid_kb_numlock_on_list) / sizeof(tHID_KB_LIST);
-        for (i = 0; i < tmplen; i++) {
-          if (p_data->dscp_info.vendor_id ==
-                  hid_kb_numlock_on_list[i].version_id &&
-              p_data->dscp_info.product_id ==
-                  hid_kb_numlock_on_list[i].product_id) {
-            LOG_VERBOSE(
-                "%s() idx[%d] Enabling "
-                "NUMLOCK for device :: %s",
-                __func__, i, hid_kb_numlock_on_list[i].kb_name);
-            /* Enable NUMLOCK by default so that numeric
-                keys work from first keyboard connect */
-            set_keylockstate(BTIF_HH_KEYSTATE_MASK_NUMLOCK, true);
-            sync_lockstate_on_connect(p_dev);
-            /* End Sync HID Keyboard lockstates */
-            break;
-          }
-        }
-      }
+      hh_get_dscp_handler(p_data->dscp_info);
       break;
-
     case BTA_HH_ADD_DEV_EVT:
-      LOG_WARN("BTA_HH_ADD_DEV_EVT: status = %d, handle = %d",
-               p_data->dev_info.status, p_data->dev_info.handle);
-      int i;
-      for (i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
-        if (btif_hh_cb.added_devices[i].bd_addr == p_data->dev_info.bda) {
-          if (p_data->dev_info.status == BTA_HH_OK) {
-            btif_hh_cb.added_devices[i].dev_handle = p_data->dev_info.handle;
-          } else {
-            btif_hh_cb.added_devices[i].bd_addr = RawAddress::kEmpty;
-            btif_hh_cb.added_devices[i].dev_handle = BTA_HH_INVALID_HANDLE;
-          }
-          break;
-        }
-      }
+      hh_add_dev_handler(p_data->dev_info);
       break;
     case BTA_HH_RMV_DEV_EVT:
-      LOG_VERBOSE("BTA_HH_RMV_DEV_EVT: status = %d, handle = %d",
-                  p_data->dev_info.status, p_data->dev_info.handle);
-      VLOG(1) << "BTA_HH_RMV_DEV_EVT:bda = " << p_data->dev_info.bda;
+      hh_rmv_dev_handler(p_data->dev_info);
       break;
-
     case BTA_HH_VC_UNPLUG_EVT:
-      LOG_VERBOSE("BTA_HH_VC_UNPLUG_EVT: status = %d, handle = %d",
-                  p_data->dev_status.status, p_data->dev_status.handle);
-      p_dev = btif_hh_find_connected_dev_by_handle(p_data->dev_status.handle);
-      btif_hh_cb.status = (BTIF_HH_STATUS)BTIF_HH_DEV_DISCONNECTED;
-      if (p_dev != NULL) {
-        VLOG(1) << "BTA_HH_VC_UNPLUG_EVT:bda = " << p_dev->bd_addr;
-
-        /* Stop the VUP timer */
-        btif_hh_stop_vup_timer(&(p_dev->bd_addr));
-        p_dev->dev_status = BTHH_CONN_STATE_DISCONNECTED;
-        LOG_VERBOSE("%s---Sending connection state change", __func__);
-        HAL_CBACK(bt_hh_callbacks, connection_state_cb, &(p_dev->bd_addr),
-                  p_dev->dev_status);
-        LOG_VERBOSE("%s---Removing HID bond", __func__);
-        /* If it is locally initiated VUP or remote device has its major COD as
-        Peripheral removed the bond.*/
-        if (p_dev->local_vup || check_cod_hid(&(p_dev->bd_addr))) {
-          p_dev->local_vup = false;
-          BTA_DmRemoveDevice(p_dev->bd_addr);
-        } else
-          btif_hh_remove_device(p_dev->bd_addr);
-        HAL_CBACK(bt_hh_callbacks, virtual_unplug_cb, &(p_dev->bd_addr),
-                  (bthh_status_t)p_data->dev_status.status);
-      }
+      hh_vc_unplug_handler(p_data->dev_status);
       break;
-
     case BTA_HH_API_ERR_EVT:
-      LOG_INFO("BTA_HH API_ERR");
+      log::error("BTA_HH API_ERR");
       break;
-
+    case BTA_HH_DATA_EVT:
+      // data output is sent - do nothing.
+      break;
     default:
-      LOG_WARN("%s: Unhandled event: %d", __func__, event);
+      log::warn("Unhandled event: {}", event);
       break;
   }
 }
@@ -1142,14 +1321,13 @@ static void btif_hh_upstreams_evt(uint16_t event, char* p_param) {
  *
  ******************************************************************************/
 
-static void btif_hh_hsdata_rpt_copy_cb(uint16_t event, char* p_dest,
-                                       const char* p_src) {
+static void btif_hh_hsdata_rpt_copy_cb(uint16_t /*event*/, char* p_dest, const char* p_src) {
   tBTA_HH_HSDATA* p_dst_data = (tBTA_HH_HSDATA*)p_dest;
   tBTA_HH_HSDATA* p_src_data = (tBTA_HH_HSDATA*)p_src;
   BT_HDR* hdr;
 
   if (!p_src) {
-    LOG_ERROR("%s: Nothing to copy", __func__);
+    log::error("Nothing to copy");
     return;
   }
 
@@ -1179,19 +1357,19 @@ static void bte_hh_evt(tBTA_HH_EVT event, tBTA_HH* p_data) {
   int param_len = 0;
   tBTIF_COPY_CBACK* p_copy_cback = NULL;
 
-  if (BTA_HH_ENABLE_EVT == event)
+  if (BTA_HH_ENABLE_EVT == event) {
     param_len = sizeof(tBTA_HH_STATUS);
-  else if (BTA_HH_OPEN_EVT == event)
+  } else if (BTA_HH_OPEN_EVT == event) {
     param_len = sizeof(tBTA_HH_CONN);
-  else if (BTA_HH_DISABLE_EVT == event)
+  } else if (BTA_HH_DISABLE_EVT == event) {
     param_len = sizeof(tBTA_HH_STATUS);
-  else if (BTA_HH_CLOSE_EVT == event)
+  } else if (BTA_HH_CLOSE_EVT == event) {
     param_len = sizeof(tBTA_HH_CBDATA);
-  else if (BTA_HH_GET_DSCP_EVT == event)
+  } else if (BTA_HH_GET_DSCP_EVT == event) {
     param_len = sizeof(tBTA_HH_DEV_DSCP_INFO);
-  else if ((BTA_HH_GET_PROTO_EVT == event) || (BTA_HH_GET_IDLE_EVT == event))
+  } else if ((BTA_HH_GET_PROTO_EVT == event) || (BTA_HH_GET_IDLE_EVT == event)) {
     param_len = sizeof(tBTA_HH_HSDATA);
-  else if (BTA_HH_GET_RPT_EVT == event) {
+  } else if (BTA_HH_GET_RPT_EVT == event) {
     BT_HDR* hdr = p_data->hs_data.rsp_data.p_rpt_data;
     param_len = sizeof(tBTA_HH_HSDATA);
 
@@ -1200,16 +1378,17 @@ static void bte_hh_evt(tBTA_HH_EVT event, tBTA_HH* p_data) {
       param_len += BT_HDR_SIZE + hdr->offset + hdr->len;
     }
   } else if ((BTA_HH_SET_PROTO_EVT == event) || (BTA_HH_SET_RPT_EVT == event) ||
-             (BTA_HH_VC_UNPLUG_EVT == event) || (BTA_HH_SET_IDLE_EVT == event))
+             (BTA_HH_VC_UNPLUG_EVT == event) || (BTA_HH_SET_IDLE_EVT == event)) {
     param_len = sizeof(tBTA_HH_CBDATA);
-  else if ((BTA_HH_ADD_DEV_EVT == event) || (BTA_HH_RMV_DEV_EVT == event))
+  } else if ((BTA_HH_ADD_DEV_EVT == event) || (BTA_HH_RMV_DEV_EVT == event)) {
     param_len = sizeof(tBTA_HH_DEV_INFO);
-  else if (BTA_HH_API_ERR_EVT == event)
+  } else if (BTA_HH_API_ERR_EVT == event) {
     param_len = 0;
+  }
   /* switch context to btif task context (copy full union size for convenience)
    */
-  status = btif_transfer_context(btif_hh_upstreams_evt, (uint16_t)event,
-                                 (char*)p_data, param_len, p_copy_cback);
+  status = btif_transfer_context(btif_hh_upstreams_evt, (uint16_t)event, (char*)p_data, param_len,
+                                 p_copy_cback);
 
   /* catch any failed context transfers */
   ASSERTC(status == BT_STATUS_SUCCESS, "context transfer failed", status);
@@ -1226,40 +1405,34 @@ static void bte_hh_evt(tBTA_HH_EVT event, tBTA_HH* p_data) {
  ******************************************************************************/
 
 static void btif_hh_handle_evt(uint16_t event, char* p_param) {
-  CHECK(p_param != nullptr);
-  RawAddress* bd_addr = (RawAddress*)p_param;
+  log::assert_that(p_param != nullptr, "assert failed: p_param != nullptr");
+  tAclLinkSpec link_spec = *(tAclLinkSpec*)p_param;
+
   switch (event) {
     case BTIF_HH_CONNECT_REQ_EVT: {
-      LOG_DEBUG("Connect request received remote:%s",
-                ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
-      if (btif_hh_connect(bd_addr) == BT_STATUS_SUCCESS) {
-        HAL_CBACK(bt_hh_callbacks, connection_state_cb, bd_addr,
-                  BTHH_CONN_STATE_CONNECTING);
-      } else
-        HAL_CBACK(bt_hh_callbacks, connection_state_cb, bd_addr,
-                  BTHH_CONN_STATE_DISCONNECTED);
+      log::debug("BTIF_HH_CONNECT_REQ_EVT: link spec:{}", link_spec);
+      if (btif_hh_connect(link_spec) == BT_STATUS_SUCCESS) {
+        BTHH_STATE_UPDATE(link_spec, BTHH_CONN_STATE_CONNECTING);
+      } else {
+        BTHH_STATE_UPDATE(link_spec, BTHH_CONN_STATE_DISCONNECTED);
+      }
     } break;
 
     case BTIF_HH_DISCONNECT_REQ_EVT: {
-      LOG_DEBUG("Disconnect request received remote:%s",
-                ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
-      btif_hh_disconnect(bd_addr);
-      HAL_CBACK(bt_hh_callbacks, connection_state_cb, bd_addr,
-                BTHH_CONN_STATE_DISCONNECTING);
+      log::debug("BTIF_HH_DISCONNECT_REQ_EVT: link spec:{}", link_spec);
+      btif_hh_disconnect(link_spec);
+      BTHH_STATE_UPDATE(link_spec, BTHH_CONN_STATE_DISCONNECTING);
     } break;
 
     case BTIF_HH_VUP_REQ_EVT: {
-      LOG_DEBUG("Virtual unplug request received remote:%s",
-                ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
-      if (btif_hh_virtual_unplug(bd_addr) != BT_STATUS_SUCCESS) {
-        LOG_WARN("Unable to virtual unplug device remote:%s",
-                 ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
+      log::debug("BTIF_HH_VUP_REQ_EVT: link spec:{}", link_spec);
+      if (btif_hh_virtual_unplug(link_spec) != BT_STATUS_SUCCESS) {
+        log::warn("Unable to virtual unplug device remote:{}", link_spec);
       }
     } break;
 
     default: {
-      LOG_WARN("Unknown event received:%d remote:%s", event,
-               ADDRESS_TO_LOGGABLE_CSTR((*bd_addr)));
+      log::warn("Unknown event received:{} remote:{}", event, link_spec);
     } break;
   }
 }
@@ -1272,22 +1445,23 @@ static void btif_hh_handle_evt(uint16_t event, char* p_param) {
  *
  * Returns      void
  ******************************************************************************/
-void btif_hh_timer_timeout(void* data) {
+static void btif_hh_timer_timeout(void* data) {
   btif_hh_device_t* p_dev = (btif_hh_device_t*)data;
   tBTA_HH_EVT event = BTA_HH_VC_UNPLUG_EVT;
   tBTA_HH p_data;
   int param_len = sizeof(tBTA_HH_CBDATA);
 
-  LOG_VERBOSE("%s", __func__);
-  if (p_dev->dev_status != BTHH_CONN_STATE_CONNECTED) return;
+  log::verbose("");
+  if (p_dev->dev_status != BTHH_CONN_STATE_CONNECTED) {
+    return;
+  }
 
   memset(&p_data, 0, sizeof(tBTA_HH));
   p_data.dev_status.status = BTA_HH_ERR;  // tBTA_HH_STATUS
   p_data.dev_status.handle = p_dev->dev_handle;
 
   /* switch context to btif task context */
-  btif_transfer_context(btif_hh_upstreams_evt, (uint16_t)event, (char*)&p_data,
-                        param_len, NULL);
+  btif_transfer_context(btif_hh_upstreams_evt, (uint16_t)event, (char*)&p_data, param_len, NULL);
 }
 
 /*******************************************************************************
@@ -1301,10 +1475,11 @@ void btif_hh_timer_timeout(void* data) {
  ******************************************************************************/
 static bt_status_t init(bthh_callbacks_t* callbacks) {
   uint32_t i;
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   bt_hh_callbacks = callbacks;
-  memset(&btif_hh_cb, 0, sizeof(btif_hh_cb));
+  btif_hh_cb = {};
+
   for (i = 0; i < BTIF_HH_MAX_HID; i++) {
     btif_hh_cb.devices[i].dev_status = BTHH_CONN_STATE_UNKNOWN;
   }
@@ -1313,7 +1488,80 @@ static bt_status_t init(bthh_callbacks_t* callbacks) {
   btif_enable_service(BTA_HID_SERVICE_ID);
   return BT_STATUS_SUCCESS;
 }
+/*******************************************************************************
+ *
+ * Function         btif_hh_transport_select
+ *
+ * Description      Select HID transport based on services available.
+ *
+ * Returns          void
+ *
+ ******************************************************************************/
+static void btif_hh_transport_select(tAclLinkSpec& link_spec) {
+  bool hid_available = false;
+  bool hogp_available = false;
+  bool headtracker_available = false;
+  bool le_preferred = false;
+  bluetooth::Uuid remote_uuids[BT_MAX_NUM_UUIDS] = {};
+  bt_property_t remote_properties = {BT_PROPERTY_UUIDS, sizeof(remote_uuids), &remote_uuids};
+  const RawAddress& bd_addr = link_spec.addrt.bda;
 
+  // Find the device type
+  tBT_DEVICE_TYPE dev_type;
+  tBLE_ADDR_TYPE addr_type;
+  get_btm_client_interface().peer.BTM_ReadDevInfo(bd_addr, &dev_type, &addr_type);
+
+  // Find which transports are already connected
+  bool bredr_acl =
+          get_btm_client_interface().peer.BTM_IsAclConnectionUp(bd_addr, BT_TRANSPORT_BR_EDR);
+  bool le_acl = get_btm_client_interface().peer.BTM_IsAclConnectionUp(bd_addr, BT_TRANSPORT_LE);
+
+  // Find which services known to be available
+  if (btif_storage_get_remote_device_property(&bd_addr, &remote_properties) == BT_STATUS_SUCCESS) {
+    int count = remote_properties.len / sizeof(remote_uuids[0]);
+    for (int i = 0; i < count; i++) {
+      if (remote_uuids[i].Is16Bit()) {
+        if (remote_uuids[i].As16Bit() == UUID_SERVCLASS_HUMAN_INTERFACE) {
+          hid_available = true;
+        } else if (remote_uuids[i].As16Bit() == UUID_SERVCLASS_LE_HID) {
+          hogp_available = true;
+        }
+      } else if (com::android::bluetooth::flags::android_headtracker_service() &&
+                 remote_uuids[i] == ANDROID_HEADTRACKER_SERVICE_UUID) {
+        headtracker_available = true;
+      }
+
+      if (hid_available && (hogp_available || headtracker_available)) {
+        break;
+      }
+    }
+  }
+
+  /* Decide whether to connect HID or HOGP */
+  if (bredr_acl && hid_available) {
+    le_preferred = false;
+  } else if (le_acl && (hogp_available || headtracker_available)) {
+    le_preferred = true;
+  } else if (hid_available) {
+    le_preferred = false;
+  } else if (hogp_available || headtracker_available) {
+    le_preferred = true;
+  } else if (bredr_acl) {
+    le_preferred = false;
+  } else if (le_acl || dev_type == BT_DEVICE_TYPE_BLE) {
+    le_preferred = true;
+  } else {
+    le_preferred = false;
+  }
+
+  link_spec.transport = le_preferred ? BT_TRANSPORT_LE : BT_TRANSPORT_BR_EDR;
+  log::info(
+          "link_spec:{}, bredr_acl:{}, hid_available:{}, le_acl:{}, "
+          "hogp_available:{}, headtracker_available:{}, "
+          "dev_type:{}, le_preferred:{}",
+          link_spec, bredr_acl, hid_available, le_acl, hogp_available, headtracker_available,
+          dev_type, le_preferred);
+}
 /*******************************************************************************
  *
  * Function        connect
@@ -1323,34 +1571,35 @@ static bt_status_t init(bthh_callbacks_t* callbacks) {
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t connect(RawAddress* bd_addr) {
-  btif_hh_device_t* p_dev;
+static bt_status_t connect(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type, tBT_TRANSPORT transport) {
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  if (btif_hh_cb.status == BTIF_HH_DEV_CONNECTING) {
-    LOG_WARN("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
+  BTHH_LOG_LINK(link_spec);
+
+  if (!com::android::bluetooth::flags::initiate_multiple_hid_connections() &&
+      !btif_hh_cb.pending_connections.empty()) {
+    log::warn("HH status = {}", btif_hh_status_text(btif_hh_cb.status));
     return BT_STATUS_BUSY;
-  } else if (btif_hh_cb.status == BTIF_HH_DISABLED ||
-             btif_hh_cb.status == BTIF_HH_DISABLING) {
-    LOG_WARN("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
+  } else if (btif_hh_cb.status == BTIF_HH_DISABLED || btif_hh_cb.status == BTIF_HH_DISABLING) {
+    log::warn("HH status = {}", btif_hh_status_text(btif_hh_cb.status));
     return BT_STATUS_NOT_READY;
   }
 
-  p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
-  if (p_dev) {
-    if (p_dev->dev_status == BTHH_CONN_STATE_CONNECTED ||
-        p_dev->dev_status == BTHH_CONN_STATE_CONNECTING) {
-      LOG_ERROR("%s: Error, device %s already connected.", __func__,
-                ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-      return BT_STATUS_DONE;
-    } else if (p_dev->dev_status == BTHH_CONN_STATE_DISCONNECTING) {
-      LOG_ERROR("%s: Error, device %s is busy with (dis)connecting.", __func__,
-                ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-      return BT_STATUS_BUSY;
-    }
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
+  if (p_dev != nullptr) {
+    log::warn("device {} already connected", p_dev->link_spec);
+    return BT_STATUS_DONE;
   }
 
-  return btif_transfer_context(btif_hh_handle_evt, BTIF_HH_CONNECT_REQ_EVT,
-                               (char*)bd_addr, sizeof(RawAddress), NULL);
+  if (link_spec.transport == BT_TRANSPORT_AUTO) {
+    btif_hh_transport_select(link_spec);
+  }
+
+  return btif_transfer_context(btif_hh_handle_evt, BTIF_HH_CONNECT_REQ_EVT, (char*)&link_spec,
+                               sizeof(tAclLinkSpec), NULL);
 }
 
 /*******************************************************************************
@@ -1362,37 +1611,57 @@ static bt_status_t connect(RawAddress* bd_addr) {
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t disconnect(RawAddress* bd_addr) {
+static bt_status_t disconnect(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                              tBT_TRANSPORT transport, bool reconnect_allowed) {
   CHECK_BTHH_INIT();
-  LOG_VERBOSE("BTHH: %s", __func__);
-  btif_hh_device_t* p_dev;
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED ||
-      btif_hh_cb.status == BTIF_HH_DISABLING) {
-    LOG_WARN("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
+  BTHH_LOG_LINK(link_spec);
+
+  if (btif_hh_cb.status == BTIF_HH_DISABLED || btif_hh_cb.status == BTIF_HH_DISABLING) {
+    log::error("HH status = {}", btif_hh_status_text(btif_hh_cb.status));
     return BT_STATUS_UNHANDLED;
   }
 
-  p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
-  if (!p_dev) {
-    LOG_ERROR("%s: Error, device %s not opened.", __func__,
-              ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-    return BT_STATUS_UNHANDLED;
+  if (com::android::bluetooth::flags::allow_switching_hid_and_hogp() && !reconnect_allowed) {
+    log::info("Incoming reconnections disabled for device {}", link_spec);
+    btif_hh_added_device_t* added_dev = btif_hh_find_added_dev(link_spec);
+    if (added_dev != nullptr) {
+      added_dev->reconnect_allowed = reconnect_allowed;
+      btif_storage_set_hid_connection_policy(added_dev->link_spec, reconnect_allowed);
+    }
   }
 
-  if (p_dev->dev_status == BTHH_CONN_STATE_DISCONNECTED ||
-      p_dev->dev_status == BTHH_CONN_STATE_DISCONNECTING) {
-    LOG_ERROR("%s: Error, device %s already disconnected.", __func__,
-              ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-    return BT_STATUS_DONE;
-  } else if (p_dev->dev_status == BTHH_CONN_STATE_CONNECTING) {
-    LOG_ERROR("%s: Error, device %s is busy with (dis)connecting.", __func__,
-              ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-    return BT_STATUS_BUSY;
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
+  if (p_dev == nullptr) {
+    if (com::android::bluetooth::flags::allow_switching_hid_and_hogp()) {
+      // Conclude the request if the device is already disconnected
+      p_dev = btif_hh_find_dev_by_link_spec(link_spec);
+      if (p_dev != nullptr && (p_dev->dev_status == BTHH_CONN_STATE_ACCEPTING ||
+                               p_dev->dev_status == BTHH_CONN_STATE_CONNECTING)) {
+        log::warn("Device {} already not connected, state: {}", p_dev->link_spec,
+                  bthh_connection_state_text(p_dev->dev_status));
+        p_dev->dev_status = BTHH_CONN_STATE_DISCONNECTED;
+        return BT_STATUS_DONE;
+      } else if (com::android::bluetooth::flags::initiate_multiple_hid_connections() &&
+                 std::find(btif_hh_cb.pending_connections.begin(),
+                           btif_hh_cb.pending_connections.end(),
+                           link_spec) != btif_hh_cb.pending_connections.end()) {
+        btif_hh_cb.pending_connections.remove(link_spec);
+        log::info("Pending connection cancelled {}", link_spec);
+        return BT_STATUS_SUCCESS;
+      }
+    }
+
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_UNHANDLED;
   }
 
   return btif_transfer_context(btif_hh_handle_evt, BTIF_HH_DISCONNECT_REQ_EVT,
-                               (char*)bd_addr, sizeof(RawAddress), NULL);
+                               (char*)&p_dev->link_spec, sizeof(tAclLinkSpec), NULL);
 }
 
 /*******************************************************************************
@@ -1404,22 +1673,41 @@ static bt_status_t disconnect(RawAddress* bd_addr) {
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t virtual_unplug(RawAddress* bd_addr) {
+static bt_status_t virtual_unplug(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                                  tBT_TRANSPORT transport) {
   CHECK_BTHH_INIT();
-  LOG_VERBOSE("BTHH: %s", __func__);
-  btif_hh_device_t* p_dev;
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
+
+  BTHH_LOG_LINK(link_spec);
+
+  BTHH_CHECK_NOT_DISABLED();
+
+  btif_hh_device_t* p_dev = btif_hh_find_dev_by_link_spec(link_spec);
+  if (com::android::bluetooth::flags::remove_input_device_on_vup()) {
+    bool pending_connection = false;
+    for (auto ls : btif_hh_cb.pending_connections) {
+      if (ls.addrt.bda == link_spec.addrt.bda) {
+        pending_connection = true;
+        break;
+      }
+    }
+
+    if (p_dev == nullptr && btif_hh_find_added_dev(link_spec) && !pending_connection) {
+      BTHH_LOG_UNKNOWN_LINK(link_spec);
+      return BT_STATUS_DEVICE_NOT_FOUND;
+    }
+  } else {
+    if (p_dev == nullptr) {
+      BTHH_LOG_UNKNOWN_LINK(link_spec);
+      return BT_STATUS_DEVICE_NOT_FOUND;
+    }
   }
-  p_dev = btif_hh_find_dev_by_bda(*bd_addr);
-  if (!p_dev) {
-    LOG_ERROR("%s: Error, device %s not opened.", __func__,
-              ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-    return BT_STATUS_FAIL;
-  }
-  btif_transfer_context(btif_hh_handle_evt, BTIF_HH_VUP_REQ_EVT, (char*)bd_addr,
-                        sizeof(RawAddress), NULL);
+
+  btif_transfer_context(btif_hh_handle_evt, BTIF_HH_VUP_REQ_EVT, (char*)&link_spec,
+                        sizeof(tAclLinkSpec), NULL);
   return BT_STATUS_SUCCESS;
 }
 
@@ -1432,18 +1720,23 @@ static bt_status_t virtual_unplug(RawAddress* bd_addr) {
 ** Returns         bt_status_t
 **
 *******************************************************************************/
-static bt_status_t get_idle_time(RawAddress* bd_addr) {
+static bt_status_t get_idle_time(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                                 tBT_TRANSPORT transport) {
   CHECK_BTHH_INIT();
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  LOG_VERBOSE("%s: addr = %s", __func__, ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
+  BTHH_LOG_LINK(link_spec);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
+  BTHH_CHECK_NOT_DISABLED();
+
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
+  if (p_dev == NULL) {
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
   }
-
-  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
-  if (p_dev == NULL) return BT_STATUS_FAIL;
 
   BTA_HhGetIdle(p_dev->dev_handle);
   return BT_STATUS_SUCCESS;
@@ -1458,22 +1751,23 @@ static bt_status_t get_idle_time(RawAddress* bd_addr) {
 ** Returns         bt_status_t
 **
 *******************************************************************************/
-static bt_status_t set_idle_time(RawAddress* bd_addr, uint8_t idle_time) {
+static bt_status_t set_idle_time(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                                 tBT_TRANSPORT transport, uint8_t idle_time) {
   CHECK_BTHH_INIT();
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  LOG_VERBOSE("%s: addr = %s, idle time = %d", __func__,
-              ADDRESS_TO_LOGGABLE_CSTR(*bd_addr), idle_time);
+  BTHH_LOG_LINK(link_spec);
+  log::verbose("idle time: {}", idle_time);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
-  }
+  BTHH_CHECK_NOT_DISABLED();
 
-  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
   if (p_dev == NULL) {
-    LOG_WARN("%s: addr = %s not opened", __func__,
-             ADDRESS_TO_LOGGABLE_CSTR(*bd_addr));
-    return BT_STATUS_FAIL;
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
   }
 
   BTA_HhSetIdle(p_dev->dev_handle, idle_time);
@@ -1489,36 +1783,39 @@ static bt_status_t set_idle_time(RawAddress* bd_addr, uint8_t idle_time) {
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t set_info(RawAddress* bd_addr, bthh_hid_info_t hid_info) {
+static bt_status_t set_info(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type, tBT_TRANSPORT transport,
+                            bthh_hid_info_t hid_info) {
   CHECK_BTHH_INIT();
-  tBTA_HH_DEV_DSCP_INFO dscp_info;
+  tBTA_HH_DEV_DSCP_INFO dscp_info = {};
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  VLOG(1) << __func__ << " BTHH: addr = " << *bd_addr;
-  LOG_VERBOSE(
-      "BTHH: %s: sub_class = 0x%02x, app_id = %d, vendor_id = 0x%04x, "
-      "product_id = 0x%04x, version= 0x%04x",
-      __func__, hid_info.sub_class, hid_info.app_id, hid_info.vendor_id,
-      hid_info.product_id, hid_info.version);
+  BTHH_LOG_LINK(link_spec);
+  log::verbose(
+          "sub_class = 0x{:02x}, app_id = {}, vendor_id = 0x{:04x}, "
+          "product_id = 0x{:04x}, version= 0x{:04x}",
+          hid_info.sub_class, hid_info.app_id, hid_info.vendor_id, hid_info.product_id,
+          hid_info.version);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
-  }
+  BTHH_CHECK_NOT_DISABLED();
 
-  memset(&dscp_info, 0, sizeof(dscp_info));
   dscp_info.vendor_id = hid_info.vendor_id;
   dscp_info.product_id = hid_info.product_id;
   dscp_info.version = hid_info.version;
   dscp_info.ctry_code = hid_info.ctry_code;
 
   dscp_info.descriptor.dl_len = hid_info.dl_len;
-  dscp_info.descriptor.dsc_list =
-      (uint8_t*)osi_malloc(dscp_info.descriptor.dl_len);
+  dscp_info.descriptor.dsc_list = (uint8_t*)osi_malloc(dscp_info.descriptor.dl_len);
   memcpy(dscp_info.descriptor.dsc_list, &(hid_info.dsc_list), hid_info.dl_len);
 
-  if (btif_hh_add_added_dev(*bd_addr, hid_info.attr_mask)) {
-    BTA_HhAddDev(*bd_addr, hid_info.attr_mask, hid_info.sub_class,
-                 hid_info.app_id, dscp_info);
+  if (transport == BT_TRANSPORT_AUTO) {
+    btif_hh_transport_select(link_spec);
+  }
+
+  if (hh_add_device(link_spec, hid_info.attr_mask, true)) {
+    BTA_HhAddDev(link_spec, hid_info.attr_mask, hid_info.sub_class, hid_info.app_id, dscp_info);
   }
 
   osi_free_and_reset((void**)&dscp_info.descriptor.dsc_list);
@@ -1535,19 +1832,23 @@ static bt_status_t set_info(RawAddress* bd_addr, bthh_hid_info_t hid_info) {
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t get_protocol(RawAddress* bd_addr,
-                                UNUSED_ATTR bthh_protocol_mode_t protocolMode) {
+static bt_status_t get_protocol(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                                tBT_TRANSPORT transport, bthh_protocol_mode_t /* protocolMode */) {
   CHECK_BTHH_INIT();
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  VLOG(1) << __func__ << " BTHH: addr = " << ADDRESS_TO_LOGGABLE_STR(*bd_addr);
+  BTHH_LOG_LINK(link_spec);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
+  BTHH_CHECK_NOT_DISABLED();
+
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
+  if (!p_dev) {
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
   }
-
-  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
-  if (!p_dev) return BT_STATUS_FAIL;
 
   BTA_HhGetProtoMode(p_dev->dev_handle);
   return BT_STATUS_SUCCESS;
@@ -1562,28 +1863,28 @@ static bt_status_t get_protocol(RawAddress* bd_addr,
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t set_protocol(RawAddress* bd_addr,
-                                bthh_protocol_mode_t protocolMode) {
+static bt_status_t set_protocol(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                                tBT_TRANSPORT transport, bthh_protocol_mode_t protocolMode) {
   CHECK_BTHH_INIT();
   btif_hh_device_t* p_dev;
   uint8_t proto_mode = protocolMode;
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  VLOG(1) << __func__ << " BTHH: proto_mod=" << protocolMode
-          << " addr = " << *bd_addr;
+  BTHH_LOG_LINK(link_spec);
+  log::verbose("mode: {}", protocolMode);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
-  }
+  BTHH_CHECK_NOT_DISABLED();
 
-  p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+  p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
   if (p_dev == NULL) {
-    LOG(WARNING) << " Error, device" << ADDRESS_TO_LOGGABLE_STR(*bd_addr) << " not opened";
-    return BT_STATUS_FAIL;
-  } else if (protocolMode != BTA_HH_PROTO_RPT_MODE &&
-             protocolMode != BTA_HH_PROTO_BOOT_MODE) {
-    LOG_WARN("%s: Error, device proto_mode = %d.", __func__, proto_mode);
-    return BT_STATUS_FAIL;
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
+  } else if (protocolMode != BTA_HH_PROTO_RPT_MODE && protocolMode != BTA_HH_PROTO_BOOT_MODE) {
+    log::warn("device proto_mode = {}", proto_mode);
+    return BT_STATUS_PARM_INVALID;
   } else {
     BTA_HhSetProtoMode(p_dev->dev_handle, protocolMode);
   }
@@ -1600,29 +1901,30 @@ static bt_status_t set_protocol(RawAddress* bd_addr,
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t get_report(RawAddress* bd_addr,
-                              bthh_report_type_t reportType, uint8_t reportId,
-                              int bufferSize) {
+static bt_status_t get_report(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                              tBT_TRANSPORT transport, bthh_report_type_t reportType,
+                              uint8_t reportId, int bufferSize) {
   CHECK_BTHH_INIT();
   btif_hh_device_t* p_dev;
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  VLOG(1) << __func__ << " BTHH: r_type = " << reportType
-          << ", rpt_id = " << reportId << ", buf_size = " << bufferSize
-          << " addr = " << ADDRESS_TO_LOGGABLE_STR(*bd_addr);
+  BTHH_LOG_LINK(link_spec);
+  log::verbose("r_type: {}; rpt_id: {}; buf_size: {}", reportType, reportId, bufferSize);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
-  }
+  BTHH_CHECK_NOT_DISABLED();
 
-  p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+  p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
   if (p_dev == NULL) {
-    LOG(ERROR) << " Error, device" << ADDRESS_TO_LOGGABLE_STR(*bd_addr) << " not opened";
-    return BT_STATUS_FAIL;
-  } else if (((int)reportType) <= BTA_HH_RPTT_RESRV ||
-             ((int)reportType) > BTA_HH_RPTT_FEATURE) {
-    LOG(ERROR) << " Error, report type=" << +reportType << " not supported";
-    return BT_STATUS_FAIL;
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
+  } else if (((int)reportType) <= BTA_HH_RPTT_RESRV || ((int)reportType) > BTA_HH_RPTT_FEATURE) {
+    log::error("report type={} not supported", reportType);
+    log_counter_metrics_btif(
+            android::bluetooth::CodePathCounterKeyEnum::HIDH_COUNT_WRONG_REPORT_TYPE, 1);
+    return BT_STATUS_UNSUPPORTED;
   } else {
     BTA_HhGetReport(p_dev->dev_handle, reportType, reportId, bufferSize);
   }
@@ -1639,26 +1941,26 @@ static bt_status_t get_report(RawAddress* bd_addr,
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t get_report_reply(RawAddress* bd_addr, bthh_status_t status,
-                                    char* report, uint16_t size) {
+static bt_status_t get_report_reply(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                                    tBT_TRANSPORT transport, bthh_status_t status, char* report,
+                                    uint16_t size) {
   CHECK_BTHH_INIT();
-  btif_hh_device_t* p_dev;
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  VLOG(1) << __func__ << " BTHH: addr=" << ADDRESS_TO_LOGGABLE_STR(*bd_addr);
+  BTHH_LOG_LINK(link_spec);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
-  }
+  BTHH_CHECK_NOT_DISABLED();
 
-  p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
   if (p_dev == NULL) {
-    LOG(ERROR) << " Error, device" << ADDRESS_TO_LOGGABLE_STR(*bd_addr) << " not opened";
-    return BT_STATUS_FAIL;
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
   }
 
-  bta_hh_co_get_rpt_rsp(p_dev->dev_handle, (tBTA_HH_STATUS)status,
-                        (uint8_t*)report, size);
+  bta_hh_co_get_rpt_rsp(p_dev->dev_handle, (tBTA_HH_STATUS)status, (uint8_t*)report, size);
   return BT_STATUS_SUCCESS;
 }
 
@@ -1671,27 +1973,30 @@ static bt_status_t get_report_reply(RawAddress* bd_addr, bthh_status_t status,
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t set_report(RawAddress* bd_addr,
-                              bthh_report_type_t reportType, char* report) {
+static bt_status_t set_report(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type,
+                              tBT_TRANSPORT transport, bthh_report_type_t reportType,
+                              char* report) {
   CHECK_BTHH_INIT();
   btif_hh_device_t* p_dev;
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  VLOG(1) << __func__ << " BTHH: reportType=" << reportType
-          << " addr=" << ADDRESS_TO_LOGGABLE_STR(*bd_addr);
+  BTHH_LOG_LINK(link_spec);
+  log::verbose("reportType: {}", reportType);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
-  }
+  BTHH_CHECK_NOT_DISABLED();
 
-  p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+  p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
   if (p_dev == NULL) {
-    LOG(ERROR) << " Error, device" << ADDRESS_TO_LOGGABLE_STR(*bd_addr) << " not opened";
-    return BT_STATUS_FAIL;
-  } else if (((int)reportType) <= BTA_HH_RPTT_RESRV ||
-             ((int)reportType) > BTA_HH_RPTT_FEATURE) {
-    LOG(ERROR) << " Error, report type=" << +reportType << " not supported";
-    return BT_STATUS_FAIL;
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
+  } else if (((int)reportType) <= BTA_HH_RPTT_RESRV || ((int)reportType) > BTA_HH_RPTT_FEATURE) {
+    log::error("report type={} not supported", reportType);
+    log_counter_metrics_btif(
+            android::bluetooth::CodePathCounterKeyEnum::HIDH_COUNT_WRONG_REPORT_TYPE, 1);
+    return BT_STATUS_UNSUPPORTED;
   } else {
     int hex_bytes_filled;
     size_t len = (strlen(report) + 1) / 2;
@@ -1700,14 +2005,13 @@ static bt_status_t set_report(RawAddress* bd_addr,
     /* Build a SetReport data buffer */
     // TODO
     hex_bytes_filled = ascii_2_hex(report, len, hexbuf);
-    LOG_INFO("Hex bytes filled, hex value: %d", hex_bytes_filled);
+    log::info("Hex bytes filled, hex value: {}", hex_bytes_filled);
     if (hex_bytes_filled) {
       BT_HDR* p_buf = create_pbuf(hex_bytes_filled, hexbuf);
       if (p_buf == NULL) {
-        LOG_ERROR("%s: Error, failed to allocate RPT buffer, len = %d",
-                  __func__, hex_bytes_filled);
+        log::error("failed to allocate RPT buffer, len = {}", hex_bytes_filled);
         osi_free(hexbuf);
-        return BT_STATUS_FAIL;
+        return BT_STATUS_NOMEM;
       }
       BTA_HhSetReport(p_dev->dev_handle, reportType, p_buf);
       osi_free(hexbuf);
@@ -1727,43 +2031,40 @@ static bt_status_t set_report(RawAddress* bd_addr,
  * Returns         bt_status_t
  *
  ******************************************************************************/
-static bt_status_t send_data(RawAddress* bd_addr, char* data) {
+static bt_status_t send_data(RawAddress* bd_addr, tBLE_ADDR_TYPE addr_type, tBT_TRANSPORT transport,
+                             char* data) {
   CHECK_BTHH_INIT();
-  btif_hh_device_t* p_dev;
+  tAclLinkSpec link_spec = {};
+  link_spec.addrt.bda = *bd_addr;
+  link_spec.addrt.type = addr_type;
+  link_spec.transport = transport;
 
-  VLOG(1) << __func__ << " addr=" << ADDRESS_TO_LOGGABLE_STR(*bd_addr);
+  BTHH_LOG_LINK(link_spec);
 
-  if (btif_hh_cb.status == BTIF_HH_DISABLED) {
-    LOG_ERROR("%s: Error, HH status = %d", __func__, btif_hh_cb.status);
-    return BT_STATUS_FAIL;
-  }
+  BTHH_CHECK_NOT_DISABLED();
 
-  p_dev = btif_hh_find_connected_dev_by_bda(*bd_addr);
+  btif_hh_device_t* p_dev = btif_hh_find_connected_dev_by_link_spec(link_spec);
   if (p_dev == NULL) {
-    LOG(ERROR) << " Error, device"
-               << ADDRESS_TO_LOGGABLE_STR(*bd_addr) << " not opened";
-    return BT_STATUS_FAIL;
-  }
-
-  else {
+    BTHH_LOG_UNKNOWN_LINK(link_spec);
+    return BT_STATUS_DEVICE_NOT_FOUND;
+  } else {
     int hex_bytes_filled;
     size_t len = (strlen(data) + 1) / 2;
     uint8_t* hexbuf = (uint8_t*)osi_calloc(len);
 
     /* Build a SendData data buffer */
     hex_bytes_filled = ascii_2_hex(data, len, hexbuf);
-    LOG_ERROR("Hex bytes filled, hex value: %d, %zu", hex_bytes_filled, len);
+    log::info("Hex bytes filled, hex value: {}, {}", hex_bytes_filled, len);
 
     if (hex_bytes_filled) {
       BT_HDR* p_buf = create_pbuf(hex_bytes_filled, hexbuf);
       if (p_buf == NULL) {
-        LOG_ERROR("%s: Error, failed to allocate RPT buffer, len = %d",
-                  __func__, hex_bytes_filled);
+        log::error("failed to allocate RPT buffer, len = {}", hex_bytes_filled);
         osi_free(hexbuf);
-        return BT_STATUS_FAIL;
+        return BT_STATUS_NOMEM;
       }
       p_buf->layer_specific = BTA_HH_RPTT_OUTPUT;
-      BTA_HhSendData(p_dev->dev_handle, *bd_addr, p_buf);
+      BTA_HhSendData(p_dev->dev_handle, link_spec, p_buf);
       osi_free(hexbuf);
       return BT_STATUS_SUCCESS;
     }
@@ -1782,13 +2083,12 @@ static bt_status_t send_data(RawAddress* bd_addr, char* data) {
  *
  ******************************************************************************/
 static void cleanup(void) {
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
   btif_hh_device_t* p_dev;
   int i;
-  if (btif_hh_cb.status == BTIF_HH_DISABLED ||
-      btif_hh_cb.status == BTIF_HH_DISABLING) {
-    LOG_WARN("%s: HH disabling or disabled already, status = %d", __func__,
-             btif_hh_cb.status);
+  if (btif_hh_cb.status == BTIF_HH_DISABLED || btif_hh_cb.status == BTIF_HH_DISABLING) {
+    log::warn("HH disabling or disabled already, status = {}",
+              btif_hh_status_text(btif_hh_cb.status));
     return;
   }
   if (bt_hh_callbacks) {
@@ -1798,10 +2098,13 @@ static void cleanup(void) {
     btif_hh_cb.service_dereg_active = FALSE;
     btif_disable_service(BTA_HID_SERVICE_ID);
   }
+  btif_hh_cb.pending_connections.clear();
   for (i = 0; i < BTIF_HH_MAX_HID; i++) {
     p_dev = &btif_hh_cb.devices[i];
-    if (p_dev->dev_status != BTHH_CONN_STATE_UNKNOWN && p_dev->fd >= 0) {
-      LOG_VERBOSE("%s: Closing uhid fd = %d", __func__, p_dev->fd);
+    int fd = (com::android::bluetooth::flags::hid_report_queuing() ? p_dev->internal_send_fd
+                                                                   : p_dev->uhid.fd);
+    if (p_dev->dev_status != BTHH_CONN_STATE_UNKNOWN && fd >= 0) {
+      log::verbose("Closing uhid fd = {}", fd);
       bta_hh_co_close(p_dev);
     }
   }
@@ -1823,22 +2126,22 @@ static void configure_enabled_profiles(bool enable_hidp, bool enable_hogp) {
 }
 
 static const bthh_interface_t bthhInterface = {
-    sizeof(bthhInterface),
-    init,
-    connect,
-    disconnect,
-    virtual_unplug,
-    set_info,
-    get_protocol,
-    set_protocol,
-    get_idle_time,
-    set_idle_time,
-    get_report,
-    get_report_reply,
-    set_report,
-    send_data,
-    cleanup,
-    configure_enabled_profiles,
+        sizeof(bthhInterface),
+        init,
+        connect,
+        disconnect,
+        virtual_unplug,
+        set_info,
+        get_protocol,
+        set_protocol,
+        get_idle_time,
+        set_idle_time,
+        get_report,
+        get_report_reply,
+        set_report,
+        send_data,
+        cleanup,
+        configure_enabled_profiles,
 };
 
 /*******************************************************************************
@@ -1853,8 +2156,7 @@ static const bthh_interface_t bthhInterface = {
 bt_status_t btif_hh_execute_service(bool b_enable) {
   if (b_enable) {
     /* Enable and register with BTA-HH */
-    BTA_HhEnable(bte_hh_evt, bt_hh_enable_type.hidp_enabled,
-                 bt_hh_enable_type.hogp_enabled);
+    BTA_HhEnable(bte_hh_evt, bt_hh_enable_type.hidp_enabled, bt_hh_enable_type.hogp_enabled);
   } else {
     /* Disable HH */
     BTA_HhDisable();
@@ -1872,42 +2174,46 @@ bt_status_t btif_hh_execute_service(bool b_enable) {
  *
  ******************************************************************************/
 const bthh_interface_t* btif_hh_get_interface() {
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
   return &bthhInterface;
 }
 
 #define DUMPSYS_TAG "shim::legacy::hid"
 void DumpsysHid(int fd) {
   LOG_DUMPSYS_TITLE(fd, DUMPSYS_TAG);
-  LOG_DUMPSYS(fd, "status:%s num_devices:%u",
-              btif_hh_status_text(btif_hh_cb.status).c_str(),
+  LOG_DUMPSYS(fd, "status:%s num_devices:%u", btif_hh_status_text(btif_hh_cb.status).c_str(),
               btif_hh_cb.device_num);
   LOG_DUMPSYS(fd, "status:%s", btif_hh_status_text(btif_hh_cb.status).c_str());
+  for (auto link_spec : btif_hh_cb.pending_connections) {
+    LOG_DUMPSYS(fd, "Pending connection: %s", link_spec.ToRedactedStringForLogging().c_str());
+  }
   for (unsigned i = 0; i < BTIF_HH_MAX_HID; i++) {
     const btif_hh_device_t* p_dev = &btif_hh_cb.devices[i];
-    if (p_dev->bd_addr != RawAddress::kEmpty) {
-      LOG_DUMPSYS(fd, "  %u: addr:%s fd:%d state:%s ready:%s thread_id:%d", i,
-                  ADDRESS_TO_LOGGABLE_CSTR(p_dev->bd_addr), p_dev->fd,
+    if (p_dev->link_spec.addrt.bda != RawAddress::kEmpty) {
+      int fd = (com::android::bluetooth::flags::hid_report_queuing() ? p_dev->internal_send_fd
+                                                                     : p_dev->uhid.fd);
+      LOG_DUMPSYS(fd, "  %u: addr:%s fd:%d state:%s thread_id:%d handle:%d", i,
+                  p_dev->link_spec.ToRedactedStringForLogging().c_str(), fd,
                   bthh_connection_state_text(p_dev->dev_status).c_str(),
-                  (p_dev->ready_for_data) ? ("T") : ("F"),
-                  static_cast<int>(p_dev->hh_poll_thread_id));
+                  static_cast<int>(p_dev->hh_poll_thread_id), p_dev->dev_handle);
     }
   }
   for (unsigned i = 0; i < BTIF_HH_MAX_ADDED_DEV; i++) {
     const btif_hh_added_device_t* p_dev = &btif_hh_cb.added_devices[i];
-    if (p_dev->bd_addr != RawAddress::kEmpty) {
-      LOG_DUMPSYS(fd, "  %u: addr:%s", i, ADDRESS_TO_LOGGABLE_CSTR(p_dev->bd_addr));
+    if (p_dev->link_spec.addrt.bda != RawAddress::kEmpty) {
+      LOG_DUMPSYS(fd, "  %u: addr:%s reconnect:%s", i,
+                  p_dev->link_spec.ToRedactedStringForLogging().c_str(),
+                  p_dev->reconnect_allowed ? "T" : "F");
     }
   }
+  BTA_HhDump(fd);
 }
 
 namespace bluetooth {
 namespace legacy {
 namespace testing {
 
-void bte_hh_evt(tBTA_HH_EVT event, tBTA_HH* p_data) {
-  ::bte_hh_evt(event, p_data);
-}
+void bte_hh_evt(tBTA_HH_EVT event, tBTA_HH* p_data) { ::bte_hh_evt(event, p_data); }
 
 }  // namespace testing
 }  // namespace legacy

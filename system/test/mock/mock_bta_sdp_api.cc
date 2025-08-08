@@ -28,6 +28,9 @@
 
 // Mocked internal structures, if any
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 namespace test {
 namespace mock {
 namespace bta_sdp_api {
@@ -74,8 +77,7 @@ tBTA_SDP_STATUS BTA_SdpRemoveRecordByUser(void* user_data) {
   inc_func_call_count(__func__);
   return test::mock::bta_sdp_api::BTA_SdpRemoveRecordByUser(user_data);
 }
-tBTA_SDP_STATUS BTA_SdpSearch(const RawAddress& bd_addr,
-                              const bluetooth::Uuid& uuid) {
+tBTA_SDP_STATUS BTA_SdpSearch(const RawAddress& bd_addr, const bluetooth::Uuid& uuid) {
   inc_func_call_count(__func__);
   return test::mock::bta_sdp_api::BTA_SdpSearch(bd_addr, uuid);
 }

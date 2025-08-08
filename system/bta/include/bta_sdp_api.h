@@ -30,6 +30,7 @@
 #include <string>
 
 #include "include/hardware/bt_sdp.h"  // bluetooth_sdp_record
+#include "macros.h"
 #include "stack/sdp/sdp_discovery_db.h"
 #include "types/bluetooth/uuid.h"
 #include "types/raw_address.h"
@@ -43,12 +44,6 @@ typedef enum : uint8_t {
   BTA_SDP_BUSY = 2,    /* Temporarily can not handle this request. */
 } tBTA_SDP_STATUS;
 
-#ifndef CASE_RETURN_TEXT
-#define CASE_RETURN_TEXT(code) \
-  case code:                   \
-    return #code
-#endif
-
 inline std::string bta_sdp_status_text(const tBTA_SDP_STATUS& status) {
   switch (status) {
     CASE_RETURN_TEXT(BTA_SDP_SUCCESS);
@@ -58,8 +53,6 @@ inline std::string bta_sdp_status_text(const tBTA_SDP_STATUS& status) {
       return base::StringPrintf("UNKNOWN[%d]", status);
   }
 }
-
-#undef CASE_RETURN_TEXT
 
 /* SDP I/F callback events */
 /* events received by tBTA_SDP_DM_CBACK */
@@ -89,8 +82,7 @@ typedef union {
 } tBTA_SDP;
 
 /* SDP DM Interface callback */
-typedef void(tBTA_SDP_DM_CBACK)(tBTA_SDP_EVT event, tBTA_SDP* p_data,
-                                void* user_data);
+typedef void(tBTA_SDP_DM_CBACK)(tBTA_SDP_EVT event, tBTA_SDP* p_data, void* user_data);
 
 /* MCE configuration structure */
 typedef struct {
@@ -126,8 +118,7 @@ tBTA_SDP_STATUS BTA_SdpEnable(tBTA_SDP_DM_CBACK* p_cback);
  *                  BTA_SDP_FAIL if internal failure.
  *
  ******************************************************************************/
-tBTA_SDP_STATUS BTA_SdpSearch(const RawAddress& bd_addr,
-                              const bluetooth::Uuid& uuid);
+tBTA_SDP_STATUS BTA_SdpSearch(const RawAddress& bd_addr, const bluetooth::Uuid& uuid);
 
 /*******************************************************************************
  *

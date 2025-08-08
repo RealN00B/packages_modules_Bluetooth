@@ -16,10 +16,7 @@
 
 package android.bluetooth;
 
-import android.bluetooth.IBluetooth;
 import android.bluetooth.IBluetoothManagerCallback;
-import android.bluetooth.IBluetoothProfileServiceConnection;
-import android.bluetooth.IBluetoothStateChangeCallback;
 import android.content.AttributionSource;
 
 /**
@@ -30,24 +27,21 @@ import android.content.AttributionSource;
 interface IBluetoothManager
 {
     @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
-    IBluetooth registerAdapter(in IBluetoothManagerCallback callback);
+    IBinder registerAdapter(in IBluetoothManagerCallback callback);
     @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
     void unregisterAdapter(in IBluetoothManagerCallback callback);
-    void registerStateChangeCallback(in IBluetoothStateChangeCallback callback);
-    void unregisterStateChangeCallback(in IBluetoothStateChangeCallback callback);
     @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)")
     boolean enable(in AttributionSource attributionSource);
     @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)")
     boolean enableNoAutoConnect(in AttributionSource attributionSource);
-    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)")
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(allOf={android.Manifest.permission.BLUETOOTH_CONNECT,android.Manifest.permission.BLUETOOTH_PRIVILEGED}, conditional=true)")
     boolean disable(in AttributionSource attributionSource, boolean persist);
-    @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
-    int getState();
+
+    const String IPC_CACHE_MODULE_SYSTEM = "system_server"; // See IpcDataCache.MODULE_SYSTEM
+    const String GET_SYSTEM_STATE_API = "BluetoothAdapter_getSystemState";
 
     @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
-    boolean bindBluetoothProfileService(int profile, IBluetoothProfileServiceConnection proxy);
-    @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
-    void unbindBluetoothProfileService(int profile, IBluetoothProfileServiceConnection proxy);
+    int getState();
 
     @JavaPassthrough(annotation="@android.annotation.RequiresPermission(allOf={android.Manifest.permission.BLUETOOTH_CONNECT,android.Manifest.permission.LOCAL_MAC_ADDRESS})")
     String getAddress(in AttributionSource attributionSource);
@@ -58,13 +52,11 @@ interface IBluetoothManager
     boolean onFactoryReset(in AttributionSource attributionSource);
 
     @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
-    boolean isBleScanAlwaysAvailable();
+    boolean isBleScanAvailable();
     @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)")
     boolean enableBle(in AttributionSource attributionSource, IBinder b);
     @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)")
     boolean disableBle(in AttributionSource attributionSource, IBinder b);
-    @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
-    boolean isBleAppPresent();
     @JavaPassthrough(annotation="@android.annotation.RequiresNoPermission")
     boolean isHearingAidProfileSupported();
 
@@ -72,4 +64,12 @@ interface IBluetoothManager
     int setBtHciSnoopLogMode(int mode);
     @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)")
     int getBtHciSnoopLogMode();
+
+    // AutoOnFeature
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)")
+    boolean isAutoOnSupported();
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)")
+    boolean isAutoOnEnabled();
+    @JavaPassthrough(annotation="@android.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)")
+    void setAutoOnEnabled(boolean status);
 }

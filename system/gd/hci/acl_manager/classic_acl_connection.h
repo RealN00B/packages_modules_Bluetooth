@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <memory>
 
 #include "hci/acl_connection_interface.h"
@@ -29,18 +28,17 @@ namespace hci {
 namespace acl_manager {
 
 class ClassicAclConnection : public AclConnection {
- public:
+public:
   ClassicAclConnection();
-  ClassicAclConnection(std::shared_ptr<Queue> queue, AclConnectionInterface* acl_connection_interface, uint16_t handle,
+  ClassicAclConnection(std::shared_ptr<Queue> queue,
+                       AclConnectionInterface* acl_connection_interface, uint16_t handle,
                        Address address);
   ClassicAclConnection(const ClassicAclConnection&) = delete;
   ClassicAclConnection& operator=(const ClassicAclConnection&) = delete;
 
   ~ClassicAclConnection();
 
-  virtual Address GetAddress() const {
-    return address_;
-  }
+  virtual Address GetAddress() const { return address_; }
 
   virtual void RegisterCallbacks(ConnectionManagementCallbacks* callbacks, os::Handler* handler);
   virtual bool Disconnect(DisconnectReason reason);
@@ -50,15 +48,17 @@ class ClassicAclConnection : public AclConnection {
   virtual bool ChangeConnectionLinkKey();
   virtual bool ReadClockOffset();
   virtual bool HoldMode(uint16_t max_interval, uint16_t min_interval);
-  virtual bool SniffMode(uint16_t max_interval, uint16_t min_interval, uint16_t attempt, uint16_t timeout);
+  virtual bool SniffMode(uint16_t max_interval, uint16_t min_interval, uint16_t attempt,
+                         uint16_t timeout);
   virtual bool ExitSniffMode();
-  virtual bool QosSetup(ServiceType service_type, uint32_t token_rate, uint32_t peak_bandwidth, uint32_t latency,
-                        uint32_t delay_variation);
+  virtual bool QosSetup(ServiceType service_type, uint32_t token_rate, uint32_t peak_bandwidth,
+                        uint32_t latency, uint32_t delay_variation);
   virtual bool RoleDiscovery();
   virtual bool ReadLinkPolicySettings();
   virtual bool WriteLinkPolicySettings(uint16_t link_policy_settings);
-  virtual bool FlowSpecification(FlowDirection flow_direction, ServiceType service_type, uint32_t token_rate,
-                                 uint32_t token_bucket_size, uint32_t peak_bandwidth, uint32_t access_latency);
+  virtual bool FlowSpecification(FlowDirection flow_direction, ServiceType service_type,
+                                 uint32_t token_rate, uint32_t token_bucket_size,
+                                 uint32_t peak_bandwidth, uint32_t access_latency);
   virtual bool SniffSubrating(uint16_t maximum_latency, uint16_t minimum_remote_timeout,
                               uint16_t minimum_local_timeout);
   virtual bool Flush();
@@ -78,15 +78,17 @@ class ClassicAclConnection : public AclConnection {
   virtual bool ReadRemoteExtendedFeatures(uint8_t page_number);
 
   // Called once before passing the connection to the client
-  virtual ConnectionManagementCallbacks* GetEventCallbacks(std::function<void(uint16_t)> invalidate_callbacks);
+  virtual ConnectionManagementCallbacks* GetEventCallbacks(
+          std::function<void(uint16_t)> invalidate_callbacks);
 
- private:
+private:
   AclConnectionInterface* acl_connection_interface_;
+  bool is_disconnecting_ = false;
 
- protected:
+protected:
   Address address_;
 
- private:
+private:
   struct impl;
   struct impl* pimpl_ = nullptr;
 };

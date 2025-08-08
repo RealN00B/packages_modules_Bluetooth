@@ -26,6 +26,7 @@
 #pragma once
 
 #include <cstdbool>
+
 #include "p_256_multprecision.h"
 
 typedef struct {
@@ -50,7 +51,6 @@ typedef struct {
 
   // base point, a point on E of order r
   Point G;
-
 } elliptic_curve_t;
 
 extern elliptic_curve_t curve;

@@ -27,6 +27,9 @@
 
 // Mocked internal structures, if any
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 namespace test {
 namespace mock {
 namespace device_esco_parameters {
@@ -44,7 +47,7 @@ enh_esco_params_t esco_parameters_for_codec(esco_codec_t codec) {
   return test::mock::device_esco_parameters::esco_parameters_for_codec(codec);
 }
 
-enh_esco_params_t esco_parameters_for_codec(esco_codec_t codec, bool b) {
+enh_esco_params_t esco_parameters_for_codec(esco_codec_t codec, bool /* b */) {
   inc_func_call_count(__func__);
   return test::mock::device_esco_parameters::esco_parameters_for_codec(codec);
 }

@@ -2,7 +2,7 @@
 
 use crate::callbacks::Callbacks;
 use crate::{bluetooth::FLOSS_VER, Message, RPCProxy};
-use bt_topshim::btif::{BtDiscMode, BtStatus};
+use bt_topshim::btif::{BtDiscMode, BtStatus, RawAddress};
 use bt_topshim::profiles::hid_host::BthhReportType;
 use tokio::sync::mpsc::Sender;
 
@@ -15,7 +15,7 @@ pub trait IBluetoothQA {
     /// Register a media player
     fn add_media_player(&self, name: String, browsing_supported: bool);
     /// Send RFCOMM MSC command to the remote
-    fn rfcomm_send_msc(&self, dlci: u8, addr: String);
+    fn rfcomm_send_msc(&self, dlci: u8, addr: RawAddress);
     /// Fetch adapter's discoverable mode.
     /// Result will be returned in the callback |OnFetchDiscoverableModeComplete|
     fn fetch_discoverable_mode(&self);
@@ -33,13 +33,16 @@ pub trait IBluetoothQA {
     fn get_modalias(&self) -> String;
     /// Gets HID report on the peer.
     /// Result will be returned in the callback |OnGetHIDReportComplete|
-    fn get_hid_report(&self, addr: String, report_type: BthhReportType, report_id: u8);
+    fn get_hid_report(&self, addr: RawAddress, report_type: BthhReportType, report_id: u8);
     /// Sets HID report to the peer.
     /// Result will be returned in the callback |OnSetHIDReportComplete|
-    fn set_hid_report(&self, addr: String, report_type: BthhReportType, report: String);
-    /// Snd HID data report to the peer.
+    fn set_hid_report(&self, addr: RawAddress, report_type: BthhReportType, report: String);
+    /// Sends HID data report to the peer.
     /// Result will be returned in the callback |OnSendHIDDataComplete|
-    fn send_hid_data(&self, addr: String, data: String);
+    fn send_hid_data(&self, addr: RawAddress, data: String);
+    /// Sends HID virtual unplug to the peer.
+    /// Result will be returned in the callback |OnSendHIDVirtualUnplugComplete|
+    fn send_hid_virtual_unplug(&self, addr: RawAddress);
 }
 
 pub trait IBluetoothQACallback: RPCProxy {
@@ -50,6 +53,7 @@ pub trait IBluetoothQACallback: RPCProxy {
     fn on_get_hid_report_completed(&mut self, status: BtStatus);
     fn on_set_hid_report_completed(&mut self, status: BtStatus);
     fn on_send_hid_data_completed(&mut self, status: BtStatus);
+    fn on_send_hid_virtual_unplug_completed(&mut self, status: BtStatus);
 }
 
 pub struct BluetoothQA {
@@ -99,6 +103,11 @@ impl BluetoothQA {
             cb.on_send_hid_data_completed(status);
         });
     }
+    pub fn on_send_hid_virtual_unplug_completed(&mut self, status: BtStatus) {
+        self.callbacks.for_all_callbacks(|cb: &mut Box<dyn IBluetoothQACallback + Send>| {
+            cb.on_send_hid_virtual_unplug_completed(status);
+        });
+    }
 }
 
 impl IBluetoothQA for BluetoothQA {
@@ -115,7 +124,7 @@ impl IBluetoothQA for BluetoothQA {
             let _ = txl.send(Message::QaAddMediaPlayer(name, browsing_supported)).await;
         });
     }
-    fn rfcomm_send_msc(&self, dlci: u8, addr: String) {
+    fn rfcomm_send_msc(&self, dlci: u8, addr: RawAddress) {
         let txl = self.tx.clone();
         tokio::spawn(async move {
             let _ = txl.send(Message::QaRfcommSendMsc(dlci, addr)).await;
@@ -148,22 +157,28 @@ impl IBluetoothQA for BluetoothQA {
     fn get_modalias(&self) -> String {
         format!("bluetooth:v00E0pC405d{:04x}", FLOSS_VER)
     }
-    fn get_hid_report(&self, addr: String, report_type: BthhReportType, report_id: u8) {
+    fn get_hid_report(&self, addr: RawAddress, report_type: BthhReportType, report_id: u8) {
         let txl = self.tx.clone();
         tokio::spawn(async move {
             let _ = txl.send(Message::QaGetHidReport(addr, report_type, report_id)).await;
         });
     }
-    fn set_hid_report(&self, addr: String, report_type: BthhReportType, report: String) {
+    fn set_hid_report(&self, addr: RawAddress, report_type: BthhReportType, report: String) {
         let txl = self.tx.clone();
         tokio::spawn(async move {
             let _ = txl.send(Message::QaSetHidReport(addr, report_type, report)).await;
         });
     }
-    fn send_hid_data(&self, addr: String, data: String) {
+    fn send_hid_data(&self, addr: RawAddress, data: String) {
         let txl = self.tx.clone();
         tokio::spawn(async move {
             let _ = txl.send(Message::QaSendHidData(addr, data)).await;
+        });
+    }
+    fn send_hid_virtual_unplug(&self, addr: RawAddress) {
+        let txl = self.tx.clone();
+        tokio::spawn(async move {
+            let _ = txl.send(Message::QaSendHidVirtualUnplug(addr)).await;
         });
     }
 }

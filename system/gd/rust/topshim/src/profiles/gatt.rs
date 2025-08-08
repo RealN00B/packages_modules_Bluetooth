@@ -15,7 +15,7 @@ use num_traits::cast::{FromPrimitive, ToPrimitive};
 use std::fmt::{Display, Formatter, Result};
 use std::sync::{Arc, Mutex};
 
-use topshim_macros::cb_variant;
+use topshim_macros::{cb_variant, gen_cxx_extern_trivial};
 
 pub type BtGattNotifyParams = bindings::btgatt_notify_params_t;
 pub type BtGattReadParams = bindings::btgatt_read_params_t;
@@ -27,13 +27,11 @@ pub type BtGattTestParams = bindings::btgatt_test_params_t;
 #[cxx::bridge(namespace = bluetooth::topshim::rust)]
 pub mod ffi {
     unsafe extern "C++" {
-        include!("gd/rust/topshim/common/type_alias.h");
+        include!("types/raw_address.h");
+        #[namespace = ""]
         type RawAddress = crate::btif::RawAddress;
-    }
-
-    #[derive(Debug, Copy, Clone)]
-    pub struct RustUuid {
-        uu: [u8; 16],
+        #[namespace = "bluetooth"]
+        type Uuid = crate::btif::Uuid;
     }
 
     #[derive(Debug, Clone)]
@@ -54,29 +52,14 @@ pub mod ffi {
         scan_response: Vec<u8>,
     }
 
-    // Original definition exists in C++.
-    #[derive(Debug, Clone)]
-    pub struct RustGattFilterParam {
-        feat_seln: u16,
-        list_logic_type: u16,
-        filt_logic_type: u8,
-        rssi_high_thres: u8,
-        rssi_low_thres: u8,
-        delay_mode: u8,
-        found_timeout: u16,
-        lost_timeout: u16,
-        found_timeout_count: u8,
-        num_of_tracking_entries: u16,
-    }
-
     // Defined in C++ and needs a translation in shim.
     #[derive(Debug, Clone)]
     pub struct RustApcfCommand {
         type_: u8,
         address: RawAddress,
         addr_type: u8,
-        uuid: RustUuid,
-        uuid_mask: RustUuid,
+        uuid: Uuid,
+        uuid_mask: Uuid,
         name: Vec<u8>,
         company: u16,
         company_mask: u16,
@@ -99,6 +82,12 @@ pub mod ffi {
         pub pattern: Vec<u8>,
     }
 
+    #[derive(Debug, Clone)]
+    pub struct RustMsftAdvMonitorAddress {
+        pub addr_type: u8,
+        pub bd_addr: RawAddress,
+    }
+
     // Defined in C++ and needs a translation in shim.
     #[derive(Debug, Clone)]
     pub struct RustMsftAdvMonitor {
@@ -106,29 +95,9 @@ pub mod ffi {
         pub rssi_low_threshold: u8,
         pub rssi_low_timeout: u8,
         pub rssi_sampling_period: u8,
+        pub condition_type: u8,
         pub patterns: Vec<RustMsftAdvMonitorPattern>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct RustAdvertiseParameters {
-        advertising_event_properties: u16,
-        min_interval: u32,
-        max_interval: u32,
-        channel_map: u8,
-        tx_power: i8,
-        primary_advertising_phy: u8,
-        secondary_advertising_phy: u8,
-        scan_request_notification_enable: u8,
-        own_address_type: i8,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct RustPeriodicAdvertisingParameters {
-        enable: bool,
-        include_adi: bool,
-        min_interval: u16,
-        max_interval: u16,
-        periodic_advertising_properties: u16,
+        pub addr_info: RustMsftAdvMonitorAddress,
     }
 
     unsafe extern "C++" {
@@ -169,9 +138,13 @@ pub mod ffi {
 
         type BleScannerIntf;
 
+        #[namespace = ""]
+        #[cxx_name = "btgatt_filt_param_setup_t"]
+        type GattFilterParam = super::GattFilterParam;
+
         unsafe fn GetBleScannerIntf(gatt: *const u8) -> UniquePtr<BleScannerIntf>;
 
-        fn RegisterScanner(self: Pin<&mut BleScannerIntf>, uuid: RustUuid);
+        fn RegisterScanner(self: Pin<&mut BleScannerIntf>, uuid: Uuid);
         fn Unregister(self: Pin<&mut BleScannerIntf>, scanner_id: u8);
         fn Scan(self: Pin<&mut BleScannerIntf>, start: bool);
         fn ScanFilterParamSetup(
@@ -179,7 +152,7 @@ pub mod ffi {
             scanner_id: u8,
             action: u8,
             filter_index: u8,
-            filt_param: RustGattFilterParam,
+            filt_param: GattFilterParam,
         );
         fn ScanFilterAdd(
             self: Pin<&mut BleScannerIntf>,
@@ -189,18 +162,16 @@ pub mod ffi {
         fn ScanFilterClear(self: Pin<&mut BleScannerIntf>, filter_index: u8);
         fn ScanFilterEnable(self: Pin<&mut BleScannerIntf>, enable: bool);
         fn IsMsftSupported(self: Pin<&mut BleScannerIntf>) -> bool;
-        fn MsftAdvMonitorAdd(
-            self: Pin<&mut BleScannerIntf>,
-            call_id: u32,
-            monitor: &RustMsftAdvMonitor,
-        );
-        fn MsftAdvMonitorRemove(self: Pin<&mut BleScannerIntf>, call_id: u32, monitor_handle: u8);
-        fn MsftAdvMonitorEnable(self: Pin<&mut BleScannerIntf>, call_id: u32, enable: bool);
+        fn MsftAdvMonitorAdd(self: Pin<&mut BleScannerIntf>, monitor: &RustMsftAdvMonitor);
+        fn MsftAdvMonitorRemove(self: Pin<&mut BleScannerIntf>, monitor_handle: u8);
+        fn MsftAdvMonitorEnable(self: Pin<&mut BleScannerIntf>, enable: bool);
         fn SetScanParameters(
             self: Pin<&mut BleScannerIntf>,
             scanner_id: u8,
+            scan_type: u8,
             scan_interval: u16,
             scan_window: u16,
+            scan_phy: u8,
         );
 
         fn BatchscanConfigStorage(
@@ -285,7 +256,7 @@ pub mod ffi {
         unsafe fn gdscan_on_batch_scan_threshold_crossed(client_if: i32);
 
         // Static cb_variant! callbacks using base::Callback
-        unsafe fn gdscan_register_callback(uuid: RustUuid, scanner_id: u8, btm_status: u8);
+        unsafe fn gdscan_register_callback(uuid: Uuid, scanner_id: u8, btm_status: u8);
         unsafe fn gdscan_status_callback(scanner_id: u8, btm_status: u8);
         unsafe fn gdscan_enable_callback(action: u8, btm_status: u8);
         unsafe fn gdscan_filter_param_setup_callback(
@@ -301,13 +272,9 @@ pub mod ffi {
             action: u8,
             btm_status: u8,
         );
-        unsafe fn gdscan_msft_adv_monitor_add_callback(
-            call_id: u32,
-            monitor_handle: u8,
-            status: u8,
-        );
-        unsafe fn gdscan_msft_adv_monitor_remove_callback(call_id: u32, status: u8);
-        unsafe fn gdscan_msft_adv_monitor_enable_callback(call_id: u32, status: u8);
+        unsafe fn gdscan_msft_adv_monitor_add_callback(monitor_handle: u8, status: u8);
+        unsafe fn gdscan_msft_adv_monitor_remove_callback(status: u8);
+        unsafe fn gdscan_msft_adv_monitor_enable_callback(status: u8);
         unsafe fn gdscan_start_sync_callback(
             status: u8,
             sync_handle: u16,
@@ -335,6 +302,11 @@ pub mod ffi {
 
         type BleAdvertiserIntf;
 
+        #[namespace = ""]
+        type AdvertiseParameters = super::AdvertiseParameters;
+        #[namespace = ""]
+        type PeriodicAdvertisingParameters = super::PeriodicAdvertisingParameters;
+
         /// Given the gatt profile interface, creates a shim interface for
         /// |BleAdvertiserInterface|.
         unsafe fn GetBleAdvertiserIntf(gatt: *const u8) -> UniquePtr<BleAdvertiserIntf>;
@@ -346,7 +318,7 @@ pub mod ffi {
         fn SetParameters(
             self: Pin<&mut BleAdvertiserIntf>,
             adv_id: u8,
-            params: RustAdvertiseParameters,
+            params: AdvertiseParameters,
         );
         fn SetData(
             self: Pin<&mut BleAdvertiserIntf>,
@@ -364,7 +336,7 @@ pub mod ffi {
         fn StartAdvertising(
             self: Pin<&mut BleAdvertiserIntf>,
             adv_id: u8,
-            params: RustAdvertiseParameters,
+            params: AdvertiseParameters,
             advertise_data: Vec<u8>,
             scan_response_data: Vec<u8>,
             timeout_in_sec: i32,
@@ -372,10 +344,10 @@ pub mod ffi {
         fn StartAdvertisingSet(
             self: Pin<&mut BleAdvertiserIntf>,
             reg_id: i32,
-            params: RustAdvertiseParameters,
+            params: AdvertiseParameters,
             advertise_data: Vec<u8>,
             scan_response_data: Vec<u8>,
-            periodic_params: RustPeriodicAdvertisingParameters,
+            periodic_params: PeriodicAdvertisingParameters,
             periodic_data: Vec<u8>,
             duration: u16,
             max_ext_adv_events: u8,
@@ -383,7 +355,7 @@ pub mod ffi {
         fn SetPeriodicAdvertisingParameters(
             self: Pin<&mut BleAdvertiserIntf>,
             adv_id: u8,
-            params: RustPeriodicAdvertisingParameters,
+            params: PeriodicAdvertisingParameters,
         );
         fn SetPeriodicAdvertisingData(self: Pin<&mut BleAdvertiserIntf>, adv_id: u8, data: Vec<u8>);
         fn SetPeriodicAdvertisingEnable(
@@ -423,37 +395,20 @@ pub mod ffi {
     }
 }
 
+// Non-trivial types, conversion in .cc is necessary.
 pub type AdvertisingTrackInfo = ffi::RustAdvertisingTrackInfo;
-pub type GattFilterParam = ffi::RustGattFilterParam;
 pub type ApcfCommand = ffi::RustApcfCommand;
 pub type MsftAdvMonitor = ffi::RustMsftAdvMonitor;
 pub type MsftAdvMonitorPattern = ffi::RustMsftAdvMonitorPattern;
-pub type AdvertiseParameters = ffi::RustAdvertiseParameters;
-pub type PeriodicAdvertisingParameters = ffi::RustPeriodicAdvertisingParameters;
+pub type MsftAdvMonitorAddress = ffi::RustMsftAdvMonitorAddress;
 
-impl Default for PeriodicAdvertisingParameters {
-    fn default() -> Self {
-        PeriodicAdvertisingParameters {
-            enable: false,
-            include_adi: false,
-            min_interval: 0,
-            max_interval: 0,
-            periodic_advertising_properties: 0,
-        }
-    }
-}
+#[gen_cxx_extern_trivial]
+pub type GattFilterParam = bindings::btgatt_filt_param_setup_t;
 
-impl From<ffi::RustUuid> for Uuid {
-    fn from(item: ffi::RustUuid) -> Self {
-        Uuid::from(item.uu)
-    }
-}
-
-impl From<Uuid> for ffi::RustUuid {
-    fn from(item: Uuid) -> Self {
-        ffi::RustUuid { uu: item.uu }
-    }
-}
+#[gen_cxx_extern_trivial]
+pub type AdvertiseParameters = bindings::AdvertiseParameters;
+#[gen_cxx_extern_trivial]
+pub type PeriodicAdvertisingParameters = bindings::PeriodicAdvertisingParameters;
 
 #[derive(Clone, Copy, Debug, FromPrimitive, ToPrimitive, PartialEq, PartialOrd)]
 #[repr(u32)]
@@ -532,6 +487,34 @@ impl From<i32> for GattStatus {
 impl Display for GattStatus {
     fn fmt(&self, f: &mut Formatter) -> Result {
         write!(f, "{}", self.to_u32().unwrap_or(0))
+    }
+}
+
+#[derive(Debug, FromPrimitive, ToPrimitive, Clone, Copy)]
+#[repr(u32)]
+/// LE Discoverable modes.
+pub enum LeDiscMode {
+    Invalid = 0,
+    NonDiscoverable,
+    LimitedDiscoverable,
+    GeneralDiscoverable,
+}
+
+impl From<u32> for LeDiscMode {
+    fn from(num: u32) -> Self {
+        LeDiscMode::from_u32(num).unwrap_or(LeDiscMode::Invalid)
+    }
+}
+
+impl Into<u32> for LeDiscMode {
+    fn into(self) -> u32 {
+        self.to_u32().unwrap_or(0)
+    }
+}
+
+impl Default for LeDiscMode {
+    fn default() -> Self {
+        LeDiscMode::Invalid
     }
 }
 
@@ -686,7 +669,7 @@ cb_variant!(
 cb_variant!(
     GattClientCb,
     gc_read_characteristic_cb -> GattClientCallbacks::ReadCharacteristic,
-    i32, i32 -> GattStatus, *mut BtGattReadParams, {
+    i32, i32 -> GattStatus, *const BtGattReadParams, {
         let _2 = unsafe { *_2.clone() };
     }
 );
@@ -975,14 +958,14 @@ pub enum GattScannerInbandCallbacks {
     /// Params: Filter Index, Filter Type, Available Space, Action, BTM Status
     FilterConfigCallback(u8, u8, u8, u8, u8),
 
-    /// Params: Call ID, Monitor Handle, Status
-    MsftAdvMonitorAddCallback(u32, u8, u8),
+    /// Params: Monitor Handle, Status
+    MsftAdvMonitorAddCallback(u8, u8),
 
-    /// Params: Call ID, Status
-    MsftAdvMonitorRemoveCallback(u32, u8),
+    /// Params: Status
+    MsftAdvMonitorRemoveCallback(u8),
 
-    /// Params: Call ID, Status
-    MsftAdvMonitorEnableCallback(u32, u8),
+    /// Params: Status
+    MsftAdvMonitorEnableCallback(u8),
 
     /// Params: Status, Sync Handle, Advertising Sid, Address Type, Address, Phy, Interval
     StartSyncCallback(u8, u16, u8, u8, RawAddress, u8, u16),
@@ -1007,7 +990,7 @@ pub struct GattScannerInbandCallbacksDispatcher {
 type GDScannerInbandCb = Arc<Mutex<GattScannerInbandCallbacksDispatcher>>;
 
 cb_variant!(GDScannerInbandCb, gdscan_register_callback -> GattScannerInbandCallbacks::RegisterCallback,
-    ffi::RustUuid -> Uuid, u8, u8);
+    Uuid, u8, u8);
 
 cb_variant!(GDScannerInbandCb, gdscan_status_callback -> GattScannerInbandCallbacks::StatusCallback, u8, u8);
 cb_variant!(GDScannerInbandCb, gdscan_enable_callback -> GattScannerInbandCallbacks::EnableCallback, u8, u8);
@@ -1019,13 +1002,13 @@ cb_variant!(GDScannerInbandCb,
     u8, u8, u8, u8, u8);
 cb_variant!(GDScannerInbandCb,
     gdscan_msft_adv_monitor_add_callback -> GattScannerInbandCallbacks::MsftAdvMonitorAddCallback,
-    u32, u8, u8);
+    u8, u8);
 cb_variant!(GDScannerInbandCb,
     gdscan_msft_adv_monitor_remove_callback -> GattScannerInbandCallbacks::MsftAdvMonitorRemoveCallback,
-    u32, u8);
+    u8);
 cb_variant!(GDScannerInbandCb,
     gdscan_msft_adv_monitor_enable_callback -> GattScannerInbandCallbacks::MsftAdvMonitorEnableCallback,
-    u32, u8);
+    u8);
 cb_variant!(GDScannerInbandCb,
 gdscan_start_sync_callback -> GattScannerInbandCallbacks::StartSyncCallback,
 u8, u16, u8, u8, *const RawAddress, u8, u16, {
@@ -1198,6 +1181,7 @@ impl GattClient {
         transport: i32,
         opportunistic: bool,
         initiating_phys: i32,
+        preferred_mtu: i32,
     ) -> BtStatus {
         BtStatus::from(ccall!(
             self,
@@ -1208,7 +1192,8 @@ impl GattClient {
             is_direct,
             transport,
             opportunistic,
-            initiating_phys
+            initiating_phys,
+            preferred_mtu
         ))
     }
 
@@ -1394,10 +1379,11 @@ impl GattServer {
         &self,
         server_if: i32,
         addr: &RawAddress,
+        addr_type: u8,
         is_direct: bool,
         transport: i32,
     ) -> BtStatus {
-        BtStatus::from(ccall!(self, connect, server_if, addr, is_direct, transport))
+        BtStatus::from(ccall!(self, connect, server_if, addr, addr_type, is_direct, transport))
     }
 
     pub fn disconnect(&self, server_if: i32, addr: &RawAddress, conn_id: i32) -> BtStatus {
@@ -1482,7 +1468,7 @@ impl BleScanner {
     }
 
     pub fn register_scanner(&mut self, app_uuid: Uuid) {
-        mutcxxcall!(self, RegisterScanner, app_uuid.into());
+        mutcxxcall!(self, RegisterScanner, app_uuid);
     }
 
     pub fn unregister(&mut self, scanner_id: u8) {
@@ -1528,20 +1514,35 @@ impl BleScanner {
         mutcxxcall!(self, IsMsftSupported)
     }
 
-    pub fn msft_adv_monitor_add(&mut self, call_id: u32, monitor: &MsftAdvMonitor) {
-        mutcxxcall!(self, MsftAdvMonitorAdd, call_id, monitor);
+    pub fn msft_adv_monitor_add(&mut self, monitor: &MsftAdvMonitor) {
+        mutcxxcall!(self, MsftAdvMonitorAdd, monitor);
     }
 
-    pub fn msft_adv_monitor_remove(&mut self, call_id: u32, monitor_handle: u8) {
-        mutcxxcall!(self, MsftAdvMonitorRemove, call_id, monitor_handle);
+    pub fn msft_adv_monitor_remove(&mut self, monitor_handle: u8) {
+        mutcxxcall!(self, MsftAdvMonitorRemove, monitor_handle);
     }
 
-    pub fn msft_adv_monitor_enable(&mut self, call_id: u32, enable: bool) {
-        mutcxxcall!(self, MsftAdvMonitorEnable, call_id, enable);
+    pub fn msft_adv_monitor_enable(&mut self, enable: bool) {
+        mutcxxcall!(self, MsftAdvMonitorEnable, enable);
     }
 
-    pub fn set_scan_parameters(&mut self, scanner_id: u8, scan_interval: u16, scan_window: u16) {
-        mutcxxcall!(self, SetScanParameters, scanner_id, scan_interval, scan_window);
+    pub fn set_scan_parameters(
+        &mut self,
+        scanner_id: u8,
+        scan_type: u8,
+        scan_interval: u16,
+        scan_window: u16,
+        scan_phy: u8,
+    ) {
+        mutcxxcall!(
+            self,
+            SetScanParameters,
+            scanner_id,
+            scan_type,
+            scan_interval,
+            scan_window,
+            scan_phy
+        );
     }
 
     pub fn batchscan_config_storage(
@@ -1726,11 +1727,11 @@ pub struct Gatt {
 }
 
 impl Gatt {
-    pub fn new(intf: &BluetoothInterface) -> Option<Gatt> {
+    pub fn new(intf: &BluetoothInterface) -> Gatt {
         let r = intf.get_profile_interface(SupportedProfiles::Gatt);
 
-        if r == std::ptr::null() {
-            return None;
+        if r.is_null() {
+            panic!("Failed to get GATT interface");
         }
 
         let gatt_client_intf = unsafe { ffi::GetGattClientProfile(r as *const u8) };
@@ -1738,24 +1739,18 @@ impl Gatt {
         let gatt_scanner_intf = unsafe { ffi::GetBleScannerIntf(r as *const u8) };
         let gatt_advertiser_intf = unsafe { ffi::GetBleAdvertiserIntf(r as *const u8) };
 
-        Some(Gatt {
+        Gatt {
             internal: RawGattWrapper { raw: r as *const btgatt_interface_t },
             is_init: false,
             client: GattClient {
                 internal: RawGattClientWrapper {
-                    raw: unsafe {
-                        (*(r as *const btgatt_interface_t)).client
-                            as *const btgatt_client_interface_t
-                    },
+                    raw: unsafe { (*(r as *const btgatt_interface_t)).client },
                 },
                 internal_cxx: gatt_client_intf,
             },
             server: GattServer {
                 internal: RawGattServerWrapper {
-                    raw: unsafe {
-                        (*(r as *const btgatt_interface_t)).server
-                            as *const btgatt_server_interface_t
-                    },
+                    raw: unsafe { (*(r as *const btgatt_interface_t)).server },
                 },
                 internal_cxx: gatt_server_intf,
             },
@@ -1765,7 +1760,7 @@ impl Gatt {
             gatt_client_callbacks: None,
             gatt_server_callbacks: None,
             gatt_scanner_callbacks: None,
-        })
+        }
     }
 
     pub fn is_initialized(&self) -> bool {

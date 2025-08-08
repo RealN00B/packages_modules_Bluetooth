@@ -18,7 +18,7 @@
 
 #include <cstdint>
 
-#include "common/init_flags.h"
+#include "hci/controller_interface_mock.h"
 #include "stack/acl/acl.h"
 #include "stack/btm/btm_int_types.h"
 #include "stack/btm/security_device_record.h"
@@ -26,17 +26,13 @@
 #include "stack/include/acl_hci_link_interface.h"
 #include "stack/include/hcidefs.h"
 #include "test/common/mock_functions.h"
+#include "test/mock/mock_main_shim_entry.h"
 #include "types/hci_role.h"
 #include "types/raw_address.h"
 
 tBTM_CB btm_cb;
 
 namespace {
-const char* test_flags[] = {
-    "INIT_logging_debug_enabled_for_all=true",
-    nullptr,
-};
-
 const RawAddress kRawAddress = RawAddress({0x11, 0x22, 0x33, 0x44, 0x55, 0x66});
 }  // namespace
 
@@ -49,14 +45,15 @@ std::set<const RawAddress> copy_of_connected_with_both_public_and_random_set();
 }  // namespace bluetooth
 
 class StackAclTest : public testing::Test {
- protected:
+protected:
   void SetUp() override {
     reset_mock_function_count_map();
-    bluetooth::common::InitFlags::Load(test_flags);
+    bluetooth::hci::testing::mock_controller_ = &controller_;
   }
-  void TearDown() override {}
+  void TearDown() override { bluetooth::hci::testing::mock_controller_ = nullptr; }
 
   tBTM_SEC_DEV_REC device_record_;
+  bluetooth::hci::testing::MockControllerInterface controller_;
 };
 
 TEST_F(StackAclTest, nop) {}
@@ -73,8 +70,7 @@ TEST_F(StackAclTest, acl_process_extended_features) {
   // Handle typical case
   {
     const uint8_t max_page = 3;
-    memset((void*)p_acl->peer_lmp_feature_valid, 0,
-           HCI_EXT_FEATURES_PAGE_MAX + 1);
+    memset((void*)p_acl->peer_lmp_feature_valid, 0, HCI_EXT_FEATURES_PAGE_MAX + 1);
     acl_process_extended_features(hci_handle, 1, max_page, 0xf123456789abcde);
     acl_process_extended_features(hci_handle, 2, max_page, 0xef123456789abcd);
     acl_process_extended_features(hci_handle, 3, max_page, 0xdef123456789abc);
@@ -89,11 +85,10 @@ TEST_F(StackAclTest, acl_process_extended_features) {
   // Handle extreme case
   {
     const uint8_t max_page = 255;
-    memset((void*)p_acl->peer_lmp_feature_valid, 0,
-           HCI_EXT_FEATURES_PAGE_MAX + 1);
+    memset((void*)p_acl->peer_lmp_feature_valid, 0, HCI_EXT_FEATURES_PAGE_MAX + 1);
     for (int i = 1; i < HCI_EXT_FEATURES_PAGE_MAX + 1; i++) {
-      acl_process_extended_features(hci_handle, static_cast<uint8_t>(i),
-                                    max_page, 0x123456789abcdef);
+      acl_process_extended_features(hci_handle, static_cast<uint8_t>(i), max_page,
+                                    0x123456789abcdef);
     }
     /* page 0 is the standard feature set */
     ASSERT_FALSE(p_acl->peer_lmp_feature_valid[0]);
@@ -104,8 +99,7 @@ TEST_F(StackAclTest, acl_process_extended_features) {
 
   // Handle case where device returns max page of zero
   {
-    memset((void*)p_acl->peer_lmp_feature_valid, 0,
-           HCI_EXT_FEATURES_PAGE_MAX + 1);
+    memset((void*)p_acl->peer_lmp_feature_valid, 0, HCI_EXT_FEATURES_PAGE_MAX + 1);
     acl_process_extended_features(hci_handle, 1, 0, 0xdef123456789abc);
     ASSERT_FALSE(p_acl->peer_lmp_feature_valid[0]);
     ASSERT_TRUE(p_acl->peer_lmp_feature_valid[1]);

@@ -18,25 +18,21 @@
 #define ANDROID_INCLUDE_BT_HEARING_AID_H
 
 #include <hardware/bluetooth.h>
-#include <raw_address.h>
+
+#include "types/raw_address.h"
 
 namespace bluetooth {
 namespace hearing_aid {
 
-enum class ConnectionState {
-  DISCONNECTED = 0,
-  CONNECTING,
-  CONNECTED,
-  DISCONNECTING
-};
+// Must be kept in sync with BluetoothProfile.java
+enum class ConnectionState { DISCONNECTED = 0, CONNECTING, CONNECTED, DISCONNECTING };
 
 class HearingAidCallbacks {
- public:
+public:
   virtual ~HearingAidCallbacks() = default;
 
   /** Callback for profile connection state change */
-  virtual void OnConnectionState(ConnectionState state,
-                                 const RawAddress& address) = 0;
+  virtual void OnConnectionState(ConnectionState state, const RawAddress& address) = 0;
 
   /** Callback for device being available. Is executed when devices are loaded
    * from storage on stack bringup, and when new device is connected to profile.
@@ -48,7 +44,7 @@ class HearingAidCallbacks {
 };
 
 class HearingAidInterface {
- public:
+public:
   virtual ~HearingAidInterface() = default;
 
   /** Register the Hearing Aid callbacks */

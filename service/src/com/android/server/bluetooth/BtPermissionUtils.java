@@ -42,7 +42,6 @@ import android.os.UserHandle;
 import android.os.UserManager;
 import android.permission.PermissionManager;
 
-
 import java.util.Objects;
 
 class BtPermissionUtils {
@@ -78,7 +77,7 @@ class BtPermissionUtils {
      *
      * <p>Should be used in situations where the app op should not be noted.
      */
-    @SuppressLint("AndroidFrameworkRequiresPermission")
+    @SuppressLint("AndroidFrameworkRequiresPermission") // This method enforces the permission
     @RequiresPermission(BLUETOOTH_CONNECT)
     static boolean checkConnectPermissionForDataDelivery(
             Context ctx,
@@ -87,7 +86,9 @@ class BtPermissionUtils {
             String message) {
         final String permission = BLUETOOTH_CONNECT;
         AttributionSource currentSource =
-                new AttributionSource.Builder(ctx.getAttributionSource()).setNext(source).build();
+                new AttributionSource.Builder(ctx.getAttributionSource())
+                        .setNext(Objects.requireNonNull(source))
+                        .build();
         final int result =
                 permissionManager.checkPermissionForDataDeliveryFromDataSource(
                         permission, currentSource, message);
@@ -108,6 +109,7 @@ class BtPermissionUtils {
      *
      * <p>Return the error description if this caller is not allowed to toggle Bluetooth
      */
+    @RequiresPermission(BLUETOOTH_CONNECT)
     String callerCanToggle(
             Context ctx,
             AttributionSource source,
@@ -138,9 +140,9 @@ class BtPermissionUtils {
         return "";
     }
 
+    @RequiresPermission(BLUETOOTH_PRIVILEGED)
     static void enforcePrivileged(Context ctx) {
-        ctx.enforceCallingOrSelfPermission(
-                BLUETOOTH_PRIVILEGED, "Need BLUETOOTH_PRIVILEGED permission");
+        ctx.enforceCallingOrSelfPermission(BLUETOOTH_PRIVILEGED, null);
     }
 
     static int getCallingAppId() {
@@ -167,6 +169,7 @@ class BtPermissionUtils {
         return callingAppId == mSystemUiUid;
     }
 
+    @SuppressLint("AndroidFrameworkRequiresPermission") // Permission is not enforced, only checked
     private static boolean isPrivileged(Context ctx, int pid, int uid) {
         return (ctx.checkPermission(BLUETOOTH_PRIVILEGED, pid, uid) == PERMISSION_GRANTED)
                 || (ctx.getPackageManager().checkSignatures(uid, SYSTEM_UID) == SIGNATURE_MATCH);
@@ -208,7 +211,7 @@ class BtPermissionUtils {
         }
         UserHandle deviceOwnerUser = null;
         ComponentName deviceOwnerComponent = null;
-        long ident = Binder.clearCallingIdentity();
+        final long ident = Binder.clearCallingIdentity();
         try {
             deviceOwnerUser = devicePolicyManager.getDeviceOwnerUser();
             deviceOwnerComponent = devicePolicyManager.getDeviceOwnerComponentOnAnyUser();
@@ -226,7 +229,7 @@ class BtPermissionUtils {
     }
 
     private static boolean isSystem(Context ctx, String packageName, int uid) {
-        long ident = Binder.clearCallingIdentity();
+        final long ident = Binder.clearCallingIdentity();
         try {
             ApplicationInfo info =
                     ctx.getPackageManager()

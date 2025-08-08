@@ -55,7 +55,6 @@ group("bluetooth") {
 
 group("tools") {
   deps = [
-    "//bt/system/gd/dumpsys/bundler:bluetooth_flatbuffer_bundler",
     "//bt/system/gd/packet/parser:bluetooth_packetgen",
   ]
 }
@@ -78,7 +77,6 @@ config("target_defaults") {
     "//bt/flags/exported_include",
     "//bt/sysprop/exported_include",
     "//bt/system/linux_include",
-    "//bt/system/types",
     "//bt/system/include",
     "//bt/system/gd",
 
@@ -174,6 +172,10 @@ config("external_flatbuffers") {
   libs = [ "flatbuffers" ]
 }
 
+config("external_fmtlib") {
+  configs = [ ":pkg_fmtlib" ]
+}
+
 # Package configurations to extract dependencies from env
 pkg_config("pkg_gtest") {
   pkg_deps = [ "gtest" ]
@@ -201,6 +203,10 @@ pkg_config("pkg_modp_b64") {
 
 pkg_config("pkg_tinyxml2") {
   pkg_deps = [ "tinyxml2" ]
+}
+
+pkg_config("pkd_fmtlib") {
+  pkg_deps = [ "fmt" ]
 }
 
 # To include ChroemOS-specific libraries and build dependencies.

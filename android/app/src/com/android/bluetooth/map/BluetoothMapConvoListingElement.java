@@ -1,23 +1,27 @@
 /*
-* Copyright (C) 2013 Samsung System LSI
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-*      http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (C) 2013 Samsung System LSI
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.android.bluetooth.map;
 
+import android.bluetooth.BluetoothProfile;
+import android.bluetooth.BluetoothProtoEnums;
 import android.util.Log;
 
+import com.android.bluetooth.BluetoothStatsLog;
 import com.android.bluetooth.SignedLongLong;
 import com.android.bluetooth.Utils;
+import com.android.bluetooth.content_profiles.ContentProfileErrorReportUtils;
 import com.android.bluetooth.map.BluetoothMapUtils.TYPE;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -25,13 +29,14 @@ import org.xmlpull.v1.XmlPullParserException;
 import org.xmlpull.v1.XmlSerializer;
 
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 
+// Next tag value for ContentProfileErrorReportUtils.report(): 2
 public class BluetoothMapConvoListingElement
         implements Comparable<BluetoothMapConvoListingElement> {
 
@@ -43,11 +48,9 @@ public class BluetoothMapConvoListingElement
     private static final String XML_ATT_VERSION_COUNTER = "version_counter";
     private static final String XML_ATT_SUMMARY = "summary";
     private static final String TAG = "BluetoothMapConvoListingElement";
-    private static final boolean D = BluetoothMapService.DEBUG;
-    private static final boolean V = BluetoothMapService.VERBOSE;
 
     private SignedLongLong mId = null;
-    private String mName = ""; //title of the conversation #REQUIRED, but allowed empty
+    private String mName = ""; // title of the conversation #REQUIRED, but allowed empty
     private long mLastActivity = -1;
     private boolean mRead = false;
     private boolean mReportRead = false; // TODO: Is this needed? - false means UNKNOWN
@@ -66,9 +69,7 @@ public class BluetoothMapConvoListingElement
 
     public void setCursorIndex(int cursorIndex) {
         this.mCursorIndex = cursorIndex;
-        if (D) {
-            Log.d(TAG, "setCursorIndex: " + cursorIndex);
-        }
+        Log.d(TAG, "setCursorIndex: " + cursorIndex);
     }
 
     public long getVersionCounter() {
@@ -76,9 +77,7 @@ public class BluetoothMapConvoListingElement
     }
 
     public void setVersionCounter(long vcount) {
-        if (D) {
-            Log.d(TAG, "setVersionCounter: " + vcount);
-        }
+        Log.d(TAG, "setVersionCounter: " + vcount);
         this.mVersionCounter = vcount;
     }
 
@@ -87,12 +86,15 @@ public class BluetoothMapConvoListingElement
     }
 
     private void setVersionCounter(String vcount) {
-        if (D) {
-            Log.d(TAG, "setVersionCounter: " + vcount);
-        }
+        Log.d(TAG, "setVersionCounter: " + vcount);
         try {
             this.mVersionCounter = Long.parseLong(vcount);
         } catch (NumberFormatException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.MAP,
+                    BluetoothProtoEnums.BLUETOOTH_MAP_CONVO_LISTING_ELEMENT,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    0);
             Log.w(TAG, "unable to parse XML versionCounter:" + vcount);
             mVersionCounter = -1;
         }
@@ -103,9 +105,7 @@ public class BluetoothMapConvoListingElement
     }
 
     public void setName(String name) {
-        if (D) {
-            Log.d(TAG, "setName: " + name);
-        }
+        Log.d(TAG, "setName: " + name);
         this.mName = name;
     }
 
@@ -140,11 +140,11 @@ public class BluetoothMapConvoListingElement
         mContacts.remove(index);
     }
 
-
     public long getLastActivity() {
         return mLastActivity;
     }
 
+    @SuppressWarnings("JavaUtilDate") // TODO: b/365629730 -- prefer Instant or LocalDate
     public String getLastActivityString() {
         SimpleDateFormat format = new SimpleDateFormat("yyyyMMdd'T'HHmmss");
         Date date = new Date(mLastActivity);
@@ -152,12 +152,11 @@ public class BluetoothMapConvoListingElement
     }
 
     public void setLastActivity(long last) {
-        if (D) {
-            Log.d(TAG, "setLastActivity: " + last);
-        }
+        Log.d(TAG, "setLastActivity: " + last);
         this.mLastActivity = last;
     }
 
+    @SuppressWarnings("JavaUtilDate") // TODO: b/365629730 -- prefer Instant or LocalDate
     public void setLastActivity(String lastActivity) throws ParseException {
         // TODO: Encode with time-zone if MCE requests it
         SimpleDateFormat format = new SimpleDateFormat("yyyyMMdd'T'HHmmss");
@@ -178,9 +177,7 @@ public class BluetoothMapConvoListingElement
 
     public void setRead(boolean read, boolean reportRead) {
         this.mRead = read;
-        if (D) {
-            Log.d(TAG, "setRead: " + read);
-        }
+        Log.d(TAG, "setRead: " + read);
         this.mReportRead = reportRead;
     }
 
@@ -195,15 +192,14 @@ public class BluetoothMapConvoListingElement
 
     /**
      * Set the conversation ID
-     * @param type 0 if the thread ID is valid across all message types in the instance - else
-     * use one of the CONVO_ID_xxx types.
+     *
+     * @param type 0 if the thread ID is valid across all message types in the instance - else use
+     *     one of the CONVO_ID_xxx types.
      * @param threadId the conversation ID
      */
     public void setConvoId(long type, long threadId) {
         this.mId = new SignedLongLong(threadId, type);
-        if (D) {
-            Log.d(TAG, "setConvoId: " + threadId + " type:" + type);
-        }
+        Log.d(TAG, "setConvoId: " + threadId + " type:" + type);
     }
 
     public String getConvoId() {
@@ -225,12 +221,7 @@ public class BluetoothMapConvoListingElement
     /* Get a valid UTF-8 string of maximum 256 bytes */
     private String getSummary() {
         if (mSummary != null) {
-            try {
-                return BluetoothMapUtils.truncateUtf8StringToString(mSummary, 256);
-            } catch (UnsupportedEncodingException e) {
-                // This cannot happen on an Android platform - UTF-8 is mandatory
-                Log.e(TAG, "Missing UTF-8 support on platform", e);
-            }
+            return BluetoothMapUtils.truncateUtf8StringToString(mSummary, 256);
         }
         return null;
     }
@@ -256,16 +247,16 @@ public class BluetoothMapConvoListingElement
 
     /* Encode the MapMessageListingElement into the StringBuilder reference.
      * Here we have taken the choice not to report empty attributes, to reduce the
-     * amount of data to be transfered over BT. */
+     * amount of data to be transferred over BT. */
     public void encode(XmlSerializer xmlConvoElement)
             throws IllegalArgumentException, IllegalStateException, IOException {
 
-        // contruct the XML tag for a single conversation in the convolisting
+        // construct the XML tag for a single conversation in the convolisting
         xmlConvoElement.startTag(null, XML_TAG_CONVERSATION);
         xmlConvoElement.attribute(null, XML_ATT_ID, mId.toHexString());
         if (mName != null) {
-            xmlConvoElement.attribute(null, XML_ATT_NAME,
-                    BluetoothMapUtils.stripInvalidChars(mName));
+            xmlConvoElement.attribute(
+                    null, XML_ATT_NAME, BluetoothMapUtils.stripInvalidChars(mName));
         }
         if (mLastActivity != -1) {
             xmlConvoElement.attribute(null, XML_ATT_LAST_ACTIVITY, getLastActivityString());
@@ -275,8 +266,8 @@ public class BluetoothMapConvoListingElement
             xmlConvoElement.attribute(null, XML_ATT_READ, getRead());
         }
         if (mVersionCounter != -1) {
-            xmlConvoElement.attribute(null, XML_ATT_VERSION_COUNTER,
-                    Long.toString(getVersionCounter()));
+            xmlConvoElement.attribute(
+                    null, XML_ATT_VERSION_COUNTER, Long.toString(getVersionCounter()));
         }
         if (mSummary != null) {
             xmlConvoElement.attribute(null, XML_ATT_SUMMARY, getSummary());
@@ -287,16 +278,11 @@ public class BluetoothMapConvoListingElement
             }
         }
         xmlConvoElement.endTag(null, XML_TAG_CONVERSATION);
-
     }
 
     /**
      * Consumes a conversation tag. It is expected that the parser is beyond the start-tag event,
      * with the name "conversation".
-     * @param parser
-     * @return
-     * @throws XmlPullParserException
-     * @throws IOException
      */
     public static BluetoothMapConvoListingElement createFromXml(XmlPullParser parser)
             throws XmlPullParserException, IOException, ParseException {
@@ -319,9 +305,7 @@ public class BluetoothMapConvoListingElement
             } else if (attributeName.equalsIgnoreCase(XML_ATT_SUMMARY)) {
                 newElement.setSummary(attributeValue);
             } else {
-                if (D) {
-                    Log.i(TAG, "Unknown XML attribute: " + parser.getAttributeName(i));
-                }
+                Log.w(TAG, "Unknown XML attribute: " + parser.getAttributeName(i));
             }
         }
 
@@ -337,9 +321,7 @@ public class BluetoothMapConvoListingElement
             if (name.equalsIgnoreCase(BluetoothMapConvoContactElement.XML_TAG_CONVOCONTACT)) {
                 newElement.addContact(BluetoothMapConvoContactElement.createFromXml(parser));
             } else {
-                if (D) {
-                    Log.i(TAG, "Unknown XML tag: " + name);
-                }
+                Log.w(TAG, "Unknown XML tag: " + name);
                 Utils.skipCurrentTag(parser);
                 continue;
             }
@@ -356,37 +338,20 @@ public class BluetoothMapConvoListingElement
         if (this == obj) {
             return true;
         }
-        if (obj == null) {
+        if (!(obj instanceof BluetoothMapConvoListingElement other)) {
             return false;
         }
-        if (getClass() != obj.getClass()) {
+
+        if (!Objects.equals(mContacts, other.mContacts)) {
             return false;
         }
-        BluetoothMapConvoListingElement other = (BluetoothMapConvoListingElement) obj;
-        if (mContacts == null) {
-            if (other.mContacts != null) {
-                return false;
-            }
-        } else if (!mContacts.equals(other.mContacts)) {
-            return false;
-        }
-        /* As we use equals only for test, we don't compare auto assigned values
-         * if (mId == null) {
-            if (other.mId != null) {
-                return false;
-            }
-        } else if (!mId.equals(other.mId)) {
-            return false;
-        } */
+
+        // Skip comparing auto assigned value `mId`. Equals is only used for test
 
         if (mLastActivity != other.mLastActivity) {
             return false;
         }
-        if (mName == null) {
-            if (other.mName != null) {
-                return false;
-            }
-        } else if (!mName.equals(other.mName)) {
+        if (!Objects.equals(mName, other.mName)) {
             return false;
         }
         if (mRead != other.mRead) {
@@ -395,13 +360,8 @@ public class BluetoothMapConvoListingElement
         return true;
     }
 
-/*    @Override
-    public boolean equals(Object o) {
-
-        return true;
-    };
-    */
-
+    @Override
+    public int hashCode() {
+        return Objects.hash(mContacts, mLastActivity, mName, mRead);
+    }
 }
-
-

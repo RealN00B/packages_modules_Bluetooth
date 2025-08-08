@@ -17,7 +17,6 @@
 config("avrcp_config") {
   include_dirs = [
     "//bt/system/",
-    "//bt/system/internal_include",
     "//bt/system/stack/include",
     "//bt/system/profile/avrcp",
     "//bt/system/packet",
@@ -25,17 +24,22 @@ config("avrcp_config") {
     "//bt/system/include/hardware/avrcp",
   ]
 
-  configs = ["//bt/system:target_defaults"]
+  configs = [
+    "//bt/system:target_defaults",
+    "//bt/system/log:log_defaults",
+  ]
 }
 
 static_library("profile_avrcp") {
   sources = [
+    "avrcp_sdp_records.cc",
+    "avrcp_sdp_service.cc",
     "connection_handler.cc",
     "device.cc",
   ]
 
   deps = [
-    "//bt/system/gd/rust/shim:libbluetooth_rust_interop",
+    "//bt/flags:bluetooth_flags_c_lib",
   ]
 
   configs += [

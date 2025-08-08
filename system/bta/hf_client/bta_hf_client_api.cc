@@ -27,16 +27,20 @@
 #include "bta/include/bta_hf_client_api.h"
 
 #include <android_bluetooth_sysprop.h>
+#include <bluetooth/log.h>
 
 #include <cstdint>
 
-#include "bt_trace.h"  // Legacy trace logging
 #include "bta/hf_client/bta_hf_client_int.h"
 #include "bta/sys/bta_sys.h"
+#include "bta_api_data_types.h"
+#include "hardware/bluetooth.h"
 #include "osi/include/allocator.h"
 #include "osi/include/compat.h"
 #include "stack/include/bt_hdr.h"
 #include "types/raw_address.h"
+
+using namespace bluetooth;
 
 /*****************************************************************************
  *  External Function Declarations
@@ -57,8 +61,7 @@
  * Returns          BTA_SUCCESS if OK, BTA_FAILURE otherwise.
  *
  ******************************************************************************/
-tBTA_STATUS BTA_HfClientEnable(tBTA_HF_CLIENT_CBACK* p_cback,
-                               tBTA_HF_CLIENT_FEAT features,
+tBTA_STATUS BTA_HfClientEnable(tBTA_HF_CLIENT_CBACK* p_cback, tBTA_HF_CLIENT_FEAT features,
                                const char* p_service_name) {
   return bta_hf_client_api_enable(p_cback, features, p_service_name);
 }
@@ -85,13 +88,13 @@ void BTA_HfClientDisable(void) { bta_hf_client_api_disable(); }
  *
  ******************************************************************************/
 bt_status_t BTA_HfClientOpen(const RawAddress& bd_addr, uint16_t* p_handle) {
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
   tBTA_HF_CLIENT_API_OPEN* p_buf =
-      (tBTA_HF_CLIENT_API_OPEN*)osi_malloc(sizeof(tBTA_HF_CLIENT_API_OPEN));
+          (tBTA_HF_CLIENT_API_OPEN*)osi_malloc(sizeof(tBTA_HF_CLIENT_API_OPEN));
 
   if (!bta_hf_client_allocate_handle(bd_addr, p_handle)) {
-    LOG_ERROR("%s: could not allocate handle", __func__);
-    return BT_STATUS_FAIL;
+    log::error("could not allocate handle");
+    return BT_STATUS_NOMEM;
   }
 
   p_buf->hdr.event = BTA_HF_CLIENT_API_OPEN_EVT;
@@ -172,10 +175,10 @@ void BTA_HfClientAudioClose(uint16_t handle) {
  * Returns          void
  *
  ******************************************************************************/
-void BTA_HfClientSendAT(uint16_t handle, tBTA_HF_CLIENT_AT_CMD_TYPE at,
-                        uint32_t val1, uint32_t val2, const char* str) {
+void BTA_HfClientSendAT(uint16_t handle, tBTA_HF_CLIENT_AT_CMD_TYPE at, uint32_t val1,
+                        uint32_t val2, const char* str) {
   tBTA_HF_CLIENT_DATA_VAL* p_buf =
-      (tBTA_HF_CLIENT_DATA_VAL*)osi_malloc(sizeof(tBTA_HF_CLIENT_DATA_VAL));
+          (tBTA_HF_CLIENT_DATA_VAL*)osi_malloc(sizeof(tBTA_HF_CLIENT_DATA_VAL));
 
   p_buf->hdr.event = BTA_HF_CLIENT_SEND_AT_CMD_EVT;
   p_buf->uint8_val = at;
@@ -183,7 +186,7 @@ void BTA_HfClientSendAT(uint16_t handle, tBTA_HF_CLIENT_AT_CMD_TYPE at,
   p_buf->uint32_val2 = val2;
 
   if (str) {
-    strlcpy(p_buf->str, str, BTA_HF_CLIENT_NUMBER_LEN + 1);
+    osi_strlcpy(p_buf->str, str, BTA_HF_CLIENT_NUMBER_LEN + 1);
     p_buf->str[BTA_HF_CLIENT_NUMBER_LEN] = '\0';
   } else {
     p_buf->str[0] = '\0';
@@ -217,10 +220,11 @@ void BTA_HfClientDumpStatistics(int fd) { bta_hf_client_dump_statistics(fd); }
  *
  ******************************************************************************/
 int get_default_hf_client_features() {
-#define DEFAULT_BTIF_HF_CLIENT_FEATURES                                        \
-  (BTA_HF_CLIENT_FEAT_ECNR | BTA_HF_CLIENT_FEAT_3WAY |                         \
-   BTA_HF_CLIENT_FEAT_CLI | BTA_HF_CLIENT_FEAT_VREC | BTA_HF_CLIENT_FEAT_VOL | \
-   BTA_HF_CLIENT_FEAT_ECS | BTA_HF_CLIENT_FEAT_ECC | BTA_HF_CLIENT_FEAT_CODEC)
+#define DEFAULT_BTIF_HF_CLIENT_FEATURES                                         \
+  (BTA_HF_CLIENT_FEAT_ECNR | BTA_HF_CLIENT_FEAT_3WAY | BTA_HF_CLIENT_FEAT_CLI | \
+   BTA_HF_CLIENT_FEAT_VREC | BTA_HF_CLIENT_FEAT_VOL | BTA_HF_CLIENT_FEAT_ECS |  \
+   BTA_HF_CLIENT_FEAT_ECC | BTA_HF_CLIENT_FEAT_CODEC)
 
-  return GET_SYSPROP(Hfp, hf_client_features, DEFAULT_BTIF_HF_CLIENT_FEATURES);
+  return android::sysprop::bluetooth::Hfp::hf_client_features().value_or(
+          DEFAULT_BTIF_HF_CLIENT_FEATURES);
 }

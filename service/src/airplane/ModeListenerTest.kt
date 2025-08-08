@@ -22,8 +22,11 @@ import android.content.Context
 import android.content.res.Resources
 import android.os.Looper
 import android.os.UserHandle
+import android.platform.test.flag.junit.FlagsParameterization
+import android.platform.test.flag.junit.SetFlagsRule
 import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
+import com.android.bluetooth.flags.Flags
 import com.android.server.bluetooth.BluetoothAdapterState
 import com.android.server.bluetooth.Log
 import com.android.server.bluetooth.airplane.APM_BT_ENABLED_NOTIFICATION
@@ -35,6 +38,7 @@ import com.android.server.bluetooth.airplane.BLUETOOTH_APM_STATE
 import com.android.server.bluetooth.airplane.WIFI_APM_STATE
 import com.android.server.bluetooth.airplane.initialize
 import com.android.server.bluetooth.airplane.isOn
+import com.android.server.bluetooth.airplane.isOnOverrode
 import com.android.server.bluetooth.airplane.notifyUserToggledBluetooth
 import com.android.server.bluetooth.test.disableMode
 import com.android.server.bluetooth.test.disableSensitive
@@ -49,18 +53,63 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
 import org.junit.runner.RunWith
-import org.mockito.Mockito.times
-import org.robolectric.RobolectricTestRunner
+import org.robolectric.ParameterizedRobolectricTestRunner
+import org.robolectric.ParameterizedRobolectricTestRunner.Parameters
 import org.robolectric.shadows.ShadowToast
 
-@RunWith(RobolectricTestRunner::class)
+@RunWith(ParameterizedRobolectricTestRunner::class)
 @kotlin.time.ExperimentalTime
-class ModeListenerTest {
+class ModeListenerTest(flags: FlagsParameterization) {
+    companion object {
+        @JvmStatic
+        @Parameters(name = "{0}")
+        fun getParams() =
+            FlagsParameterization.allCombinationsOf(Flags.FLAG_GET_STATE_FROM_SYSTEM_SERVER)
+
+        internal fun setupAirplaneModeToOn(
+            resolver: ContentResolver,
+            looper: Looper,
+            user: () -> Context,
+            enableEnhancedMode: Boolean
+        ) {
+            enableSensitive(resolver, looper, Settings.Global.AIRPLANE_MODE_RADIOS)
+            enableMode(resolver, looper, Settings.Global.AIRPLANE_MODE_ON)
+            val mode: (m: Boolean) -> Unit = { _: Boolean -> }
+            val notif: (m: String) -> Unit = { _: String -> }
+            val media: () -> Boolean = { -> false }
+            if (enableEnhancedMode) {
+                Settings.Secure.putInt(resolver, APM_USER_TOGGLED_BLUETOOTH, 1)
+            }
+
+            initialize(
+                looper,
+                resolver,
+                BluetoothAdapterState(),
+                mode,
+                notif,
+                media,
+                user,
+                TimeSource.Monotonic,
+            )
+        }
+
+        internal fun setupAirplaneModeToOff(resolver: ContentResolver, looper: Looper) {
+            disableSensitive(resolver, looper, Settings.Global.AIRPLANE_MODE_RADIOS)
+            disableMode(resolver, looper, Settings.Global.AIRPLANE_MODE_ON)
+        }
+    }
+
+    @get:Rule val testName = TestName()
+    @get:Rule val setFlagsRule = SetFlagsRule()
+
+    init {
+        setFlagsRule.setFlagsParameterization(flags)
+    }
+
     private val looper: Looper = Looper.getMainLooper()
     private val state = BluetoothAdapterState()
     private val mContext = ApplicationProvider.getApplicationContext<Context>()
     private val resolver: ContentResolver = mContext.contentResolver
-    @JvmField @Rule val testName = TestName()
 
     private val userContext =
         mContext.createContextAsUser(UserHandle.of(ActivityManager.getCurrentUser()), 0)
@@ -127,6 +176,7 @@ class ModeListenerTest {
         initializeAirplane()
 
         assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
     }
 
@@ -138,6 +188,7 @@ class ModeListenerTest {
         initializeAirplane()
 
         assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
     }
 
@@ -151,6 +202,7 @@ class ModeListenerTest {
         enableMode()
 
         assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
     }
 
@@ -159,22 +211,24 @@ class ModeListenerTest {
         initializeAirplane()
 
         assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
     }
 
     @Test
-    fun initialize_whenSensitive_isOn() {
+    fun initialize_whenSensitive_isOnOverrode() {
         enableSensitive()
         enableMode()
 
         initializeAirplane()
 
         assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).isEmpty()
     }
 
     @Test
-    fun initialize_whenApmToggled_isOn() {
+    fun initialize_whenApmToggled_isOnOverrode() {
         enableSensitive()
         enableMode()
         Settings.Secure.putInt(userContext.contentResolver, APM_USER_TOGGLED_BLUETOOTH, 1)
@@ -182,12 +236,13 @@ class ModeListenerTest {
 
         initializeAirplane()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
     }
 
     @Test
-    fun toggleSensitive_whenEnabled_isOnOffOn() {
+    fun toggleSensitive_whenEnabled_isOnOverrode() {
         enableSensitive()
         enableMode()
 
@@ -196,7 +251,7 @@ class ModeListenerTest {
         disableSensitive()
         enableSensitive()
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).containsExactly(false, true)
     }
 
@@ -207,7 +262,7 @@ class ModeListenerTest {
         enableMode()
         disableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).containsExactly(true, false)
     }
 
@@ -217,8 +272,20 @@ class ModeListenerTest {
 
         disableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
+    }
+
+    @Test
+    fun disable_whenBluetoothOn_discardUpdate() {
+        initializeAirplane()
+        enableMode()
+
+        state.set(BluetoothAdapter.STATE_ON)
+        disableMode()
+
+        assertThat(isOnOverrode).isFalse()
+        assertThat(mode).containsExactly(true)
     }
 
     @Test
@@ -230,7 +297,7 @@ class ModeListenerTest {
 
         enableMode()
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).isEmpty()
     }
 
@@ -241,7 +308,7 @@ class ModeListenerTest {
         disableSensitive()
         enableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         // As opposed to the bare RadioModeListener, similar consecutive event are discarded
         assertThat(mode).isEmpty()
     }
@@ -254,7 +321,7 @@ class ModeListenerTest {
 
         enableMode()
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).containsExactly(true)
         assertThat(ShadowToast.shownToastCount()).isEqualTo(0)
     }
@@ -268,7 +335,7 @@ class ModeListenerTest {
 
         enableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
 
         assertThat(ShadowToast.shownToastCount()).isEqualTo(1)
@@ -290,6 +357,7 @@ class ModeListenerTest {
 
         enableMode()
 
+        assertThat(isOnOverrode).isTrue()
         assertThat(isOn).isTrue()
         assertThat(mode).containsExactly(true)
     }
@@ -304,7 +372,8 @@ class ModeListenerTest {
 
         enableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
+        assertThat(isOn).isTrue()
         assertThat(mode).isEmpty()
     }
 
@@ -317,6 +386,7 @@ class ModeListenerTest {
 
         enableMode()
 
+        assertThat(isOnOverrode).isTrue()
         assertThat(isOn).isTrue()
         assertThat(mode).containsExactly(true)
     }
@@ -331,7 +401,8 @@ class ModeListenerTest {
 
         enableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
+        assertThat(isOn).isTrue()
         assertThat(mode).isEmpty()
         assertThat(notification).containsExactly(APM_BT_NOTIFICATION)
     }
@@ -349,7 +420,7 @@ class ModeListenerTest {
 
         enableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
         assertThat(notification).containsExactly(APM_WIFI_BT_NOTIFICATION)
     }
@@ -366,7 +437,7 @@ class ModeListenerTest {
 
         enableMode()
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
         assertThat(notification).containsExactly(APM_BT_NOTIFICATION)
     }
@@ -383,7 +454,7 @@ class ModeListenerTest {
             disableMode()
         }
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
         assertThat(notification).isEmpty()
 
@@ -397,7 +468,7 @@ class ModeListenerTest {
 
         notifyUserToggledBluetooth(resolver, userContext, false)
 
-        assertThat(isOn).isFalse()
+        assertThat(isOnOverrode).isFalse()
         assertThat(mode).isEmpty()
         assertThat(notification).isEmpty()
         assertThat(ShadowToast.shownToastCount()).isEqualTo(0)
@@ -411,7 +482,7 @@ class ModeListenerTest {
         enableMode()
         notifyUserToggledBluetooth(resolver, userContext, true)
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).containsExactly(true)
         assertThat(notification).isEmpty()
         assertThat(ShadowToast.shownToastCount()).isEqualTo(0)
@@ -430,7 +501,7 @@ class ModeListenerTest {
         enableMode()
         notifyUserToggledBluetooth(resolver, userContext, false)
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).containsExactly(true)
         assertThat(notification).isEmpty()
         assertThat(ShadowToast.shownToastCount()).isEqualTo(0)
@@ -449,7 +520,7 @@ class ModeListenerTest {
         enableMode()
         notifyUserToggledBluetooth(resolver, userContext, true)
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).containsExactly(true)
         assertThat(notification).containsExactly(APM_BT_ENABLED_NOTIFICATION)
         assertThat(ShadowToast.shownToastCount()).isEqualTo(0)
@@ -469,7 +540,7 @@ class ModeListenerTest {
         notifyUserToggledBluetooth(resolver, userContext, true)
         notifyUserToggledBluetooth(resolver, userContext, false)
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).containsExactly(true)
         assertThat(notification).containsExactly(APM_BT_ENABLED_NOTIFICATION)
         assertThat(ShadowToast.shownToastCount()).isEqualTo(0)
@@ -500,7 +571,7 @@ class ModeListenerTest {
         timesource += 2.minutes
         notifyUserToggledBluetooth(resolver, userContext, true)
 
-        assertThat(isOn).isTrue()
+        assertThat(isOnOverrode).isTrue()
         assertThat(mode).containsExactly(true)
         assertThat(notification).isEmpty()
         assertThat(ShadowToast.shownToastCount()).isEqualTo(0)

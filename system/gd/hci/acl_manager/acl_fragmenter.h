@@ -16,9 +16,6 @@
 
 #pragma once
 
-#include <cstdint>
-#include <forward_list>
-#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -30,13 +27,13 @@ namespace hci {
 namespace acl_manager {
 
 class AclFragmenter {
- public:
+public:
   AclFragmenter(size_t mtu, std::unique_ptr<packet::BasePacketBuilder> input);
   virtual ~AclFragmenter() = default;
 
   std::vector<std::unique_ptr<packet::RawBuilder>> GetFragments();
 
- private:
+private:
   size_t mtu_;
   std::unique_ptr<packet::BasePacketBuilder> packet_;
 };

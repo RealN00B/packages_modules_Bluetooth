@@ -74,21 +74,6 @@ void bta_ar_dereg_avdt();
 
 /*******************************************************************************
  *
- * Function         bta_ar_avdt_conn
- *
- * Description      This function is called to let ar know that some AVDTP
- *                  profile is connected for this sys_id.
- *                  If the other sys modules started a timer for PENDING_EVT,
- *                  the timer can be stopped now.
- *
- * Returns          void
- *
- ******************************************************************************/
-void bta_ar_avdt_conn(tBTA_SYS_ID sys_id, const RawAddress& bd_addr,
-                      uint8_t scb_index);
-
-/*******************************************************************************
- *
  * Function         bta_ar_reg_avct
  *
  * Description      This function is called to register to AVCTP.
@@ -118,9 +103,8 @@ void bta_ar_dereg_avct();
  * Returns          void
  *
  *****************************************************************************/
-void bta_ar_reg_avrc(uint16_t service_uuid, const char* p_service_name,
-                     const char* p_provider_name, uint16_t categories,
-                     bool browse_supported, uint16_t profile_version);
+void bta_ar_reg_avrc(uint16_t service_uuid, const char* p_service_name, const char* p_provider_name,
+                     uint16_t categories, bool browse_supported, uint16_t profile_version);
 
 /******************************************************************************
  *
@@ -145,9 +129,9 @@ void bta_ar_dereg_avrc(uint16_t service_uuid);
  * Returns          void
  *
  *****************************************************************************/
-extern void bta_ar_reg_avrc_for_src_sink_coexist(
-    uint16_t service_uuid, const char* service_name, const char* provider_name,
-    uint16_t categories, tBTA_SYS_ID sys_id, bool browse_supported,
-    uint16_t profile_version);
+extern void bta_ar_reg_avrc_for_src_sink_coexist(uint16_t service_uuid, const char* service_name,
+                                                 const char* provider_name, uint16_t categories,
+                                                 tBTA_SYS_ID sys_id, bool browse_supported,
+                                                 uint16_t profile_version);
 
 #endif /* BTA_AR_API_H */

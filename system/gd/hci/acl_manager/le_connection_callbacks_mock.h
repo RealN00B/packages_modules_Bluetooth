@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "hci/acl_manager/le_acl_connection.h"
+#include "hci/acl_manager/le_connection_callbacks.h"
 #include "hci/address_with_type.h"
 #include "hci/hci_packets.h"
 
@@ -29,14 +30,12 @@ namespace hci {
 namespace acl_manager {
 
 class MockLeConnectionCallbacks : public LeConnectionCallbacks {
- public:
-  MOCK_METHOD(
-      void,
-      OnLeConnectSuccess,
-      (AddressWithType address_with_type, std::unique_ptr<LeAclConnection> connection),
-      (override));
-  MOCK_METHOD(
-      void, OnLeConnectFail, (AddressWithType address_with_type, ErrorCode reason), (override));
+public:
+  MOCK_METHOD(void, OnLeConnectSuccess,
+              (AddressWithType address_with_type, std::unique_ptr<LeAclConnection> connection),
+              (override));
+  MOCK_METHOD(void, OnLeConnectFail, (AddressWithType address_with_type, ErrorCode reason),
+              (override));
 };
 
 }  // namespace acl_manager

@@ -17,16 +17,13 @@
 #define LOG_TAG "bt_headless"
 
 #include "test/headless/read/read.h"
-#include "base/logging.h"     // LOG() stdout and android log
-#include "osi/include/log.h"  // android log only
+
 #include "test/headless/get_options.h"
 #include "test/headless/headless.h"
 #include "test/headless/read/name.h"
 
 using namespace bluetooth::test::headless;
 
-Read::Read(const bluetooth::test::headless::GetOpt& options)
-    : HeadlessTest<int>(options) {
-  test_nodes_.emplace(
-      "name", std::make_unique<bluetooth::test::headless::Name>(options));
+Read::Read(const bluetooth::test::headless::GetOpt& options) : HeadlessTest<int>(options) {
+  test_nodes_.emplace("name", std::make_unique<bluetooth::test::headless::Name>(options));
 }

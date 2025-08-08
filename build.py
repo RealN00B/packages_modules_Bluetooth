@@ -69,6 +69,7 @@ USE_DEFAULTS = {
 
 VALID_TARGETS = [
     'all',  # All targets except test and clean
+    'bloat',  # Check bloat of crates
     'clean',  # Clean up output directory
     'docs',  # Build Rust docs
     'hosttools',  # Build the host tools (i.e. packetgen)
@@ -76,6 +77,7 @@ VALID_TARGETS = [
     'prepare',  # Prepare the output directory (gn gen + rust setup)
     'rust',  # Build only the rust components + copy artifacts to output dir
     'test',  # Run the unit tests
+    'clippy',  # Run cargo clippy
     'utils',  # Build Floss utils
 ]
 
@@ -119,6 +121,7 @@ REQUIRED_APT_PACKAGES = [
     'libevent-dev',
     'libevent-dev',
     'libflatbuffers-dev',
+    'libfmt-dev',
     'libgl1-mesa-dev',
     'libglib2.0-dev',
     'libgtest-dev',
@@ -127,6 +130,7 @@ REQUIRED_APT_PACKAGES = [
     'liblz4-tool',
     'libncurses5',
     'libnss3-dev',
+    'libfmt-dev',
     'libprotobuf-dev',
     'libre2-9',
     'libre2-dev',
@@ -145,7 +149,7 @@ REQUIRED_APT_PACKAGES = [
 ]
 
 # List of cargo packages required for linux build
-REQUIRED_CARGO_PACKAGES = ['cxxbridge-cmd', 'pdl-compiler']
+REQUIRED_CARGO_PACKAGES = ['cxxbridge-cmd', 'pdl-compiler', 'grpcio-compiler', 'cargo-bloat']
 
 APT_PKG_LIST = ['apt', '-qq', 'list']
 CARGO_PKG_LIST = ['cargo', 'install', '--list']
@@ -246,6 +250,8 @@ class HostBuild():
             'link-arg=-Wl,--allow-multiple-definition',
             # exclude uninteresting warnings
             '-A improper_ctypes_definitions -A improper_ctypes -A unknown_lints',
+            '-Cstrip=debuginfo',
+            '-Copt-level=z',
         ]
 
         return ' '.join(rust_flags)
@@ -268,6 +274,10 @@ class HostBuild():
         self.custom_env['CXX_ROOT_PATH'] = os.path.join(self.platform_dir, 'bt')
         self.custom_env['CROS_SYSTEM_API_ROOT'] = os.path.join(self.platform_dir, 'system_api')
         self.custom_env['CXX_OUTDIR'] = self._gn_default_output()
+
+        # On ChromeOS, this is /usr/bin/grpc_rust_plugin
+        # In the container, this is /root/.cargo/bin/grpc_rust_plugin
+        self.custom_env['GRPC_RUST_PLUGIN_PATH'] = shutil.which('grpc_rust_plugin')
         self.env.update(self.custom_env)
 
     def print_env(self):
@@ -287,6 +297,10 @@ class HostBuild():
             cwd = self.platform_dir
         if not env:
             env = self.env
+
+        for k, v in env.items():
+            if env[k] is None:
+                env[k] = ""
 
         log_file = os.path.join(self.output_dir, '{}.log'.format(target))
         with open(log_file, 'wb') as lf:
@@ -366,7 +380,7 @@ class HostBuild():
             'enable_exceptions': os.environ.get('CXXEXCEPTIONS', 0) == '1',
             'external_cflags': [],
             'external_cxxflags': ["-DNDEBUG"],
-            'enable_werror': False,
+            'enable_werror': True,
         }
 
         if clang:
@@ -488,6 +502,12 @@ class HostBuild():
                              cwd=os.path.join(self.output_dir),
                              env=self.env)
 
+    def _target_clippy(self):
+        """ Runs cargo clippy, a collection of lints to catch common mistakes.
+        """
+        cmd = ['cargo', 'clippy']
+        self.run_command('rust', cmd, cwd=os.path.join(self.platform_dir, 'bt'), env=self.env)
+
     def _target_utils(self):
         """ Builds the utility applications.
         """
@@ -553,6 +573,17 @@ class HostBuild():
 
         print('Tarball created at {}'.format(tar_location))
 
+    def _target_bloat(self):
+        """Run cargo bloat on workspace.
+        """
+        crate_paths = [
+            os.path.join(self.platform_dir, 'bt', 'system', 'gd', 'rust', 'linux', 'mgmt'),
+            os.path.join(self.platform_dir, 'bt', 'system', 'gd', 'rust', 'linux', 'service'),
+            os.path.join(self.platform_dir, 'bt', 'system', 'gd', 'rust', 'linux', 'client')
+        ]
+        for crate in crate_paths:
+            self.run_command('bloat', ['cargo', 'bloat', '--release', '--crates', '--wide'], cwd=crate, env=self.env)
+
     def _target_clean(self):
         """ Delete the output directory entirely.
         """
@@ -599,29 +630,39 @@ class HostBuild():
             self._target_main()
         elif self.target == 'test':
             self._target_test()
+        elif self.target == 'clippy':
+            self._target_clippy()
         elif self.target == 'clean':
             self._target_clean()
         elif self.target == 'install':
             self._target_install()
         elif self.target == 'utils':
             self._target_utils()
+        elif self.target == 'bloat':
+            self._target_bloat()
         elif self.target == 'all':
             self._target_all()
 
 
+# Default to 10 min timeouts on all git operations.
+GIT_TIMEOUT_SEC = 600
+
+
 class Bootstrap():
 
-    def __init__(self, base_dir, bt_dir, partial_staging):
+    def __init__(self, base_dir, bt_dir, partial_staging, clone_timeout):
         """ Construct bootstrapper.
 
         Args:
             base_dir: Where to stage everything.
             bt_dir: Where bluetooth source is kept (will be symlinked)
             partial_staging: Whether to do a partial clone for staging.
+            clone_timeout: Timeout for clone operations.
         """
         self.base_dir = os.path.abspath(base_dir)
         self.bt_dir = os.path.abspath(bt_dir)
         self.partial_staging = partial_staging
+        self.clone_timeout = clone_timeout
 
         # Create base directory if it doesn't already exist
         os.makedirs(self.base_dir, exist_ok=True)
@@ -636,6 +677,21 @@ class Bootstrap():
 
         self.dir_setup_complete = os.path.join(self.base_dir, '.setup-complete')
 
+    def _run_with_timeout(self, cmd, cwd, timeout=None):
+        """Runs a command using subprocess.check_output. """
+        print('Running command: {} [at cwd={}]'.format(' '.join(cmd), cwd))
+        with subprocess.Popen(cmd, cwd=cwd) as proc:
+            try:
+                outs, errs = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                outs, errs = proc.communicate()
+                print('Timeout on {}'.format(' '.join(cmd)), file=sys.stderr)
+                raise
+
+            if proc.returncode != 0:
+                raise Exception('Cmd {} had return code {}'.format(' '.join(cmd), proc.returncode))
+
     def _update_platform2(self):
         """Updates repositories used for build."""
         for project in BOOTSTRAP_GIT_REPOS.keys():
@@ -643,7 +699,7 @@ class Bootstrap():
             (repo, commit) = BOOTSTRAP_GIT_REPOS[project]
 
             # Update to required commit when necessary or pull the latest code.
-            if commit:
+            if commit is not None:
                 head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd).strip()
                 if head != commit:
                     subprocess.check_call(['git', 'fetch'], cwd=cwd)
@@ -676,9 +732,29 @@ class Bootstrap():
             # Check out all repos in git directory
             for project in BOOTSTRAP_GIT_REPOS.keys():
                 (repo, commit) = BOOTSTRAP_GIT_REPOS[project]
-                subprocess.check_call(['git', 'clone', repo, project] + clone_options, cwd=self.git_dir)
+
+                # Try repo clone several times.
+                # Currently, we set timeout on this operation after
+                # |self.clone_timeout|. If it fails, try to recover.
+                tries = 2
+                for x in range(tries):
+                    try:
+                        self._run_with_timeout(['git', 'clone', repo, project] + clone_options,
+                                               cwd=self.git_dir,
+                                               timeout=self.clone_timeout)
+                    except subprocess.TimeoutExpired:
+                        shutil.rmtree(os.path.join(self.git_dir, project))
+                        if x == tries - 1:
+                            raise
+                    # All other exceptions should raise
+                    except:
+                        raise
+                    # No exceptions/problems should not retry.
+                    else:
+                        break
+
                 # Pin to commit.
-                if commit:
+                if commit is not None:
                     subprocess.check_call(['git', 'checkout', commit], cwd=os.path.join(self.git_dir, project))
 
         # Symlink things
@@ -885,6 +961,10 @@ if __name__ == '__main__':
         help='Bootstrap git repositories with partial clones. Use to speed up initial git clone for automated builds.',
         default=False,
         action='store_true')
+    parser.add_argument('--clone-timeout',
+                        help='Timeout for repository cloning during bootstrap.',
+                        default=GIT_TIMEOUT_SEC,
+                        type=int)
     args = parser.parse_args()
 
     # Make sure we get absolute path + expanded path for bootstrap directory
@@ -896,7 +976,7 @@ if __name__ == '__main__':
         raise Exception("Only x86_64 machines are currently supported by this build script.")
 
     if args.run_bootstrap:
-        bootstrap = Bootstrap(args.bootstrap_dir, os.path.dirname(__file__), args.partial_staging)
+        bootstrap = Bootstrap(args.bootstrap_dir, os.path.dirname(__file__), args.partial_staging, args.clone_timeout)
         bootstrap.bootstrap()
     elif args.print_env:
         build = HostBuild(args)

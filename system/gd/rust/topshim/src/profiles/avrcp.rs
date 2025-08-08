@@ -21,7 +21,8 @@ pub struct PlayerMetadata {
 #[cxx::bridge(namespace = bluetooth::topshim::rust)]
 pub mod ffi {
     unsafe extern "C++" {
-        include!("gd/rust/topshim/common/type_alias.h");
+        include!("types/raw_address.h");
+        #[namespace = ""]
         type RawAddress = crate::btif::RawAddress;
     }
 
@@ -37,7 +38,7 @@ pub mod ffi {
         fn cleanup(self: Pin<&mut AvrcpIntf>);
         fn connect(self: Pin<&mut AvrcpIntf>, bt_addr: RawAddress) -> u32;
         fn disconnect(self: Pin<&mut AvrcpIntf>, bt_addr: RawAddress) -> u32;
-        fn set_volume(self: Pin<&mut AvrcpIntf>, volume: i8);
+        fn set_volume(self: Pin<&mut AvrcpIntf>, bt_addr: RawAddress, volume: i8);
         fn set_playback_status(self: Pin<&mut AvrcpIntf>, status: &String);
         fn set_position(self: Pin<&mut AvrcpIntf>, position_us: i64);
         fn set_metadata(
@@ -172,8 +173,8 @@ impl Avrcp {
     }
 
     #[profile_enabled_or]
-    pub fn set_volume(&mut self, volume: i8) {
-        self.internal.pin_mut().set_volume(volume);
+    pub fn set_volume(&mut self, addr: RawAddress, volume: i8) {
+        self.internal.pin_mut().set_volume(addr, volume);
     }
 
     #[profile_enabled_or(false)]

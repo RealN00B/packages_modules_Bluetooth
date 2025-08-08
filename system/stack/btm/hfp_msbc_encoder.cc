@@ -18,10 +18,10 @@
 
 #include "hfp_msbc_encoder.h"
 
+#include <cstdint>
 #include <cstring>
 
 #include "embdrv/sbc/encoder/include/sbc_encoder.h"
-#include "osi/include/log.h"
 
 typedef struct {
   SBC_ENC_PARAMS sbc_encoder_params;

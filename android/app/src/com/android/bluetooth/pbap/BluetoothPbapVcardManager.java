@@ -1,38 +1,23 @@
 /*
- * Copyright (c) 2008-2009, Motorola, Inc.
- * Copyright (C) 2009-2012, Broadcom Corporation
+ * Copyright (C) 2024 The Android Open Source Project
  *
- * All rights reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * - Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * - Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * - Neither the name of the Motorola, Inc. nor the names of its contributors
- * may be used to endorse or promote products derived from this software
- * without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package com.android.bluetooth.pbap;
 
+import android.bluetooth.BluetoothProfile;
+import android.bluetooth.BluetoothProtoEnums;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
@@ -52,7 +37,9 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.bluetooth.BluetoothMethodProxy;
+import com.android.bluetooth.BluetoothStatsLog;
 import com.android.bluetooth.R;
+import com.android.bluetooth.content_profiles.ContentProfileErrorReportUtils;
 import com.android.bluetooth.util.DevicePolicyUtils;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.obex.Operation;
@@ -65,34 +52,33 @@ import com.android.vcard.VCardPhoneNumberTranslationCallback;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.regex.Pattern;
 
+// Next tag value for ContentProfileErrorReportUtils.report(): 22
 public class BluetoothPbapVcardManager {
-    private static final String TAG = "BluetoothPbapVcardManager";
-
-    private static final boolean V = BluetoothPbapService.VERBOSE;
+    private static final String TAG = BluetoothPbapVcardManager.class.getSimpleName();
 
     private ContentResolver mResolver;
 
     private Context mContext;
 
-    private static final int PHONE_NUMBER_COLUMN_INDEX = 3;
-
     static final String SORT_ORDER_PHONE_NUMBER = CommonDataKinds.Phone.NUMBER + " ASC";
 
-    static final String[] PHONES_CONTACTS_PROJECTION = new String[]{
-            Phone.CONTACT_ID, // 0
-            Phone.DISPLAY_NAME, // 1
-    };
+    static final String[] PHONES_CONTACTS_PROJECTION =
+            new String[] {
+                Phone.CONTACT_ID, // 0
+                Phone.DISPLAY_NAME, // 1
+            };
 
-    static final String[] PHONE_LOOKUP_PROJECTION = new String[]{
-            PhoneLookup._ID, PhoneLookup.DISPLAY_NAME
-    };
+    static final String[] PHONE_LOOKUP_PROJECTION =
+            new String[] {PhoneLookup._ID, PhoneLookup.DISPLAY_NAME};
 
     static final int CONTACTS_ID_COLUMN_INDEX = 0;
 
     static final int CONTACTS_NAME_COLUMN_INDEX = 1;
 
-    static long sLastFetchedTimeStamp;
+    private long mLastFetchedTimeStamp;
 
     // call histories use dynamic handles, and handles should order by date; the
     // most recently one should be the first handle. In table "calls", _id and
@@ -102,19 +88,20 @@ public class BluetoothPbapVcardManager {
 
     private static final int NEED_SEND_BODY = -1;
 
+    private static final String SEPARATOR = System.getProperty("line.separator");
+    private static final Pattern SEPARATOR_PATTERN = Pattern.compile(SEPARATOR);
+    private static final Pattern PROPERTY_PATTERN = Pattern.compile("[;:]");
+    private static final Pattern ATTRIBUTE_PATTERN = Pattern.compile(":");
+
     public BluetoothPbapVcardManager(final Context context) {
         mContext = context;
         mResolver = mContext.getContentResolver();
-        sLastFetchedTimeStamp = System.currentTimeMillis();
+        mLastFetchedTimeStamp = System.currentTimeMillis();
     }
 
-    /**
-     * Create an owner vcard from the configured profile
-     * @param vcardType21
-     * @return
-     */
-    private String getOwnerPhoneNumberVcardFromProfile(final boolean vcardType21,
-            final byte[] filter) {
+    /** Create an owner vcard from the configured profile */
+    private String getOwnerPhoneNumberVcardFromProfile(
+            final boolean vcardType21, final byte[] filter) {
         // Currently only support Generic Vcard 2.1 and 3.0
         int vcardType;
         if (vcardType21) {
@@ -131,24 +118,25 @@ public class BluetoothPbapVcardManager {
     }
 
     public final String getOwnerPhoneNumberVcard(final boolean vcardType21, final byte[] filter) {
-        //Owner vCard enhancement: Use "ME" profile if configured
+        // Owner vCard enhancement: Use "ME" profile if configured
         if (BluetoothPbapConfig.useProfileForOwnerVcard()) {
             String vcard = getOwnerPhoneNumberVcardFromProfile(vcardType21, filter);
             if (vcard != null && vcard.length() != 0) {
                 return vcard;
             }
         }
-        //End enhancement
+        // End enhancement
 
         String name = BluetoothPbapService.getLocalPhoneName();
         String number = BluetoothPbapService.getLocalPhoneNum();
-        String vcard = BluetoothPbapCallLogComposer.composeVCardForPhoneOwnNumber(
-                Phone.TYPE_MOBILE, name, number, vcardType21);
+        String vcard =
+                BluetoothPbapCallLogComposer.composeVCardForPhoneOwnNumber(
+                        Phone.TYPE_MOBILE, name, number, vcardType21);
         return vcard;
     }
 
-    public final int getPhonebookSize(final int type,
-            BluetoothPbapSimVcardManager vCardSimManager) {
+    public final int getPhonebookSize(
+            final int type, BluetoothPbapSimVcardManager vCardSimManager) {
         int size;
         switch (type) {
             case BluetoothPbapObexServer.ContentType.PHONEBOOK:
@@ -162,16 +150,14 @@ public class BluetoothPbapVcardManager {
                 size = getCallHistorySize(type);
                 break;
         }
-        if (V) {
-            Log.v(TAG, "getPhonebookSize size = " + size + " type = " + type);
-        }
+        Log.v(TAG, "getPhonebookSize size = " + size + " type = " + type);
         return size;
     }
 
     /**
      * Returns the number of contacts (i.e., vcf) in a phonebook object.
+     *
      * @param type specifies which phonebook object, e.g., pb, fav
-     * @return
      */
     private int getContactsSize(final int type) {
         final Uri myUri = DevicePolicyUtils.getEnterprisePhoneUri(mContext);
@@ -181,9 +167,15 @@ public class BluetoothPbapVcardManager {
             selectionClause = Phone.STARRED + " = 1";
         }
         try {
-            contactCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, new String[]{Phone.CONTACT_ID}, selectionClause,
-                    null, Phone.CONTACT_ID);
+            contactCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    new String[] {Phone.CONTACT_ID},
+                                    selectionClause,
+                                    null,
+                                    Phone.CONTACT_ID);
             if (contactCursor == null) {
                 return 0;
             }
@@ -193,6 +185,11 @@ public class BluetoothPbapVcardManager {
             }
             return contactsSize;
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    0);
             Log.e(TAG, "CursorWindowAllocationException while getting Contacts size");
         } finally {
             if (contactCursor != null) {
@@ -208,12 +205,24 @@ public class BluetoothPbapVcardManager {
         int size = 0;
         Cursor callCursor = null;
         try {
-            callCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, null, selection, null, CallLog.Calls.DEFAULT_SORT_ORDER);
+            callCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    null,
+                                    selection,
+                                    null,
+                                    CallLog.Calls.DEFAULT_SORT_ORDER);
             if (callCursor != null) {
                 size = callCursor.getCount();
             }
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    1);
             Log.e(TAG, "CursorWindowAllocationException while getting CallHistory size");
         } finally {
             if (callCursor != null) {
@@ -224,26 +233,28 @@ public class BluetoothPbapVcardManager {
         return size;
     }
 
-    @VisibleForTesting
-    static final int CALLS_NUMBER_COLUMN_INDEX = 0;
-    @VisibleForTesting
-    static final int CALLS_NAME_COLUMN_INDEX = 1;
-    @VisibleForTesting
-    static final int CALLS_NUMBER_PRESENTATION_COLUMN_INDEX = 2;
+    @VisibleForTesting static final int CALLS_NUMBER_COLUMN_INDEX = 0;
+    @VisibleForTesting static final int CALLS_NAME_COLUMN_INDEX = 1;
+    @VisibleForTesting static final int CALLS_NUMBER_PRESENTATION_COLUMN_INDEX = 2;
 
-    public final ArrayList<String> loadCallHistoryList(final int type) {
+    public final List<String> loadCallHistoryList(final int type) {
         final Uri myUri = CallLog.Calls.CONTENT_URI;
         String selection = BluetoothPbapObexServer.createSelectionPara(type);
-        String[] projection = new String[]{
-                Calls.NUMBER, Calls.CACHED_NAME, Calls.NUMBER_PRESENTATION
-        };
-
+        String[] projection =
+                new String[] {Calls.NUMBER, Calls.CACHED_NAME, Calls.NUMBER_PRESENTATION};
 
         Cursor callCursor = null;
         ArrayList<String> list = new ArrayList<String>();
         try {
-            callCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, projection, selection, null, CALLLOG_SORT_ORDER);
+            callCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    projection,
+                                    selection,
+                                    null,
+                                    CALLLOG_SORT_ORDER);
             if (callCursor != null) {
                 for (callCursor.moveToFirst(); !callCursor.isAfterLast(); callCursor.moveToNext()) {
                     String name = callCursor.getString(CALLS_NAME_COLUMN_INDEX);
@@ -261,6 +272,11 @@ public class BluetoothPbapVcardManager {
                 }
             }
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    2);
             Log.e(TAG, "CursorWindowAllocationException while loading CallHistory");
         } finally {
             if (callCursor != null) {
@@ -271,9 +287,9 @@ public class BluetoothPbapVcardManager {
         return list;
     }
 
-    public final ArrayList<String> getPhonebookNameList(final int orderByWhat) {
-        ArrayList<String> nameList = new ArrayList<String>();
-        //Owner vCard enhancement. Use "ME" profile if configured
+    public final List<String> getPhonebookNameList(final int orderByWhat) {
+        List<String> nameList = new ArrayList<String>();
+        // Owner vCard enhancement. Use "ME" profile if configured
         String ownerName = null;
         if (BluetoothPbapConfig.useProfileForOwnerVcard()) {
             ownerName = BluetoothPbapUtils.getProfileName(mContext);
@@ -284,7 +300,7 @@ public class BluetoothPbapVcardManager {
         if (ownerName != null) {
             nameList.add(ownerName);
         }
-        //End enhancement
+        // End enhancement
 
         final Uri myUri = DevicePolicyUtils.getEnterprisePhoneUri(mContext);
         Cursor contactCursor = null;
@@ -294,15 +310,32 @@ public class BluetoothPbapVcardManager {
             if (orderByWhat == BluetoothPbapObexServer.ORDER_BY_ALPHABETICAL) {
                 orderBy = Phone.DISPLAY_NAME;
             }
-            contactCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, PHONES_CONTACTS_PROJECTION, null, null, orderBy);
+            contactCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    PHONES_CONTACTS_PROJECTION,
+                                    null,
+                                    null,
+                                    orderBy);
             if (contactCursor != null) {
-                appendDistinctNameIdList(nameList, mContext.getString(android.R.string.unknownName),
-                        contactCursor);
+                appendDistinctNameIdList(
+                        nameList, mContext.getString(android.R.string.unknownName), contactCursor);
             }
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    3);
             Log.e(TAG, "CursorWindowAllocationException while getting phonebook name list");
         } catch (Exception e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    4);
             Log.e(TAG, "Exception while getting phonebook name list", e);
         } finally {
             if (contactCursor != null) {
@@ -313,12 +346,15 @@ public class BluetoothPbapVcardManager {
         return nameList;
     }
 
-    final ArrayList<String> getSelectedPhonebookNameList(final int orderByWhat,
-            final boolean vcardType21, int needSendBody, int pbSize, byte[] selector,
+    final List<String> getSelectedPhonebookNameList(
+            final int orderByWhat,
+            final boolean vcardType21,
+            int needSendBody,
+            int pbSize,
+            byte[] selector,
             String vCardSelectorOperator) {
-        ArrayList<String> nameList = new ArrayList<String>();
+        List<String> nameList = new ArrayList<String>();
         PropertySelector vcardselector = new PropertySelector(selector);
-        VCardComposer composer = null;
         int vcardType;
 
         if (vcardType21) {
@@ -327,17 +363,20 @@ public class BluetoothPbapVcardManager {
             vcardType = VCardConfig.VCARD_TYPE_V30_GENERIC;
         }
 
-        composer = BluetoothPbapUtils.createFilteredVCardComposer(mContext, vcardType, null);
-        composer.setPhoneNumberTranslationCallback(new VCardPhoneNumberTranslationCallback() {
+        VCardComposer composer =
+                BluetoothPbapUtils.createFilteredVCardComposer(mContext, vcardType, null);
+        composer.setPhoneNumberTranslationCallback(
+                new VCardPhoneNumberTranslationCallback() {
 
-            @Override
-            public String onValueReceived(String rawValue, int type, String label,
-                    boolean isPrimary) {
-                String numberWithControlSequence = rawValue.replace(PhoneNumberUtils.PAUSE, 'p')
-                        .replace(PhoneNumberUtils.WAIT, 'w');
-                return numberWithControlSequence;
-            }
-        });
+                    @Override
+                    public String onValueReceived(
+                            String rawValue, int type, String label, boolean isPrimary) {
+                        String numberWithControlSequence =
+                                rawValue.replace(PhoneNumberUtils.PAUSE, 'p')
+                                        .replace(PhoneNumberUtils.WAIT, 'w');
+                        return numberWithControlSequence;
+                    }
+                });
 
         // Owner vCard enhancement. Use "ME" profile if configured
         String ownerName = null;
@@ -353,13 +392,21 @@ public class BluetoothPbapVcardManager {
         final Uri myUri = DevicePolicyUtils.getEnterprisePhoneUri(mContext);
         Cursor contactCursor = null;
         try {
-            contactCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, PHONES_CONTACTS_PROJECTION, null, null,
-                    Phone.CONTACT_ID);
+            contactCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    PHONES_CONTACTS_PROJECTION,
+                                    null,
+                                    null,
+                                    Phone.CONTACT_ID);
 
             ArrayList<String> contactNameIdList = new ArrayList<String>();
-            appendDistinctNameIdList(contactNameIdList,
-                    mContext.getString(android.R.string.unknownName), contactCursor);
+            appendDistinctNameIdList(
+                    contactNameIdList,
+                    mContext.getString(android.R.string.unknownName),
+                    contactCursor);
 
             if (contactCursor != null) {
                 if (!composer.init(contactCursor)) {
@@ -373,24 +420,36 @@ public class BluetoothPbapVcardManager {
                 int i = 0;
                 contactCursor.moveToFirst();
                 while (!contactCursor.isAfterLast()) {
-                    String vcard = composer.buildVCard(RawContactsEntity.queryRawContactEntity(
-                                mResolver, contactCursor.getLong(idColumn)));
+                    String vcard =
+                            composer.buildVCard(
+                                    RawContactsEntity.queryRawContactEntity(
+                                            mResolver, contactCursor.getLong(idColumn)));
                     if (!contactCursor.moveToNext()) {
                         Log.i(TAG, "Cursor#moveToNext() returned false");
                     }
                     if (vcard == null) {
                         Log.e(TAG, "Failed to read a contact.");
+                        ContentProfileErrorReportUtils.report(
+                                BluetoothProfile.PBAP,
+                                BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                                BluetoothStatsLog
+                                        .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                                5);
                         return nameList;
                     } else if (vcard.isEmpty()) {
                         Log.i(TAG, "Contact may have been deleted during operation");
                         continue;
                     }
-                    if (V) {
-                        Log.v(TAG, "Checking selected bits in the vcard composer" + vcard);
-                    }
+                    Log.v(TAG, "Checking selected bits in the vcard composer" + vcard);
 
                     if (!vcardselector.checkVCardSelector(vcard, vCardSelectorOperator)) {
                         Log.e(TAG, "vcard selector check fail");
+                        ContentProfileErrorReportUtils.report(
+                                BluetoothProfile.PBAP,
+                                BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                                BluetoothStatsLog
+                                        .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                                6);
                         vcard = null;
                         pbSize--;
                         continue;
@@ -404,18 +463,19 @@ public class BluetoothPbapVcardManager {
                     i++;
                 }
                 if (orderByWhat == BluetoothPbapObexServer.ORDER_BY_INDEXED) {
-                    if (V) {
-                        Log.v(TAG, "getPhonebookNameList, order by index");
-                    }
+                    Log.v(TAG, "getPhonebookNameList, order by index");
                     // Do not need to do anything, as we sort it by index already
                 } else if (orderByWhat == BluetoothPbapObexServer.ORDER_BY_ALPHABETICAL) {
-                    if (V) {
-                        Log.v(TAG, "getPhonebookNameList, order by alpha");
-                    }
+                    Log.v(TAG, "getPhonebookNameList, order by alpha");
                     Collections.sort(nameList);
                 }
             }
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    7);
             Log.e(TAG, "CursorWindowAllocationException while getting Phonebook name list");
         } finally {
             if (contactCursor != null) {
@@ -426,8 +486,8 @@ public class BluetoothPbapVcardManager {
         return nameList;
     }
 
-    public final ArrayList<String> getContactNamesByNumber(final String phoneNumber) {
-        ArrayList<String> nameList = new ArrayList<String>();
+    public final List<String> getContactNamesByNumber(final String phoneNumber) {
+        List<String> nameList = new ArrayList<String>();
 
         Cursor contactCursor = null;
         Uri uri = null;
@@ -442,19 +502,24 @@ public class BluetoothPbapVcardManager {
         }
 
         try {
-            contactCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    uri, projection, null, null, Phone.CONTACT_ID);
+            contactCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver, uri, projection, null, null, Phone.CONTACT_ID);
 
             if (contactCursor != null) {
-                appendDistinctNameIdList(nameList, mContext.getString(android.R.string.unknownName),
-                        contactCursor);
-                if (V) {
-                    for (String nameIdStr : nameList) {
-                        Log.v(TAG, "got name " + nameIdStr + " by number " + phoneNumber);
-                    }
+                appendDistinctNameIdList(
+                        nameList, mContext.getString(android.R.string.unknownName), contactCursor);
+                for (String nameIdStr : nameList) {
+                    Log.v(TAG, "got name " + nameIdStr + " by number " + phoneNumber);
                 }
             }
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    8);
             Log.e(TAG, "CursorWindowAllocationException while getting contact names");
         } finally {
             if (contactCursor != null) {
@@ -469,20 +534,25 @@ public class BluetoothPbapVcardManager {
     byte[] getCallHistoryPrimaryFolderVersion(final int type) {
         final Uri myUri = CallLog.Calls.CONTENT_URI;
         String selection = BluetoothPbapObexServer.createSelectionPara(type);
-        selection = selection + " AND date >= " + sLastFetchedTimeStamp;
+        selection = selection + " AND date >= " + mLastFetchedTimeStamp;
 
-        Log.d(TAG, "LAST_FETCHED_TIME_STAMP is " + sLastFetchedTimeStamp);
+        Log.d(TAG, "LAST_FETCHED_TIME_STAMP is " + mLastFetchedTimeStamp);
         Cursor callCursor = null;
         long count = 0;
         long primaryVcMsb = 0;
-        ArrayList<String> list = new ArrayList<String>();
         try {
-            callCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, null, selection, null, null);
+            callCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(mResolver, myUri, null, selection, null, null);
             while (callCursor != null && callCursor.moveToNext()) {
                 count = count + 1;
             }
         } catch (Exception e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    9);
             Log.e(TAG, "exception while fetching callHistory pvc");
         } finally {
             if (callCursor != null) {
@@ -491,7 +561,7 @@ public class BluetoothPbapVcardManager {
             }
         }
 
-        sLastFetchedTimeStamp = System.currentTimeMillis();
+        mLastFetchedTimeStamp = System.currentTimeMillis();
         Log.d(TAG, "getCallHistoryPrimaryFolderVersion count is " + count + " type is " + type);
         ByteBuffer pvc = ByteBuffer.allocate(16);
         pvc.putLong(primaryVcMsb);
@@ -500,17 +570,32 @@ public class BluetoothPbapVcardManager {
         return pvc.array();
     }
 
-    private static final String[] CALLLOG_PROJECTION = new String[]{
-            CallLog.Calls._ID, // 0
-    };
+    private static final String[] CALLLOG_PROJECTION =
+            new String[] {
+                CallLog.Calls._ID, // 0
+            };
     private static final int ID_COLUMN_INDEX = 0;
 
-    final int composeAndSendSelectedCallLogVcards(final int type, Operation op,
-            final int startPoint, final int endPoint, final boolean vcardType21, int needSendBody,
-            int pbSize, boolean ignorefilter, byte[] filter, byte[] vcardselector,
-            String vcardselectorop, boolean vcardselect) {
+    final int composeAndSendSelectedCallLogVcards(
+            final int type,
+            Operation op,
+            final int startPoint,
+            final int endPoint,
+            final boolean vcardType21,
+            int needSendBody,
+            int pbSize,
+            boolean ignorefilter,
+            byte[] filter,
+            byte[] vcardselector,
+            String vcardselectorop,
+            boolean vcardselect) {
         if (startPoint < 1 || startPoint > endPoint) {
             Log.e(TAG, "internal error: startPoint or endPoint is not correct.");
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                    10);
             return ResponseCodes.OBEX_HTTP_INTERNAL_ERROR;
         }
         String typeSelection = BluetoothPbapObexServer.createSelectionPara(type);
@@ -521,26 +606,33 @@ public class BluetoothPbapVcardManager {
         long endPointId = 0;
         try {
             // Need test to see if order by _ID is ok here, or by date?
-            callsCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, CALLLOG_PROJECTION, typeSelection, null,
-                    CALLLOG_SORT_ORDER);
+            callsCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    CALLLOG_PROJECTION,
+                                    typeSelection,
+                                    null,
+                                    CALLLOG_SORT_ORDER);
             if (callsCursor != null) {
                 callsCursor.moveToPosition(startPoint - 1);
                 startPointId = callsCursor.getLong(ID_COLUMN_INDEX);
-                if (V) {
-                    Log.v(TAG, "Call Log query startPointId = " + startPointId);
-                }
+                Log.v(TAG, "Call Log query startPointId = " + startPointId);
                 if (startPoint == endPoint) {
                     endPointId = startPointId;
                 } else {
                     callsCursor.moveToPosition(endPoint - 1);
                     endPointId = callsCursor.getLong(ID_COLUMN_INDEX);
                 }
-                if (V) {
-                    Log.v(TAG, "Call log query endPointId = " + endPointId);
-                }
+                Log.v(TAG, "Call log query endPointId = " + endPointId);
             }
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    11);
             Log.e(TAG, "CursorWindowAllocationException while composing calllog vcards");
         } finally {
             if (callsCursor != null) {
@@ -566,28 +658,49 @@ public class BluetoothPbapVcardManager {
             selection = "(" + typeSelection + ") AND (" + recordSelection + ")";
         }
 
-        if (V) {
-            Log.v(TAG, "Call log query selection is: " + selection);
-        }
+        Log.v(TAG, "Call log query selection is: " + selection);
 
-        return composeCallLogsAndSendSelectedVCards(op, selection, vcardType21, needSendBody,
-                pbSize, null, ignorefilter, filter, vcardselector, vcardselectorop, vcardselect);
+        return composeCallLogsAndSendSelectedVCards(
+                op,
+                selection,
+                vcardType21,
+                needSendBody,
+                pbSize,
+                null,
+                ignorefilter,
+                filter,
+                vcardselector,
+                vcardselectorop,
+                vcardselect);
     }
 
-    final int composeAndSendPhonebookVcards(Operation op, final int startPoint, final int endPoint,
-            final boolean vcardType21, String ownerVCard, int needSendBody, int pbSize,
-            boolean ignorefilter, byte[] filter, byte[] vcardselector, String vcardselectorop,
-            boolean vcardselect, boolean favorites) {
+    final int composeAndSendPhonebookVcards(
+            Operation op,
+            final int startPoint,
+            final int endPoint,
+            final boolean vcardType21,
+            String ownerVCard,
+            int needSendBody,
+            int pbSize,
+            boolean ignorefilter,
+            byte[] filter,
+            byte[] vcardselector,
+            String vcardselectorop,
+            boolean vcardselect,
+            boolean favorites) {
         if (startPoint < 1 || startPoint > endPoint) {
             Log.e(TAG, "internal error: startPoint or endPoint is not correct.");
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                    12);
             return ResponseCodes.OBEX_HTTP_INTERNAL_ERROR;
         }
 
         final Uri myUri = DevicePolicyUtils.getEnterprisePhoneUri(mContext);
         Cursor contactCursor = null;
-        Cursor contactIdCursor = new MatrixCursor(new String[]{
-                Phone.CONTACT_ID
-        });
+        Cursor contactIdCursor = new MatrixCursor(new String[] {Phone.CONTACT_ID});
 
         String selectionClause = null;
         if (favorites) {
@@ -595,14 +708,25 @@ public class BluetoothPbapVcardManager {
         }
 
         try {
-            contactCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, PHONES_CONTACTS_PROJECTION, selectionClause,
-                    null, Phone.CONTACT_ID);
+            contactCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    PHONES_CONTACTS_PROJECTION,
+                                    selectionClause,
+                                    null,
+                                    Phone.CONTACT_ID);
             if (contactCursor != null) {
                 contactIdCursor =
                         ContactCursorFilter.filterByRange(contactCursor, startPoint, endPoint);
             }
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    13);
             Log.e(TAG, "CursorWindowAllocationException while composing phonebook vcards");
         } finally {
             if (contactCursor != null) {
@@ -611,37 +735,65 @@ public class BluetoothPbapVcardManager {
         }
 
         if (vcardselect) {
-            return composeContactsAndSendSelectedVCards(op, contactIdCursor, vcardType21,
-                    ownerVCard, needSendBody, pbSize, ignorefilter, filter, vcardselector,
+            return composeContactsAndSendSelectedVCards(
+                    op,
+                    contactIdCursor,
+                    vcardType21,
+                    ownerVCard,
+                    needSendBody,
+                    pbSize,
+                    ignorefilter,
+                    filter,
+                    vcardselector,
                     vcardselectorop);
         } else {
-            return composeContactsAndSendVCards(op, contactIdCursor, vcardType21, ownerVCard,
-                    ignorefilter, filter);
+            return composeContactsAndSendVCards(
+                    op, contactIdCursor, vcardType21, ownerVCard, ignorefilter, filter);
         }
     }
 
-    final int composeAndSendPhonebookOneVcard(Operation op, final int offset,
-            final boolean vcardType21, String ownerVCard, int orderByWhat, boolean ignorefilter,
+    final int composeAndSendPhonebookOneVcard(
+            Operation op,
+            final int offset,
+            final boolean vcardType21,
+            String ownerVCard,
+            int orderByWhat,
+            boolean ignorefilter,
             byte[] filter) {
         if (offset < 1) {
             Log.e(TAG, "Internal error: offset is not correct.");
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                    14);
             return ResponseCodes.OBEX_HTTP_INTERNAL_ERROR;
         }
         final Uri myUri = DevicePolicyUtils.getEnterprisePhoneUri(mContext);
 
         Cursor contactCursor = null;
-        Cursor contactIdCursor = new MatrixCursor(new String[]{
-                Phone.CONTACT_ID
-        });
+        Cursor contactIdCursor = new MatrixCursor(new String[] {Phone.CONTACT_ID});
         // By default order is indexed
         String orderBy = Phone.CONTACT_ID;
         try {
             if (orderByWhat == BluetoothPbapObexServer.ORDER_BY_ALPHABETICAL) {
                 orderBy = Phone.DISPLAY_NAME;
             }
-            contactCursor = BluetoothMethodProxy.getInstance().contentResolverQuery(mResolver,
-                    myUri, PHONES_CONTACTS_PROJECTION, null, null, orderBy);
+            contactCursor =
+                    BluetoothMethodProxy.getInstance()
+                            .contentResolverQuery(
+                                    mResolver,
+                                    myUri,
+                                    PHONES_CONTACTS_PROJECTION,
+                                    null,
+                                    null,
+                                    orderBy);
         } catch (CursorWindowAllocationException e) {
+            ContentProfileErrorReportUtils.report(
+                    BluetoothProfile.PBAP,
+                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                    BluetoothStatsLog.BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__EXCEPTION,
+                    15);
             Log.e(TAG, "CursorWindowAllocationException while composing phonebook one vcard");
         } finally {
             if (contactCursor != null) {
@@ -650,18 +802,13 @@ public class BluetoothPbapVcardManager {
                 contactCursor = null;
             }
         }
-        return composeContactsAndSendVCards(op, contactIdCursor, vcardType21, ownerVCard,
-                ignorefilter, filter);
+        return composeContactsAndSendVCards(
+                op, contactIdCursor, vcardType21, ownerVCard, ignorefilter, filter);
     }
 
-    /**
-     * Filter contact cursor by certain condition.
-     */
+    /** Filter contact cursor by certain condition. */
     static final class ContactCursorFilter {
         /**
-         *
-         * @param contactCursor
-         * @param offset
          * @return a cursor containing contact id of {@code offset} contact.
          */
         static Cursor filterByOffset(Cursor contactCursor, int offset) {
@@ -669,12 +816,8 @@ public class BluetoothPbapVcardManager {
         }
 
         /**
-         *
-         * @param contactCursor
-         * @param startPoint
-         * @param endPoint
          * @return a cursor containing contact ids of {@code startPoint}th to {@code endPoint}th
-         * contact. (i.e. [startPoint, endPoint], both points should be greater than 0)
+         *     contact. (i.e. [startPoint, endPoint], both points should be greater than 0)
          */
         static Cursor filterByRange(Cursor contactCursor, int startPoint, int endPoint) {
             final int contactIdColumn = contactCursor.getColumnIndex(Data.CONTACT_ID);
@@ -682,18 +825,14 @@ public class BluetoothPbapVcardManager {
             // As startPoint, endOffset index starts from 1 to n, we set
             // currentPoint base as 1 not 0
             int currentOffset = 1;
-            final MatrixCursor contactIdsCursor = new MatrixCursor(new String[]{
-                    Phone.CONTACT_ID
-            });
+            final MatrixCursor contactIdsCursor = new MatrixCursor(new String[] {Phone.CONTACT_ID});
             while (contactCursor.moveToNext() && currentOffset <= endPoint) {
                 long currentContactId = contactCursor.getLong(contactIdColumn);
                 if (previousContactId != currentContactId) {
                     previousContactId = currentContactId;
                     if (currentOffset >= startPoint) {
-                        contactIdsCursor.addRow(new Long[]{currentContactId});
-                        if (V) {
-                            Log.v(TAG, "contactIdsCursor.addRow: " + currentContactId);
-                        }
+                        contactIdsCursor.addRow(new Long[] {currentContactId});
+                        Log.v(TAG, "contactIdsCursor.addRow: " + currentContactId);
                     }
                     currentOffset++;
                 }
@@ -702,12 +841,14 @@ public class BluetoothPbapVcardManager {
         }
     }
 
-    private int composeContactsAndSendVCards(Operation op, final Cursor contactIdCursor,
-            final boolean vcardType21, String ownerVCard, boolean ignorefilter, byte[] filter) {
-        long timestamp = 0;
-        if (V) {
-            timestamp = System.currentTimeMillis();
-        }
+    private int composeContactsAndSendVCards(
+            Operation op,
+            final Cursor contactIdCursor,
+            final boolean vcardType21,
+            String ownerVCard,
+            boolean ignorefilter,
+            byte[] filter) {
+        long timestamp = System.currentTimeMillis();
 
         VCardComposer composer = null;
         VCardFilter vcardfilter = new VCardFilter(ignorefilter ? null : filter);
@@ -735,19 +876,21 @@ public class BluetoothPbapVcardManager {
             // BT does want PAUSE/WAIT conversion while it doesn't want the
             // other formatting
             // done by vCard library by default.
-            composer.setPhoneNumberTranslationCallback(new VCardPhoneNumberTranslationCallback() {
-                @Override
-                public String onValueReceived(String rawValue, int type, String label,
-                        boolean isPrimary) {
-                    // 'p' and 'w' are the standard characters for pause and
-                    // wait
-                    // (see RFC 3601)
-                    // so use those when exporting phone numbers via vCard.
-                    String numberWithControlSequence = rawValue.replace(PhoneNumberUtils.PAUSE, 'p')
-                            .replace(PhoneNumberUtils.WAIT, 'w');
-                    return numberWithControlSequence;
-                }
-            });
+            composer.setPhoneNumberTranslationCallback(
+                    new VCardPhoneNumberTranslationCallback() {
+                        @Override
+                        public String onValueReceived(
+                                String rawValue, int type, String label, boolean isPrimary) {
+                            // 'p' and 'w' are the standard characters for pause and
+                            // wait
+                            // (see RFC 3601)
+                            // so use those when exporting phone numbers via vCard.
+                            String numberWithControlSequence =
+                                    rawValue.replace(PhoneNumberUtils.PAUSE, 'p')
+                                            .replace(PhoneNumberUtils.WAIT, 'w');
+                            return numberWithControlSequence;
+                        }
+                    });
             buffer = new HandlerForStringBuffer(op, ownerVCard);
             Log.v(TAG, "contactIdCursor size: " + contactIdCursor.getCount());
             if (!composer.init(contactIdCursor) || !buffer.init()) {
@@ -764,28 +907,32 @@ public class BluetoothPbapVcardManager {
                     BluetoothPbapObexServer.sIsAborted = false;
                     break;
                 }
-                String vcard = composer.buildVCard(RawContactsEntity.queryRawContactEntity(
-                            mResolver, contactIdCursor.getLong(idColumn)));
+                String vcard =
+                        composer.buildVCard(
+                                RawContactsEntity.queryRawContactEntity(
+                                        mResolver, contactIdCursor.getLong(idColumn)));
                 if (!contactIdCursor.moveToNext()) {
                     Log.i(TAG, "Cursor#moveToNext() returned false");
                 }
                 if (vcard == null) {
                     Log.e(TAG, "Failed to read a contact.");
+                    ContentProfileErrorReportUtils.report(
+                            BluetoothProfile.PBAP,
+                            BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                            BluetoothStatsLog
+                                    .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                            16);
                     return ResponseCodes.OBEX_HTTP_INTERNAL_ERROR;
                 } else if (vcard.isEmpty()) {
                     Log.i(TAG, "Contact may have been deleted during operation");
                     continue;
                 }
-                if (V) {
-                    Log.v(TAG, "vCard from composer: " + vcard);
-                }
+                Log.v(TAG, "vCard from composer: " + vcard);
 
                 vcard = vcardfilter.apply(vcard, vcardType21);
                 vcard = stripTelephoneNumber(vcard);
 
-                if (V) {
-                    Log.v(TAG, "vCard after cleanup: " + vcard);
-                }
+                Log.v(TAG, "vCard after cleanup: " + vcard);
 
                 if (!buffer.writeVCard(vcard)) {
                     // onEntryCreate() already emits error.
@@ -801,21 +948,27 @@ public class BluetoothPbapVcardManager {
             }
         }
 
-        if (V) {
-            Log.v(TAG, "Total vcard composing and sending out takes " + (System.currentTimeMillis()
-                    - timestamp) + " ms");
-        }
+        Log.v(
+                TAG,
+                "Total vcard composing and sending out takes "
+                        + (System.currentTimeMillis() - timestamp)
+                        + " ms");
 
         return ResponseCodes.OBEX_HTTP_OK;
     }
 
-    private int composeContactsAndSendSelectedVCards(Operation op, final Cursor contactIdCursor,
-            final boolean vcardType21, String ownerVCard, int needSendBody, int pbSize,
-            boolean ignorefilter, byte[] filter, byte[] selector, String vcardselectorop) {
-        long timestamp = 0;
-        if (V) {
-            timestamp = System.currentTimeMillis();
-        }
+    private int composeContactsAndSendSelectedVCards(
+            Operation op,
+            final Cursor contactIdCursor,
+            final boolean vcardType21,
+            String ownerVCard,
+            int needSendBody,
+            int pbSize,
+            boolean ignorefilter,
+            byte[] filter,
+            byte[] selector,
+            String vcardselectorop) {
+        long timestamp = System.currentTimeMillis();
 
         VCardComposer composer = null;
         VCardFilter vcardfilter = new VCardFilter(ignorefilter ? null : filter);
@@ -842,17 +995,19 @@ public class BluetoothPbapVcardManager {
 
             /* BT does want PAUSE/WAIT conversion while it doesn't want the
              * other formatting done by vCard library by default. */
-            composer.setPhoneNumberTranslationCallback(new VCardPhoneNumberTranslationCallback() {
-                @Override
-                public String onValueReceived(String rawValue, int type, String label,
-                        boolean isPrimary) {
-                    /* 'p' and 'w' are the standard characters for pause and wait
-                     * (see RFC 3601) so use those when exporting phone numbers via vCard.*/
-                    String numberWithControlSequence = rawValue.replace(PhoneNumberUtils.PAUSE, 'p')
-                            .replace(PhoneNumberUtils.WAIT, 'w');
-                    return numberWithControlSequence;
-                }
-            });
+            composer.setPhoneNumberTranslationCallback(
+                    new VCardPhoneNumberTranslationCallback() {
+                        @Override
+                        public String onValueReceived(
+                                String rawValue, int type, String label, boolean isPrimary) {
+                            /* 'p' and 'w' are the standard characters for pause and wait
+                             * (see RFC 3601) so use those when exporting phone numbers via vCard.*/
+                            String numberWithControlSequence =
+                                    rawValue.replace(PhoneNumberUtils.PAUSE, 'p')
+                                            .replace(PhoneNumberUtils.WAIT, 'w');
+                            return numberWithControlSequence;
+                        }
+                    });
             buffer = new HandlerForStringBuffer(op, ownerVCard);
             Log.v(TAG, "contactIdCursor size: " + contactIdCursor.getCount());
             if (!composer.init(contactIdCursor) || !buffer.init()) {
@@ -869,38 +1024,48 @@ public class BluetoothPbapVcardManager {
                     BluetoothPbapObexServer.sIsAborted = false;
                     break;
                 }
-                String vcard = composer.buildVCard(RawContactsEntity.queryRawContactEntity(
-                            mResolver, contactIdCursor.getLong(idColumn)));
+                String vcard =
+                        composer.buildVCard(
+                                RawContactsEntity.queryRawContactEntity(
+                                        mResolver, contactIdCursor.getLong(idColumn)));
                 if (!contactIdCursor.moveToNext()) {
                     Log.i(TAG, "Cursor#moveToNext() returned false");
                 }
                 if (vcard == null) {
                     Log.e(TAG, "Failed to read a contact.");
+                    ContentProfileErrorReportUtils.report(
+                            BluetoothProfile.PBAP,
+                            BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                            BluetoothStatsLog
+                                    .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                            17);
                     return ResponseCodes.OBEX_HTTP_INTERNAL_ERROR;
                 } else if (vcard.isEmpty()) {
                     Log.i(TAG, "Contact may have been deleted during operation");
                     continue;
                 }
-                if (V) {
-                    Log.v(TAG, "Checking selected bits in the vcard composer" + vcard);
-                }
+                Log.v(TAG, "Checking selected bits in the vcard composer" + vcard);
 
                 if (!vcardselector.checkVCardSelector(vcard, vcardselectorop)) {
                     Log.e(TAG, "vcard selector check fail");
+                    ContentProfileErrorReportUtils.report(
+                            BluetoothProfile.PBAP,
+                            BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                            BluetoothStatsLog
+                                    .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                            18);
                     vcard = null;
                     pbSize--;
                     continue;
                 }
 
-                Log.e(TAG, "vcard selector check pass");
+                Log.i(TAG, "vcard selector check pass");
 
                 if (needSendBody == NEED_SEND_BODY) {
                     vcard = vcardfilter.apply(vcard, vcardType21);
                     vcard = stripTelephoneNumber(vcard);
 
-                    if (V) {
-                        Log.v(TAG, "vCard after cleanup: " + vcard);
-                    }
+                    Log.v(TAG, "vCard after cleanup: " + vcard);
 
                     if (!buffer.writeVCard(vcard)) {
                         // onEntryCreate() already emits error.
@@ -921,30 +1086,34 @@ public class BluetoothPbapVcardManager {
             }
         }
 
-        if (V) {
-            Log.v(TAG, "Total vcard composing and sending out takes " + (System.currentTimeMillis()
-                    - timestamp) + " ms");
-        }
+        Log.v(
+                TAG,
+                "Total vcard composing and sending out takes "
+                        + (System.currentTimeMillis() - timestamp)
+                        + " ms");
 
         return ResponseCodes.OBEX_HTTP_OK;
     }
 
-    private int composeCallLogsAndSendSelectedVCards(Operation op, final String selection,
-            final boolean vcardType21, int needSendBody, int pbSize, String ownerVCard,
-            boolean ignorefilter, byte[] filter, byte[] selector, String vcardselectorop,
-            boolean vCardSelct) {
-        long timestamp = 0;
-        if (V) {
-            timestamp = System.currentTimeMillis();
-        }
+    private int composeCallLogsAndSendSelectedVCards(
+            Operation op,
+            final String selection,
+            final boolean vcardType21,
+            int needSendBody,
+            int pbSize,
+            String ownerVCard,
+            boolean ignorefilter,
+            byte[] filter,
+            byte[] selector,
+            String vcardselectorop,
+            boolean vCardSelect) {
+        long timestamp = System.currentTimeMillis();
 
-        BluetoothPbapCallLogComposer composer = null;
         HandlerForStringBuffer buffer = null;
 
-        try {
+        try (BluetoothPbapCallLogComposer composer = new BluetoothPbapCallLogComposer(mContext)) {
             VCardFilter vcardfilter = new VCardFilter(ignorefilter ? null : filter);
             PropertySelector vcardselector = new PropertySelector(selector);
-            composer = new BluetoothPbapCallLogComposer(mContext);
             buffer = new HandlerForStringBuffer(op, ownerVCard);
             if (!composer.init(CallLog.Calls.CONTENT_URI, selection, null, CALLLOG_SORT_ORDER)
                     || !buffer.init()) {
@@ -958,17 +1127,31 @@ public class BluetoothPbapVcardManager {
                     break;
                 }
                 String vcard = composer.createOneEntry(vcardType21);
-                if (vCardSelct) {
+                if (vCardSelect) {
                     if (!vcardselector.checkVCardSelector(vcard, vcardselectorop)) {
                         Log.e(TAG, "Checking vcard selector for call log");
+                        ContentProfileErrorReportUtils.report(
+                                BluetoothProfile.PBAP,
+                                BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                                BluetoothStatsLog
+                                        .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                                19);
                         vcard = null;
                         pbSize--;
                         continue;
                     }
                     if (needSendBody == NEED_SEND_BODY) {
                         if (vcard == null) {
-                            Log.e(TAG, "Failed to read a contact. Error reason: "
-                                    + composer.getErrorReason());
+                            Log.e(
+                                    TAG,
+                                    "Failed to read a contact. Error reason: "
+                                            + composer.getErrorReason());
+                            ContentProfileErrorReportUtils.report(
+                                    BluetoothProfile.PBAP,
+                                    BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                                    BluetoothStatsLog
+                                            .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                                    20);
                             return ResponseCodes.OBEX_HTTP_INTERNAL_ERROR;
                         } else if (vcard.isEmpty()) {
                             Log.i(TAG, "Call Log may have been deleted during operation");
@@ -976,75 +1159,73 @@ public class BluetoothPbapVcardManager {
                         }
                         vcard = vcardfilter.apply(vcard, vcardType21);
 
-                        if (V) {
-                            Log.v(TAG, "Vcard Entry:");
-                            Log.v(TAG, vcard);
-                        }
+                        Log.v(TAG, "Vcard Entry:");
+                        Log.v(TAG, vcard);
                         buffer.writeVCard(vcard);
                     }
                 } else {
                     if (vcard == null) {
-                        Log.e(TAG, "Failed to read a contact. Error reason: "
-                                + composer.getErrorReason());
+                        Log.e(
+                                TAG,
+                                "Failed to read a contact. Error reason: "
+                                        + composer.getErrorReason());
+                        ContentProfileErrorReportUtils.report(
+                                BluetoothProfile.PBAP,
+                                BluetoothProtoEnums.BLUETOOTH_PBAP_VCARD_MANAGER,
+                                BluetoothStatsLog
+                                        .BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED__TYPE__LOG_ERROR,
+                                21);
                         return ResponseCodes.OBEX_HTTP_INTERNAL_ERROR;
                     }
-                    if (V) {
-                        Log.v(TAG, "Vcard Entry:");
-                        Log.v(TAG, vcard);
-                    }
+                    Log.v(TAG, "Vcard Entry:");
+                    Log.v(TAG, vcard);
                     buffer.writeVCard(vcard);
                 }
             }
-            if (needSendBody != NEED_SEND_BODY && vCardSelct) {
+            if (needSendBody != NEED_SEND_BODY && vCardSelect) {
                 return pbSize;
             }
         } finally {
-            if (composer != null) {
-                composer.terminate();
-            }
             if (buffer != null) {
                 buffer.terminate();
             }
         }
 
-        if (V) {
-            Log.v(TAG, "Total vcard composing and sending out takes " + (System.currentTimeMillis()
-                    - timestamp) + " ms");
-        }
+        Log.v(
+                TAG,
+                "Total vcard composing and sending out takes "
+                        + (System.currentTimeMillis() - timestamp)
+                        + " ms");
         return ResponseCodes.OBEX_HTTP_OK;
     }
 
     public String stripTelephoneNumber(String vCard) {
-        String separator = System.getProperty("line.separator");
-        String[] attr = vCard.split(separator);
+        String[] attr = SEPARATOR_PATTERN.split(vCard);
         String stripedVCard = "";
         for (int i = 0; i < attr.length; i++) {
             if (attr[i].startsWith("TEL")) {
-                String[] vTagAndTel = attr[i].split(":", 2);
+                String[] vTagAndTel = ATTRIBUTE_PATTERN.split(attr[i], 2);
                 int telLenBefore = vTagAndTel[1].length();
                 // Remove '-', '(', ')' or ' ' from TEL number
-                vTagAndTel[1] = vTagAndTel[1].replace("-", "")
-                                             .replace("(", "")
-                                             .replace(")", "")
-                                             .replace(" ", "");
+                vTagAndTel[1] =
+                        vTagAndTel[1]
+                                .replace("-", "")
+                                .replace("(", "")
+                                .replace(")", "")
+                                .replace(" ", "");
                 if (vTagAndTel[1].length() < telLenBefore) {
-                    if (V) {
-                        Log.v(TAG, "Fixing vCard TEL to " + vTagAndTel[1]);
-                    }
-                    attr[i] = new StringBuilder().append(vTagAndTel[0]).append(":")
-                                                 .append(vTagAndTel[1]).toString();
+                    Log.v(TAG, "Fixing vCard TEL to " + vTagAndTel[1]);
+                    attr[i] = vTagAndTel[0] + ":" + vTagAndTel[1];
                 }
             }
         }
 
         for (int i = 0; i < attr.length; i++) {
             if (!attr[i].isEmpty()) {
-                stripedVCard = stripedVCard.concat(attr[i] + separator);
+                stripedVCard = stripedVCard.concat(attr[i] + SEPARATOR);
             }
         }
-        if (V) {
-            Log.v(TAG, "vCard with stripped telephone no.: " + stripedVCard);
-        }
+        Log.v(TAG, "vCard with stripped telephone no.: " + stripedVCard);
         return stripedVCard;
     }
 
@@ -1077,10 +1258,9 @@ public class BluetoothPbapVcardManager {
             }
         }
 
-        private static final String SEPARATOR = System.getProperty("line.separator");
         private final byte[] mFilter;
 
-        //This function returns true if the attributes needs to be included in the filtered vcard.
+        // This function returns true if the attributes needs to be included in the filtered vcard.
         private boolean isFilteredIn(FilterBit bit, boolean vCardType21) {
             final int offset = (bit.pos / 8) + 1;
             final int bitPos = bit.pos % 8;
@@ -1108,7 +1288,7 @@ public class BluetoothPbapVcardManager {
             if (mFilter == null) {
                 return vCard;
             }
-            String[] lines = vCard.split(SEPARATOR);
+            String[] lines = SEPARATOR_PATTERN.split(vCard);
             StringBuilder filteredVCard = new StringBuilder();
             boolean filteredIn = false;
 
@@ -1116,7 +1296,7 @@ public class BluetoothPbapVcardManager {
                 // Check whether the current property is changing (ignoring multi-line properties)
                 // and determine if the current property is filtered in.
                 if (!Character.isWhitespace(line.charAt(0)) && !line.startsWith("=")) {
-                    String currentProp = line.split("[;:]")[0];
+                    String currentProp = PROPERTY_PATTERN.split(line, 2)[0];
                     filteredIn = true;
 
                     for (FilterBit bit : FilterBit.values()) {
@@ -1139,7 +1319,7 @@ public class BluetoothPbapVcardManager {
 
                 // Build filtered vCard
                 if (filteredIn) {
-                    filteredVCard.append(line + SEPARATOR);
+                    filteredVCard.append(line).append(SEPARATOR);
                 }
             }
 
@@ -1176,7 +1356,6 @@ public class BluetoothPbapVcardManager {
             }
         }
 
-        private static final String SEPARATOR = System.getProperty("line.separator");
         private final byte[] mSelector;
 
         PropertySelector(byte[] selector) {
@@ -1236,8 +1415,8 @@ public class BluetoothPbapVcardManager {
     }
 
     /**
-     * Get size of the cursor without duplicated contact id. This assumes the
-     * given cursor is sorted by CONTACT_ID.
+     * Get size of the cursor without duplicated contact id. This assumes the given cursor is sorted
+     * by CONTACT_ID.
      */
     private static int getDistinctContactIdSize(Cursor cursor) {
         final int contactIdColumn = cursor.getColumnIndex(Data.CONTACT_ID);
@@ -1253,18 +1432,16 @@ public class BluetoothPbapVcardManager {
                 previousContactId = contactId;
             }
         }
-        if (V) {
-            Log.i(TAG, "getDistinctContactIdSize result: " + count);
-        }
+        Log.v(TAG, "getDistinctContactIdSize result: " + count);
         return count;
     }
 
     /**
-     * Append "display_name,contact_id" string array from cursor to ArrayList.
-     * This assumes the given cursor is sorted by CONTACT_ID.
+     * Append "display_name,contact_id" string array from cursor to ArrayList. This assumes the
+     * given cursor is sorted by CONTACT_ID.
      */
-    private static void appendDistinctNameIdList(ArrayList<String> resultList, String defaultName,
-            Cursor cursor) {
+    private static void appendDistinctNameIdList(
+            List<String> resultList, String defaultName, Cursor cursor) {
         final int contactIdColumn = cursor.getColumnIndex(Data.CONTACT_ID);
         final int idColumn = cursor.getColumnIndex(Data._ID);
         final int nameColumn = cursor.getColumnIndex(Data.DISPLAY_NAME);
@@ -1282,16 +1459,14 @@ public class BluetoothPbapVcardManager {
                 resultList.add(newString);
             }
         }
-        if (V) {
-            for (String nameId : resultList) {
-                Log.i(TAG, "appendDistinctNameIdList result: " + nameId);
-            }
+        for (String nameId : resultList) {
+            Log.i(TAG, "appendDistinctNameIdList result: " + nameId);
         }
     }
 
     @VisibleForTesting
     static String getNameFromVCard(String vCard) {
-        String[] lines = vCard.split(PropertySelector.SEPARATOR);
+        String[] lines = SEPARATOR_PATTERN.split(vCard);
         String name = "";
         for (String line : lines) {
             if (!Character.isWhitespace(line.charAt(0)) && !line.startsWith("=")) {
@@ -1305,10 +1480,10 @@ public class BluetoothPbapVcardManager {
     }
 
     private static boolean doesVCardHaveProperty(String vCard, String property) {
-        String[] lines = vCard.split(PropertySelector.SEPARATOR);
+        String[] lines = SEPARATOR_PATTERN.split(vCard);
         for (String line : lines) {
             if (!Character.isWhitespace(line.charAt(0)) && !line.startsWith("=")) {
-                String currentProperty = line.split("[;:]")[0];
+                String currentProperty = PROPERTY_PATTERN.split(line)[0];
                 if (property.equals(currentProperty)) {
                     return true;
                 }

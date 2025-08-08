@@ -15,7 +15,6 @@ cc_defaults {
         "packages/modules/Bluetooth/system",
         "packages/modules/Bluetooth/system/gd",
         "packages/modules/Bluetooth/system/include",
-        "packages/modules/Bluetooth/system/types",
     ],
 }
 
@@ -32,9 +31,13 @@ cc_library {
         "com.android.btservices",
     ],
     shared_libs: [
+        "libbase",
         "liblog",
     ],
-    static_libs: ["libosi"],
+    static_libs: [
+        "libbluetooth_log",
+        "libosi",
+    ],
 }
 
 // Audio A2DP library unit tests for target and host
@@ -49,10 +52,13 @@ cc_test {
         "test/audio_hearing_aid_hw_test.cc",
     ],
     shared_libs: [
+        "libbase",
         "liblog",
     ],
     static_libs: [
         "audio.hearing_aid.default",
+        "libbluetooth_log",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libosi",
     ],
     min_sdk_version: "29",

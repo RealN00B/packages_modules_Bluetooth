@@ -17,11 +17,9 @@
 #define LOG_TAG "bt_headless"
 
 #include "test/headless/sdp/sdp_db.h"
-#include "base/logging.h"     // LOG() stdout and android log
-#include "osi/include/log.h"  // android log only
+
 #include "stack/include/sdp_api.h"
 #include "types/bluetooth/uuid.h"
-#include "types/raw_address.h"
 
 using namespace bluetooth::test::headless;
 
@@ -44,6 +42,5 @@ void SdpDb::Print(FILE* filep) const {
   for (int i = 0; i < db_->num_uuid_filters; i++) {
     fprintf(filep, "  uuid:%s\n", db_->uuid_filters[i].ToString().c_str());
   }
-  fprintf(filep, "raw data size:0x%x used:0x%x\n", db_->raw_size,
-          db_->raw_used);
+  fprintf(filep, "raw data size:0x%x used:0x%x\n", db_->raw_size, db_->raw_used);
 }

@@ -17,6 +17,8 @@
 
 package com.android.bluetooth.hap;
 
+import static android.bluetooth.BluetoothProfile.getConnectionStateName;
+
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.IBluetoothHapClient;
 
@@ -39,12 +41,6 @@ public class HapClientStackEvent {
     public static final int EVENT_TYPE_ON_PRESET_INFO = 6;
     public static final int EVENT_TYPE_ON_PRESET_NAME_SET_ERROR = 7;
     public static final int EVENT_TYPE_ON_PRESET_INFO_ERROR = 8;
-
-    // Connection state values as defined in bt_has.h
-    static final int CONNECTION_STATE_DISCONNECTED = 0;
-    static final int CONNECTION_STATE_CONNECTING = 1;
-    static final int CONNECTION_STATE_CONNECTED = 2;
-    static final int CONNECTION_STATE_DISCONNECTING = 3;
 
     // Possible operation results
     /* WARNING: Matches status codes defined in bta_has.h */
@@ -94,12 +90,12 @@ public class HapClientStackEvent {
     public String toString() {
         // event dump
         StringBuilder result = new StringBuilder();
-        result.append("HearingAccessStackEvent {type:" + eventTypeToString(type));
-        result.append(", device: " + device);
-        result.append(", value1: " + eventTypeValueInt1ToString(type, valueInt1));
-        result.append(", value2: " + eventTypeValueInt2ToString(type, valueInt2));
-        result.append(", value3: " + eventTypeValueInt3ToString(type, valueInt3));
-        result.append(", list: " + eventTypeValueListToString(type, valueList));
+        result.append("HearingAccessStackEvent {type:").append(eventTypeToString(type));
+        result.append(", device: ").append(device);
+        result.append(", value1: ").append(eventTypeValueInt1ToString(type, valueInt1));
+        result.append(", value2: ").append(eventTypeValueInt2ToString(type, valueInt2));
+        result.append(", value3: ").append(eventTypeValueInt3ToString(type, valueInt3));
+        result.append(", list: ").append(eventTypeValueListToString(type, valueList));
 
         result.append("}");
         return result.toString();
@@ -117,7 +113,7 @@ public class HapClientStackEvent {
     private String eventTypeValueInt1ToString(int type, int value) {
         switch (type) {
             case EVENT_TYPE_CONNECTION_STATE_CHANGED:
-                return "{state: " + connectionStateValueToString(value) + "}";
+                return "{state: " + getConnectionStateName(value) + "}";
             case EVENT_TYPE_DEVICE_AVAILABLE:
                 return "{features: " + featuresToString(value) + "}";
             case EVENT_TYPE_DEVICE_FEATURES:
@@ -181,21 +177,6 @@ public class HapClientStackEvent {
         }
     }
 
-    private String connectionStateValueToString(int value) {
-        switch (value) {
-            case CONNECTION_STATE_DISCONNECTED:
-                return "CONNECTION_STATE_DISCONNECTED";
-            case CONNECTION_STATE_CONNECTING:
-                return "CONNECTION_STATE_CONNECTING";
-            case CONNECTION_STATE_CONNECTED:
-                return "CONNECTION_STATE_CONNECTED";
-            case CONNECTION_STATE_DISCONNECTING:
-                return "CONNECTION_STATE_DISCONNECTING";
-            default:
-                return "CONNECTION_STATE_UNKNOWN!";
-        }
-    }
-
     private String statusCodeValueToString(int value) {
         switch (value) {
             case STATUS_NO_ERROR:
@@ -220,29 +201,29 @@ public class HapClientStackEvent {
     }
 
     private String featuresToString(int value) {
-        String features_str = "";
+        StringBuilder features_sb = new StringBuilder();
         if (BigInteger.valueOf(value).testBit(FEATURE_BIT_NUM_TYPE_MONAURAL)) {
-            features_str += "TYPE_MONAURAL";
+            features_sb.append("TYPE_MONAURAL");
         } else if (BigInteger.valueOf(value).testBit(FEATURE_BIT_NUM_TYPE_BANDED)) {
-            features_str += "TYPE_BANDED";
+            features_sb.append("TYPE_BANDED");
         } else {
-            features_str += "TYPE_BINAURAL";
+            features_sb.append("TYPE_BINAURAL");
         }
 
         if (BigInteger.valueOf(value).testBit(FEATURE_BIT_NUM_SYNCHRONIZATED_PRESETS)) {
-            features_str += ", SYNCHRONIZATED_PRESETS";
+            features_sb.append(", SYNCHRONIZATED_PRESETS");
         }
         if (BigInteger.valueOf(value).testBit(FEATURE_BIT_NUM_INDEPENDENT_PRESETS)) {
-            features_str += ", INDEPENDENT_PRESETS";
+            features_sb.append(", INDEPENDENT_PRESETS");
         }
         if (BigInteger.valueOf(value).testBit(FEATURE_BIT_NUM_DYNAMIC_PRESETS)) {
-            features_str += ", DYNAMIC_PRESETS";
+            features_sb.append(", DYNAMIC_PRESETS");
         }
         if (BigInteger.valueOf(value).testBit(FEATURE_BIT_NUM_WRITABLE_PRESETS)) {
-            features_str += ", WRITABLE_PRESETS";
+            features_sb.append(", WRITABLE_PRESETS");
         }
 
-        return features_str;
+        return features_sb.toString();
     }
 
     private static String eventTypeToString(int type) {

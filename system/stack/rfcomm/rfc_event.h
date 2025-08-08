@@ -16,15 +16,14 @@
 
 #pragma once
 
+#include <bluetooth/log.h>
+
 #include <cstdint>
 
-/*
- * Events that can be received by multiplexer as well as port state machines
- */
+#include "macros.h"
+
+// Events that can be received by both multiplexer or port state machines
 enum tRFC_EVENT : uint16_t {
-  /*
-   * Events that can be received by multiplexer as well as port state machines
-   */
   RFC_EVENT_SABME = 0,
   RFC_EVENT_UA = 1,
   RFC_EVENT_DM = 2,
@@ -34,13 +33,8 @@ enum tRFC_EVENT : uint16_t {
   RFC_EVENT_BAD_FRAME = 50,
 };
 
-/*
- * Multiplexer events
- */
+// Multiplexer events
 enum tRFC_MX_EVENT : uint16_t {
-  /*
-   * Multiplexer events
-   */
   RFC_MX_EVENT_SABME = RFC_EVENT_SABME,
   RFC_MX_EVENT_UA = RFC_EVENT_UA,
   RFC_MX_EVENT_DM = RFC_EVENT_DM,
@@ -58,13 +52,8 @@ enum tRFC_MX_EVENT : uint16_t {
   RFC_MX_EVENT_DISC_IND = 14,
 };
 
-/*
- * Port events
- */
+// Port events
 enum tRFC_PORT_EVENT : uint16_t {
-  /*
-   * Port events
-   */
   RFC_PORT_EVENT_SABME = RFC_EVENT_SABME,
   RFC_PORT_EVENT_UA = RFC_EVENT_UA,
   RFC_PORT_EVENT_DM = RFC_EVENT_DM,
@@ -78,10 +67,6 @@ enum tRFC_PORT_EVENT : uint16_t {
   RFC_PORT_EVENT_DATA = 14,
   RFC_PORT_EVENT_SEC_COMPLETE = 15,
 };
-
-#define CASE_RETURN_TEXT(code) \
-  case code:                   \
-    return #code
 
 // Common events for both port and mux
 inline std::string rfcomm_event_text(const tRFC_EVENT& event) {
@@ -139,4 +124,11 @@ inline std::string rfcomm_port_event_text(const tRFC_PORT_EVENT& event) {
   }
 }
 
-#undef CASE_RETURN_TEXT
+namespace std {
+template <>
+struct formatter<tRFC_EVENT> : enum_formatter<tRFC_EVENT> {};
+template <>
+struct formatter<tRFC_MX_EVENT> : enum_formatter<tRFC_MX_EVENT> {};
+template <>
+struct formatter<tRFC_PORT_EVENT> : enum_formatter<tRFC_PORT_EVENT> {};
+}  // namespace std

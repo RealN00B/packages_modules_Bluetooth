@@ -294,3 +294,35 @@ message HeadsetProfileConnectionStats {
   // Number of times this type of headset profile is connected
   optional int32 num_times_connected = 2;
 }
+
+/**
+* Encapsulates Remote Device Information. Needs to be kept consistent with
+* BluetoothRemoteDeviceInformation
+* in frameworks/proto_logging/stats/atoms/bluetooth/bluetooth_extension_atoms.proto
+*
+* Logged from:
+*    packages/modules/Bluetooth
+*/
+message BluetoothRemoteDeviceInformation {
+  // SHA256 hashed Bluetooth device name.
+  optional string allowlisted_device_name_hash = 1;
+
+  // Class of Device
+  optional int32 class_of_device = 2;
+
+  // The first three bytes of MAC address
+  optional int32 oui = 3;
+
+  enum RemoteDeviceTypeMetadata {
+    WATCH = 0;
+    UNTETHERED_HEADSET = 1;
+    STYLUS = 2;
+    SPEAKER = 3;
+    HEADSET = 4;
+    CARKIT = 5;
+    DEFAULT = 6;
+    NOT_AVAILABLE = 7;
+  }
+  // Device type metadata
+  optional RemoteDeviceTypeMetadata device_type_metadata = 4;
+}

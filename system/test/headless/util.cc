@@ -16,19 +16,19 @@
 
 #include <string>
 
+#include "include/hardware/bluetooth.h"
 #include "osi/include/properties.h"
 
-namespace {
-constexpr char kZygoteService[] = "init.svc.zygote";
-constexpr char kZygoteServiceRunning[] = "running";
-
-}  // namespace
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
 
 bool is_android_running() {
+#ifdef __ANDROID__
   char value[PROPERTY_VALUE_MAX];
-  osi_property_get(kZygoteService, value, kZygoteServiceRunning);
-  if (!strncmp(kZygoteServiceRunning, value, PROPERTY_VALUE_MAX)) {
+  osi_property_get("init.svc.zygote", value, "running");
+  if (!strncmp("running", value, PROPERTY_VALUE_MAX)) {
     return true;
   }
+#endif
   return false;
 }

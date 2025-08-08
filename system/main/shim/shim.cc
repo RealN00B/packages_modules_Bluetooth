@@ -18,29 +18,24 @@
 
 #include "main/shim/shim.h"
 
-#include "gd/common/init_flags.h"
-#include "gd/os/log.h"
-#include "main/shim/entry.h"
+#include <bluetooth/log.h>
+
 #include "main/shim/hci_layer.h"
 #include "main/shim/stack.h"
+#include "stack/include/btu_hcif.h"
 #include "stack/include/main_thread.h"
 
 static const hci_t* hci;
 
-void btu_hci_msg_process(BT_HDR* p_msg);
-
-static void post_to_main_message_loop(const base::Location& from_here,
-                                      BT_HDR* p_msg) {
-  if (do_in_main_thread(from_here, base::Bind(&btu_hci_msg_process, p_msg)) !=
-      BT_STATUS_SUCCESS) {
-    LOG_ERROR(": do_in_main_thread failed from %s",
-              from_here.ToString().c_str());
+static void post_to_main_message_loop(BT_HDR* p_msg) {
+  if (do_in_main_thread(base::Bind(&btu_hci_msg_process, p_msg)) != BT_STATUS_SUCCESS) {
+    bluetooth::log::error("do_in_main_thread failed");
   }
 }
 
-future_t* ShimModuleStartUp() {
+static future_t* ShimModuleStartUp() {
   hci = bluetooth::shim::hci_layer_get_interface();
-  ASSERT_LOG(hci, "%s could not get hci layer interface.", __func__);
+  bluetooth::log::assert_that(hci, "could not get hci layer interface.");
 
   hci->set_data_cb(base::Bind(&post_to_main_message_loop));
 
@@ -48,27 +43,18 @@ future_t* ShimModuleStartUp() {
   return kReturnImmediate;
 }
 
-future_t* GeneralShutDown() {
+static future_t* GeneralShutDown() {
   bluetooth::shim::Stack::GetInstance()->Stop();
   return kReturnImmediate;
 }
 
-EXPORT_SYMBOL extern const module_t gd_shim_module = {
-    .name = GD_SHIM_MODULE,
-    .init = kUnusedModuleApi,
-    .start_up = ShimModuleStartUp,
-    .shut_down = GeneralShutDown,
-    .clean_up = kUnusedModuleApi,
-    .dependencies = {kUnusedModuleDependencies}};
+EXPORT_SYMBOL extern const module_t gd_shim_module = {.name = GD_SHIM_MODULE,
+                                                      .init = kUnusedModuleApi,
+                                                      .start_up = ShimModuleStartUp,
+                                                      .shut_down = GeneralShutDown,
+                                                      .clean_up = kUnusedModuleApi,
+                                                      .dependencies = {kUnusedModuleDependencies}};
 
 bool bluetooth::shim::is_gd_stack_started_up() {
   return bluetooth::shim::Stack::GetInstance()->IsRunning();
-}
-
-bool bluetooth::shim::is_gd_dumpsys_module_started() {
-  return bluetooth::shim::Stack::GetInstance()->IsDumpsysModuleStarted();
-}
-
-bool bluetooth::shim::is_classic_discovery_only_enabled() {
-  return bluetooth::common::init_flags::classic_discovery_only_is_enabled();
 }

@@ -16,32 +16,33 @@
 
 #define LOG_TAG "gatt"
 
+#include <bluetooth/log.h>
+
 #include <list>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "bta_gatt_server_queue.h"
-#include "osi/include/log.h"
 
 using gatts_operation = BtaGattServerQueue::gatts_operation;
 using bluetooth::Uuid;
+using namespace bluetooth;
 
 constexpr uint8_t GATT_NOTIFY = 1;
 
-std::unordered_map<uint16_t, std::list<gatts_operation>>
-    BtaGattServerQueue::gatts_op_queue;
-std::unordered_set<uint16_t> BtaGattServerQueue::gatts_op_queue_executing;
-std::unordered_map<uint16_t, bool> BtaGattServerQueue::congestion_queue;
+std::unordered_map<tCONN_ID, std::list<gatts_operation>> BtaGattServerQueue::gatts_op_queue;
+std::unordered_set<tCONN_ID> BtaGattServerQueue::gatts_op_queue_executing;
+std::unordered_map<tCONN_ID, bool> BtaGattServerQueue::congestion_queue;
 
-void BtaGattServerQueue::mark_as_not_executing(uint16_t conn_id) {
+void BtaGattServerQueue::mark_as_not_executing(tCONN_ID conn_id) {
   gatts_op_queue_executing.erase(conn_id);
 }
 
-void BtaGattServerQueue::gatts_execute_next_op(uint16_t conn_id) {
-  LOG_VERBOSE("%s: conn_id=0x%x", __func__, conn_id);
+void BtaGattServerQueue::gatts_execute_next_op(tCONN_ID conn_id) {
+  log::verbose("conn_id=0x{:x}", conn_id);
 
   if (gatts_op_queue.empty()) {
-    LOG_VERBOSE("%s: op queue is empty", __func__);
+    log::verbose("op queue is empty");
     return;
   }
 
@@ -49,10 +50,9 @@ void BtaGattServerQueue::gatts_execute_next_op(uint16_t conn_id) {
 
   if (ptr != congestion_queue.end()) {
     bool is_congested = ptr->second;
-    LOG_VERBOSE("%s: congestion queue exist, conn_id: %d, is_congested: %d",
-                __func__, conn_id, is_congested);
+    log::verbose("congestion queue exist, conn_id: {}, is_congested: {}", conn_id, is_congested);
     if (is_congested) {
-      LOG_VERBOSE("%s: lower layer is congested", __func__);
+      log::verbose("lower layer is congested");
       return;
     }
   }
@@ -60,53 +60,47 @@ void BtaGattServerQueue::gatts_execute_next_op(uint16_t conn_id) {
   auto map_ptr = gatts_op_queue.find(conn_id);
 
   if (map_ptr == gatts_op_queue.end()) {
-    LOG_VERBOSE("%s: Queue is null", __func__);
+    log::verbose("Queue is null");
     return;
   }
 
   if (map_ptr->second.empty()) {
-    LOG_VERBOSE("%s: queue is empty for conn_id: %d", __func__, conn_id);
+    log::verbose("queue is empty for conn_id: {}", conn_id);
     return;
   }
 
   if (gatts_op_queue_executing.count(conn_id)) {
-    LOG_VERBOSE("%s: can't enqueue next op, already executing", __func__);
+    log::verbose("can't enqueue next op, already executing");
     return;
   }
 
   gatts_operation op = map_ptr->second.front();
-  LOG_VERBOSE("%s: op.type=%d, attr_id=%d", __func__, op.type, op.attr_id);
+  log::verbose("op.type={}, attr_id={}", op.type, op.attr_id);
 
   if (op.type == GATT_NOTIFY) {
-    BTA_GATTS_HandleValueIndication(conn_id, op.attr_id, op.value,
-                                    op.need_confirm);
+    BTA_GATTS_HandleValueIndication(conn_id, op.attr_id, op.value, op.need_confirm);
     gatts_op_queue_executing.insert(conn_id);
   }
 }
 
-void BtaGattServerQueue::Clean(uint16_t conn_id) {
-  LOG_VERBOSE("%s: conn_id=0x%x", __func__, conn_id);
+void BtaGattServerQueue::Clean(tCONN_ID conn_id) {
+  log::verbose("conn_id=0x{:x}", conn_id);
 
   gatts_op_queue.erase(conn_id);
   gatts_op_queue_executing.erase(conn_id);
 }
 
-void BtaGattServerQueue::SendNotification(uint16_t conn_id, uint16_t handle,
-                                          std::vector<uint8_t> value,
-                                          bool need_confirm) {
-  gatts_op_queue[conn_id].emplace_back(
-      gatts_operation{.type = GATT_NOTIFY,
-                      .attr_id = handle,
-                      .value = value,
-                      .need_confirm = need_confirm});
+void BtaGattServerQueue::SendNotification(tCONN_ID conn_id, uint16_t handle,
+                                          std::vector<uint8_t> value, bool need_confirm) {
+  gatts_op_queue[conn_id].emplace_back(gatts_operation{
+          .type = GATT_NOTIFY, .attr_id = handle, .value = value, .need_confirm = need_confirm});
   gatts_execute_next_op(conn_id);
 }
 
-void BtaGattServerQueue::NotificationCallback(uint16_t conn_id) {
+void BtaGattServerQueue::NotificationCallback(tCONN_ID conn_id) {
   auto map_ptr = gatts_op_queue.find(conn_id);
   if (map_ptr == gatts_op_queue.end() || map_ptr->second.empty()) {
-    LOG_VERBOSE("%s: no more operations queued for conn_id %d", __func__,
-                conn_id);
+    log::verbose("no more operations queued for conn_id {}", conn_id);
     return;
   }
 
@@ -116,8 +110,8 @@ void BtaGattServerQueue::NotificationCallback(uint16_t conn_id) {
   gatts_execute_next_op(conn_id);
 }
 
-void BtaGattServerQueue::CongestionCallback(uint16_t conn_id, bool congested) {
-  LOG_VERBOSE("%s: conn_id: %d, congested: %d", __func__, conn_id, congested);
+void BtaGattServerQueue::CongestionCallback(tCONN_ID conn_id, bool congested) {
+  log::verbose("conn_id: {}, congested: {}", conn_id, congested);
 
   congestion_queue[conn_id] = congested;
   if (!congested) {

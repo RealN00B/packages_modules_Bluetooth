@@ -20,7 +20,6 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,11 +35,13 @@ import androidx.test.runner.AndroidJUnit4;
 import com.android.bluetooth.Utils;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 @MediumTest
 @RunWith(AndroidJUnit4.class)
@@ -54,6 +55,8 @@ public class AdapterPropertiesTest {
     private HandlerThread mHandlerThread;
     private Context mTargetContext;
 
+    @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
+
     @Mock private AdapterService mAdapterService;
     @Mock private AdapterNativeInterface mNativeInterface;
 
@@ -61,7 +64,6 @@ public class AdapterPropertiesTest {
     public void setUp() throws Exception {
         mTargetContext = InstrumentationRegistry.getTargetContext();
 
-        MockitoAnnotations.initMocks(this);
         doReturn(mNativeInterface).when(mAdapterService).getNative();
         mHandlerThread = new HandlerThread("RemoteDevicesTestHandlerThread");
         mHandlerThread.start();
@@ -80,26 +82,31 @@ public class AdapterPropertiesTest {
         when(mNativeInterface.removeBond(any(byte[].class))).thenReturn(true);
 
         mRemoteDevices = new RemoteDevices(mAdapterService, mHandlerThread.getLooper());
-        verify(mAdapterService, times(1)).getSystemService(Context.BLUETOOTH_SERVICE);
-        verify(mAdapterService, times(1)).getSystemService(BluetoothManager.class);
+        verify(mAdapterService).getSystemService(Context.BLUETOOTH_SERVICE);
+        verify(mAdapterService).getSystemService(BluetoothManager.class);
 
         mRemoteDevices.reset();
 
         doReturn(mHandlerThread.getLooper()).when(mAdapterService).getMainLooper();
-        doReturn(true).when(mAdapterService).isMock();
         when(mAdapterService.getResources())
                 .thenReturn(InstrumentationRegistry.getTargetContext().getResources());
 
         // Must be called to initialize services
-        mAdapterProperties = new AdapterProperties(mAdapterService);
-        mAdapterProperties.init(mRemoteDevices);
+        mAdapterProperties =
+                new AdapterProperties(mAdapterService, mRemoteDevices, mHandlerThread.getLooper());
+        mAdapterProperties.init();
     }
 
     @Test
     public void testCleanupPrevBondRecordsFor() {
         mRemoteDevices.reset();
-        mRemoteDevices.addDeviceProperties(TEST_BT_ADDR_BYTES);
-        mRemoteDevices.addDeviceProperties(TEST_BT_ADDR_BYTES_2);
+        mRemoteDevices
+                .addDeviceProperties(TEST_BT_ADDR_BYTES)
+                .setDeviceType(BluetoothDevice.DEVICE_TYPE_LE);
+        mRemoteDevices
+                .addDeviceProperties(TEST_BT_ADDR_BYTES_2)
+                .setDeviceType(BluetoothDevice.DEVICE_TYPE_LE);
+
         BluetoothDevice device1, device2;
         device1 = mRemoteDevices.getDevice(TEST_BT_ADDR_BYTES);
         device2 = mRemoteDevices.getDevice(TEST_BT_ADDR_BYTES_2);

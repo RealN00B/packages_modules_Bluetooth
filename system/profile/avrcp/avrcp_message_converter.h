@@ -16,21 +16,24 @@
 
 #pragma once
 
+#include <bluetooth/log.h>
+
 #include <iostream>
 #include <vector>
 
+#include "internal_include/bt_trace.h"
 #include "packet/avrcp/avrcp_packet.h"
 #include "stack/include/bt_hdr.h"
 
 // These classes are temporary placeholders to easily switch between BT_HDR and
 // packets.
 class VectorPacket : public ::bluetooth::Packet {
- public:
+public:
   using Packet::Packet;  // Inherit constructors
 
   static std::shared_ptr<VectorPacket> Make() {
     return std::shared_ptr<VectorPacket>(new VectorPacket());
-  };
+  }
 
   static std::shared_ptr<VectorPacket> Make(std::vector<uint8_t> payload) {
     auto pkt = VectorPacket::Make();
@@ -38,9 +41,9 @@ class VectorPacket : public ::bluetooth::Packet {
     pkt->packet_end_index_ = payload.size();
     pkt->data_ = std::make_shared<std::vector<uint8_t>>(std::move(payload));
     return pkt;
-  };
+  }
 
-  const std::vector<uint8_t>& GetData() { return *data_; };
+  const std::vector<uint8_t>& GetData() { return *data_; }
 
   virtual std::string ToString() const override {
     std::stringstream ss;
@@ -52,7 +55,7 @@ class VectorPacket : public ::bluetooth::Packet {
     ss << std::endl;
 
     return ss.str();
-  };
+  }
 
   virtual std::pair<size_t, size_t> GetPayloadIndecies() const override {
     return std::pair<size_t, size_t>(packet_start_index_, packet_end_index_);
@@ -64,7 +67,7 @@ class VectorPacket : public ::bluetooth::Packet {
 // TODO (apanicke): When deleting the old AVRCP Stack, remove this class and
 // instead create a BT_HDR Parsing packet.
 class AvrcpMessageConverter {
- public:
+public:
   static std::shared_ptr<::bluetooth::Packet> Parse(tAVRC_MSG* m) {
     std::vector<uint8_t> data;
 
@@ -98,7 +101,7 @@ class AvrcpMessageConverter {
         }
       } break;
       default:
-        LOG(ERROR) << "Unknown opcode for AVRCP message";
+        bluetooth::log::error("Unknown opcode for AVRCP message");
         break;
     }
 

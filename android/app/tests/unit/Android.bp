@@ -4,21 +4,25 @@ package {
 
 java_defaults {
     name: "BluetoothInstrumentationTestsDefaults",
-    defaults: ["framework-bluetooth-tests-defaults"],
+    defaults: [
+        "bluetooth_errorprone_rules",
+        "framework-bluetooth-tests-defaults",
+    ],
 
     min_sdk_version: "Tiramisu",
     target_sdk_version: "current",
     libs: [
-        "android.test.base",
-        "android.test.mock",
-        "android.test.runner",
-        "javax.obex",
+        "android.test.base.stubs",
+        "android.test.mock.stubs",
+        "android.test.runner.stubs",
+        "javax.obex.stubs",
         "libprotobuf-java-micro",
         "telephony-common",
     ],
 
     static_libs: [
         "PlatformProperties",
+        "android.media.audio-aconfig-exported-java",
         "androidx.media_media",
         "androidx.room_room-migration",
         "androidx.room_room-runtime",
@@ -27,13 +31,19 @@ java_defaults {
         "androidx.test.ext.truth",
         "androidx.test.rules",
         "androidx.test.uiautomator_uiautomator",
+        "bluetooth_flags_java_lib",
+        "com.android.sysprop.bluetooth",
+        "flag-junit",
         "framework-bluetooth-pre-jarjar",
         "frameworks-base-testutils",
         "gson",
         "mockito-target",
+        "platform-parametric-runner-lib",
+        "platform-test-annotations",
         "truth",
     ],
 
+    jarjar_rules: ":bluetooth-jarjar-rules",
     asset_dirs: ["src/com/android/bluetooth/btservice/storage/schemas"],
 
     // Include all test java files.

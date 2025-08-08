@@ -18,13 +18,15 @@
 
 #define LOG_TAG "btm_ble_cont_energy"
 
-#include <inttypes.h>
+#include <bluetooth/log.h>
 #include <string.h>
 
-#include "bt_target.h"
 #include "btm_ble_api.h"
-#include "osi/include/log.h"
 #include "stack/btm/btm_int_types.h"
+#include "stack/include/bt_types.h"
+#include "stack/include/btm_client_interface.h"
+
+using namespace bluetooth;
 
 extern tBTM_CB btm_cb;
 
@@ -44,11 +46,10 @@ tBTM_BLE_ENERGY_INFO_CB ble_energy_info_cb;
 static void btm_ble_cont_energy_cmpl_cback(tBTM_VSC_CMPL* p_params) {
   uint8_t* p = p_params->p_param_buf;
   uint16_t len = p_params->param_len;
-  uint32_t total_tx_time = 0, total_rx_time = 0, total_idle_time = 0,
-           total_energy_used = 0;
+  uint32_t total_tx_time = 0, total_rx_time = 0, total_idle_time = 0, total_energy_used = 0;
 
   if (len < 17) {
-    LOG_ERROR("wrong length for btm_ble_cont_energy_cmpl_cback");
+    log::error("wrong length for btm_ble_cont_energy_cmpl_cback");
     return;
   }
 
@@ -60,15 +61,13 @@ static void btm_ble_cont_energy_cmpl_cback(tBTM_VSC_CMPL* p_params) {
   STREAM_TO_UINT32(total_idle_time, p);
   STREAM_TO_UINT32(total_energy_used, p);
 
-  LOG_VERBOSE("energy_info status=%d,tx_t=%" PRId32 ", rx_t=%" PRId32
-              ", ener_used=%" PRId32 ", idle_t=%" PRId32,
-              status, total_tx_time, total_rx_time, total_energy_used,
-              total_idle_time);
+  log::verbose("energy_info status={},tx_t={}, rx_t={}, ener_used={}, idle_t={}", status,
+               total_tx_time, total_rx_time, total_energy_used, total_idle_time);
 
-  if (NULL != ble_energy_info_cb.p_ener_cback)
-    ble_energy_info_cb.p_ener_cback(total_tx_time, total_rx_time,
-                                    total_idle_time, total_energy_used,
-                                    static_cast<tHCI_STATUS>(status));
+  if (NULL != ble_energy_info_cb.p_ener_cback) {
+    ble_energy_info_cb.p_ener_cback(total_tx_time, total_rx_time, total_idle_time,
+                                    total_energy_used, static_cast<tHCI_STATUS>(status));
+  }
 
   return;
 }
@@ -89,15 +88,15 @@ tBTM_STATUS BTM_BleGetEnergyInfo(tBTM_BLE_ENERGY_INFO_CBACK* p_ener_cback) {
 
   BTM_BleGetVendorCapabilities(&cmn_ble_vsc_cb);
 
-  LOG_VERBOSE("BTM_BleGetEnergyInfo");
+  log::verbose("BTM_BleGetEnergyInfo");
 
   if (0 == cmn_ble_vsc_cb.energy_support) {
-    LOG_ERROR("Controller does not support get energy info");
-    return BTM_ERR_PROCESSING;
+    log::error("Controller does not support get energy info");
+    return tBTM_STATUS::BTM_ERR_PROCESSING;
   }
 
   ble_energy_info_cb.p_ener_cback = p_ener_cback;
-  BTM_VendorSpecificCommand(HCI_BLE_ENERGY_INFO, 0, NULL,
-                            btm_ble_cont_energy_cmpl_cback);
-  return BTM_CMD_STARTED;
+  get_btm_client_interface().vendor.BTM_VendorSpecificCommand(HCI_BLE_ENERGY_INFO, 0, NULL,
+                                                              btm_ble_cont_energy_cmpl_cback);
+  return tBTM_STATUS::BTM_CMD_STARTED;
 }

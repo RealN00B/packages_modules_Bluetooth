@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include <cstdint>
+#include <gmock/gmock.h>
+
 #include <memory>
 
 #include "hci/acl_manager/connection_callbacks.h"
@@ -27,14 +28,11 @@ namespace hci {
 namespace acl_manager {
 
 class MockConnectionCallback : public ConnectionCallbacks {
- public:
-  MOCK_METHOD(
-      void, OnConnectSuccess, (std::unique_ptr<ClassicAclConnection> connection), (override));
+public:
+  MOCK_METHOD(void, OnConnectSuccess, (std::unique_ptr<ClassicAclConnection> connection),
+              (override));
   MOCK_METHOD(void, OnConnectRequest, (Address, ClassOfDevice), (override));
   MOCK_METHOD(void, OnConnectFail, (Address, ErrorCode reason, bool locally_initiated), (override));
-
-  MOCK_METHOD(void, HACK_OnEscoConnectRequest, (Address, ClassOfDevice), (override));
-  MOCK_METHOD(void, HACK_OnScoConnectRequest, (Address, ClassOfDevice), (override));
 };
 
 }  // namespace acl_manager

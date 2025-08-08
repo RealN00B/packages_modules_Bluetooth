@@ -22,19 +22,17 @@
  *
  ******************************************************************************/
 
-#include <cstdint>
+#include <bluetooth/log.h>
 
-#include "bt_target.h"  // Must be first to define build configuration
+#include <cstdint>
 
 #include "bta/sys/bta_sys.h"
 #include "bta/sys/bta_sys_int.h"
-#include "main/shim/dumpsys.h"
-#include "osi/include/log.h"
-#include "osi/include/osi.h"  // UNUSED_ATTR
-#include "stack/include/btm_api.h"
+#include "stack/include/btm_client_interface.h"
 #include "types/hci_role.h"
 #include "types/raw_address.h"
 
+using namespace bluetooth;
 /*******************************************************************************
  *
  * Function         bta_sys_rm_register
@@ -45,9 +43,7 @@
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_rm_register(tBTA_SYS_CONN_CBACK* p_cback) {
-  bta_sys_cb.prm_cb = p_cback;
-}
+void bta_sys_rm_register(tBTA_SYS_CONN_CBACK* p_cback) { bta_sys_cb.prm_cb = p_cback; }
 
 /*******************************************************************************
  *
@@ -62,19 +58,6 @@ void bta_sys_rm_register(tBTA_SYS_CONN_CBACK* p_cback) {
 void bta_sys_role_chg_register(tBTA_SYS_ROLE_SWITCH_CBACK* p_cback) {
   bta_sys_cb.p_role_cb = p_cback;
 }
-/*******************************************************************************
- *
- * Function         bta_sys_ssr_cfg_register
- *
- * Description      Called by BTA DM to register SSR configuration callback
- *
- *
- * Returns          void
- *
- ******************************************************************************/
-void bta_sys_ssr_cfg_register(tBTA_SYS_SSR_CFG_CBACK* p_cback) {
-  bta_sys_cb.p_ssr_cb = p_cback;
-}
 
 /*******************************************************************************
  *
@@ -88,9 +71,8 @@ void bta_sys_ssr_cfg_register(tBTA_SYS_SSR_CFG_CBACK* p_cback) {
  ******************************************************************************/
 void bta_sys_notify_role_chg(const RawAddress& peer_addr, tHCI_ROLE new_role,
                              tHCI_STATUS hci_status) {
-  LOG_DEBUG("Role changed peer:%s new_role:%s hci_status:%s",
-            ADDRESS_TO_LOGGABLE_CSTR(peer_addr), RoleText(new_role).c_str(),
-            hci_error_code_text(hci_status).c_str());
+  log::debug("Role changed peer:{} new_role:{} hci_status:{}", peer_addr, RoleText(new_role),
+             hci_error_code_text(hci_status));
   if (bta_sys_cb.p_role_cb) {
     bta_sys_cb.p_role_cb(BTA_SYS_ROLE_CHANGE, new_role, hci_status, peer_addr);
   }
@@ -106,13 +88,11 @@ void bta_sys_notify_role_chg(const RawAddress& peer_addr, tHCI_ROLE new_role,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_collision_register(tBTA_SYS_ID bta_id,
-                                tBTA_SYS_CONN_CBACK* p_cback) {
+void bta_sys_collision_register(tBTA_SYS_ID bta_id, tBTA_SYS_CONN_CBACK* p_cback) {
   uint8_t index;
 
   for (index = 0; index < MAX_COLLISION_REG; index++) {
-    if ((bta_sys_cb.colli_reg.id[index] == bta_id) ||
-        (bta_sys_cb.colli_reg.id[index] == 0)) {
+    if ((bta_sys_cb.colli_reg.id[index] == bta_id) || (bta_sys_cb.colli_reg.id[index] == 0)) {
       bta_sys_cb.colli_reg.id[index] = bta_id;
       bta_sys_cb.colli_reg.p_coll_cback[index] = p_cback;
       return;
@@ -136,8 +116,7 @@ void bta_sys_notify_collision(const RawAddress& peer_addr) {
   for (index = 0; index < MAX_COLLISION_REG; index++) {
     if ((bta_sys_cb.colli_reg.id[index] != 0) &&
         (bta_sys_cb.colli_reg.p_coll_cback[index] != NULL)) {
-      bta_sys_cb.colli_reg.p_coll_cback[index](BTA_SYS_CONN_OPEN, BTA_ID_SYS, 0,
-                                               peer_addr);
+      bta_sys_cb.colli_reg.p_coll_cback[index](BTA_SYS_CONN_OPEN, BTA_ID_SYS, 0, peer_addr);
     }
   }
 }
@@ -152,9 +131,7 @@ void bta_sys_notify_collision(const RawAddress& peer_addr) {
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_sco_register(tBTA_SYS_CONN_SCO_CBACK* p_cback) {
-  bta_sys_cb.p_sco_cb = p_cback;
-}
+void bta_sys_sco_register(tBTA_SYS_CONN_SCO_CBACK* p_cback) { bta_sys_cb.p_sco_cb = p_cback; }
 
 /*******************************************************************************
  *
@@ -166,8 +143,34 @@ void bta_sys_sco_register(tBTA_SYS_CONN_SCO_CBACK* p_cback) {
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_pm_register(tBTA_SYS_CONN_CBACK* p_cback) {
-  bta_sys_cb.ppm_cb = p_cback;
+void bta_sys_pm_register(tBTA_SYS_CONN_CBACK* p_cback) { bta_sys_cb.ppm_cb = p_cback; }
+
+/*******************************************************************************
+ *
+ * Function         bta_sys_sniff_register
+ *
+ * Description      Called by BTA DM to register sniff callbacks
+ *
+ *
+ * Returns          void
+ *
+ ******************************************************************************/
+void bta_sys_sniff_register(tBTA_SYS_SNIFF_CBACK* p_cback) { bta_sys_cb.sniff_cb = p_cback; }
+
+/*******************************************************************************
+ *
+ * Function         bta_sys_reset_sniff
+ *
+ * Description      Called by BTA subsystems to reset sniff timer
+ *
+ *
+ * Returns          void
+ *
+ ******************************************************************************/
+void bta_sys_reset_sniff(uint8_t id, uint8_t app_id, const RawAddress& peer_addr) {
+  if (bta_sys_cb.sniff_cb) {
+    bta_sys_cb.sniff_cb(id, app_id, peer_addr);
+  }
 }
 
 /*******************************************************************************
@@ -181,8 +184,7 @@ void bta_sys_pm_register(tBTA_SYS_CONN_CBACK* p_cback) {
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_conn_open(tBTA_SYS_ID id, uint8_t app_id,
-                       const RawAddress& peer_addr) {
+void bta_sys_conn_open(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
   if (bta_sys_cb.prm_cb) {
     bta_sys_cb.prm_cb(BTA_SYS_CONN_OPEN, id, app_id, peer_addr);
   }
@@ -203,8 +205,7 @@ void bta_sys_conn_open(tBTA_SYS_ID id, uint8_t app_id,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_conn_close(tBTA_SYS_ID id, uint8_t app_id,
-                        const RawAddress& peer_addr) {
+void bta_sys_conn_close(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
   if (bta_sys_cb.prm_cb) {
     bta_sys_cb.prm_cb(BTA_SYS_CONN_CLOSE, id, app_id, peer_addr);
   }
@@ -225,8 +226,7 @@ void bta_sys_conn_close(tBTA_SYS_ID id, uint8_t app_id,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_app_open(tBTA_SYS_ID id, uint8_t app_id,
-                      const RawAddress& peer_addr) {
+void bta_sys_app_open(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
   if (bta_sys_cb.ppm_cb) {
     bta_sys_cb.ppm_cb(BTA_SYS_APP_OPEN, id, app_id, peer_addr);
   }
@@ -242,8 +242,7 @@ void bta_sys_app_open(tBTA_SYS_ID id, uint8_t app_id,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_app_close(tBTA_SYS_ID id, uint8_t app_id,
-                       const RawAddress& peer_addr) {
+void bta_sys_app_close(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
   if (bta_sys_cb.ppm_cb) {
     bta_sys_cb.ppm_cb(BTA_SYS_APP_CLOSE, id, app_id, peer_addr);
   }
@@ -259,8 +258,7 @@ void bta_sys_app_close(tBTA_SYS_ID id, uint8_t app_id,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_sco_open(tBTA_SYS_ID id, uint8_t app_id,
-                      const RawAddress& peer_addr) {
+void bta_sys_sco_open(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
   /* AG triggers p_sco_cb by bta_sys_sco_use. */
   if ((id != BTA_ID_AG) && (bta_sys_cb.p_sco_cb)) {
     /* without querying BTM_GetNumScoLinks() */
@@ -282,12 +280,11 @@ void bta_sys_sco_open(tBTA_SYS_ID id, uint8_t app_id,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_sco_close(tBTA_SYS_ID id, uint8_t app_id,
-                       const RawAddress& peer_addr) {
+void bta_sys_sco_close(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
   uint8_t num_sco_links;
 
   if ((id != BTA_ID_AG) && (bta_sys_cb.p_sco_cb)) {
-    num_sco_links = BTM_GetNumScoLinks();
+    num_sco_links = get_btm_client_interface().sco.BTM_GetNumScoLinks();
     bta_sys_cb.p_sco_cb(BTA_SYS_SCO_CLOSE, num_sco_links, app_id, peer_addr);
   }
 
@@ -306,8 +303,7 @@ void bta_sys_sco_close(tBTA_SYS_ID id, uint8_t app_id,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_sco_use(UNUSED_ATTR tBTA_SYS_ID id, uint8_t app_id,
-                     const RawAddress& peer_addr) {
+void bta_sys_sco_use(tBTA_SYS_ID /* id */, uint8_t app_id, const RawAddress& peer_addr) {
   /* AV streaming need to be suspended before SCO is connected. */
   if (bta_sys_cb.p_sco_cb) {
     /* without querying BTM_GetNumScoLinks() */
@@ -325,27 +321,10 @@ void bta_sys_sco_use(UNUSED_ATTR tBTA_SYS_ID id, uint8_t app_id,
  * Returns          void
  *
  ******************************************************************************/
-void bta_sys_sco_unuse(UNUSED_ATTR tBTA_SYS_ID id, uint8_t app_id,
-                       const RawAddress& peer_addr) {
-  if ((bta_sys_cb.p_sco_cb)) {
-    uint8_t num_sco_links = BTM_GetNumScoLinks();
+void bta_sys_sco_unuse(tBTA_SYS_ID /* id */, uint8_t app_id, const RawAddress& peer_addr) {
+  if (bta_sys_cb.p_sco_cb) {
+    uint8_t num_sco_links = get_btm_client_interface().sco.BTM_GetNumScoLinks();
     bta_sys_cb.p_sco_cb(BTA_SYS_SCO_CLOSE, num_sco_links, app_id, peer_addr);
-  }
-}
-/*******************************************************************************
- *
- * Function         bta_sys_chg_ssr_config
- *
- * Description      Called by BTA subsystems to indicate that the given app SSR
- *                  setting needs to be changed.
- *
- * Returns          void
- *
- ******************************************************************************/
-void bta_sys_chg_ssr_config(uint8_t id, uint8_t app_id, uint16_t max_latency,
-                            uint16_t min_tout) {
-  if (bta_sys_cb.p_ssr_cb) {
-    bta_sys_cb.p_ssr_cb(id, app_id, max_latency, min_tout);
   }
 }
 
@@ -389,7 +368,6 @@ void bta_sys_busy(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
   }
 }
 
-#if (BTA_EIR_CANNED_UUID_LIST != TRUE)
 /*******************************************************************************
  *
  * Function         bta_sys_eir_register
@@ -402,14 +380,14 @@ void bta_sys_busy(tBTA_SYS_ID id, uint8_t app_id, const RawAddress& peer_addr) {
  ******************************************************************************/
 void bta_sys_eir_register(tBTA_SYS_EIR_CBACK* p_cback) {
   if (bta_sys_cb.eir_cb != nullptr) {
-    LOG_WARN("Already registered extended inquiry result callback");
+    log::warn("Already registered extended inquiry result callback");
   }
   bta_sys_cb.eir_cb = p_cback;
 }
 
 void bta_sys_eir_unregister() {
   if (bta_sys_cb.eir_cb == nullptr) {
-    LOG_WARN("Already unregistered extended inquiry result callback");
+    log::warn("Already unregistered extended inquiry result callback");
   }
   bta_sys_cb.eir_cb = nullptr;
 }
@@ -491,4 +469,3 @@ void bta_sys_remove_cust_uuid(const tBTA_CUSTOM_UUID& curr) {
     bta_sys_cb.cust_eir_cb(curr, false);
   }
 }
-#endif

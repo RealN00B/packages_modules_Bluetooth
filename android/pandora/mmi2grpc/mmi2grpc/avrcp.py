@@ -1,10 +1,10 @@
-# Copyright 2022 Google LLC
+# Copyright (C) 2024 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     https://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,17 +17,16 @@ import time
 from typing import Optional
 
 from grpc import RpcError
-
 from mmi2grpc._audio import AudioSignal
 from mmi2grpc._helpers import assert_description
 from mmi2grpc._proxy import ProfileProxy
 from pandora.a2dp_grpc import A2DP
 from pandora.a2dp_pb2 import Sink, Source
-from pandora_experimental.avrcp_grpc import AVRCP
 from pandora.host_grpc import Host
 from pandora.host_pb2 import Connection
+from pandora_experimental.avrcp_grpc import AVRCP
 from pandora_experimental.mediaplayer_grpc import MediaPlayer
-from pandora_experimental.mediaplayer_pb2 import NONE, ALL, GROUP
+from pandora_experimental.mediaplayer_pb2 import ALL, GROUP, NONE
 
 
 class AVRCPProxy(ProfileProxy):

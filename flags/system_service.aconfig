@@ -1,23 +1,69 @@
 package: "com.android.bluetooth.flags"
+container: "com.android.btservices"
 
 flag {
-    name: "airplane_ressources_in_app"
+    name: "enforce_resolve_system_service_behavior"
     namespace: "bluetooth"
-    description: "User notification is done within app, not server"
-    bug: "303552318"
+    description: "Loudly crash when it is not possible to find a service to start bluetooth"
+    metadata {
+        purpose: PURPOSE_BUGFIX
+    }
+    bug: "366273182"
 }
 
 flag {
-    name: "use_new_airplane_mode"
+    name: "get_state_from_system_server"
     namespace: "bluetooth"
-    description: "Use the new implemention of airplane mode"
-    bug: "309033118"
+    description: "Get Bluetooth state from system server instead of from Bluetooth app"
+    metadata {
+        purpose: PURPOSE_BUGFIX
+    }
+    bug: "362569584"
 }
 
 flag {
-    name: "use_new_satellite_mode"
+    name: "get_name_and_address_as_callback"
     namespace: "bluetooth"
-    description: "Use the new implemention of satellite mode"
-    bug: "289584302"
+    description: "Getting the name and address is a non-oneway call. Instead inform the system server with callback"
+    metadata {
+        purpose: PURPOSE_BUGFIX
+    }
+    bug: "368114370"
 }
 
+flag {
+    name: "kill_instead_of_exit"
+    namespace: "bluetooth"
+    description: "There is no value in pretending we are exiting properly. This is a kill and we should express it this way when finishing the process"
+    metadata {
+        purpose: PURPOSE_BUGFIX
+    }
+    bug: "339553092"
+}
+
+flag {
+    name: "remove_one_time_get_name_and_address"
+    namespace: "bluetooth"
+    description: "We don't need to start bluetooth the first time to get name & address. We can wait for a proper start"
+    metadata {
+        purpose: PURPOSE_BUGFIX
+    }
+    bug: "368120237"
+}
+
+flag {
+    name: "respect_ble_scan_setting"
+    namespace: "bluetooth"
+    description: "No longer allow BLE_ON mode when the settings is explicitly disable"
+    metadata {
+        purpose: PURPOSE_BUGFIX
+    }
+    bug: "341783936"
+}
+
+flag {
+    name: "system_server_messenger"
+    namespace: "bluetooth"
+    description: "Replace binder call to the system server with a Messenger to enforce thread safety"
+    bug: "321804999"
+}

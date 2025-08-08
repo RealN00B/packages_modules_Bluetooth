@@ -16,8 +16,9 @@
  */
 
 #pragma once
-#include <base/logging.h>
+
 #include <base/strings/string_number_conversions.h>
+#include <bluetooth/log.h>
 
 #include <algorithm>
 #include <map>
@@ -26,9 +27,7 @@
 #include "bta_csis_api.h"
 #include "bta_gatt_api.h"
 #include "bta_groups.h"
-#include "btif_storage.h"
-#include "common/init_flags.h"
-#include "common/strings.h"
+#include "btif/include/btif_storage.h"
 #include "crypto_toolbox/crypto_toolbox.h"
 #include "gap_api.h"
 
@@ -42,8 +41,7 @@ using bluetooth::csis::CsisLockCb;
 
 // CSIP additions
 /* Generic UUID is used when CSIS is not included in any context */
-static const bluetooth::Uuid kCsisServiceUuid =
-    bluetooth::Uuid::From16Bit(0x1846);
+static const bluetooth::Uuid kCsisServiceUuid = bluetooth::Uuid::From16Bit(0x1846);
 static const bluetooth::Uuid kCsisSirkUuid = bluetooth::Uuid::From16Bit(0x2B84);
 static const bluetooth::Uuid kCsisSizeUuid = bluetooth::Uuid::From16Bit(0x2B85);
 static const bluetooth::Uuid kCsisLockUuid = bluetooth::Uuid::From16Bit(0x2B86);
@@ -61,8 +59,7 @@ static constexpr uint8_t kCsisSirkCharLen = 17;
 
 struct hdl_pair {
   hdl_pair() {}
-  hdl_pair(uint16_t val_hdl, uint16_t ccc_hdl)
-      : val_hdl(val_hdl), ccc_hdl(ccc_hdl) {}
+  hdl_pair(uint16_t val_hdl, uint16_t ccc_hdl) : val_hdl(val_hdl), ccc_hdl(ccc_hdl) {}
 
   uint16_t val_hdl;
   uint16_t ccc_hdl;
@@ -87,49 +84,42 @@ enum class CsisDiscoveryState : uint8_t {
 };
 
 class GattServiceDevice {
- public:
+public:
   RawAddress addr;
-  /*
-   * This is true only during first connection to profile, until we store the
-   * device.
-   */
-  bool first_connection;
-
   /*
    * We are making active attempt to connect to this device, 'direct connect'.
    */
   bool connecting_actively = false;
 
-  uint16_t conn_id = GATT_INVALID_CONN_ID;
+  tCONN_ID conn_id = GATT_INVALID_CONN_ID;
   uint16_t service_handle = GAP_INVALID_HANDLE;
   bool is_gatt_service_valid = false;
 
-  GattServiceDevice(const RawAddress& addr, bool first_connection)
-      : addr(addr), first_connection(first_connection) {}
+  GattServiceDevice(const RawAddress& addr, bool /*first_connection*/) : addr(addr) {}
 
   GattServiceDevice() : GattServiceDevice(RawAddress::kEmpty, false) {}
 
-  bool IsConnected() const { return (conn_id != GATT_INVALID_CONN_ID); }
+  bool IsConnected() const { return conn_id != GATT_INVALID_CONN_ID; }
 
   class MatchAddress {
-   private:
+  private:
     RawAddress addr;
 
-   public:
+  public:
     MatchAddress(const RawAddress& addr) : addr(addr) {}
     bool operator()(const std::shared_ptr<GattServiceDevice>& other) const {
-      return (addr == other->addr);
+      return addr == other->addr;
     }
   };
 
   class MatchConnId {
-   private:
-    uint16_t conn_id;
+  private:
+    tCONN_ID conn_id;
 
-   public:
-    MatchConnId(uint16_t conn_id) : conn_id(conn_id) {}
+  public:
+    MatchConnId(tCONN_ID conn_id) : conn_id(conn_id) {}
     bool operator()(const std::shared_ptr<GattServiceDevice>& other) const {
-      return (conn_id == other->conn_id);
+      return conn_id == other->conn_id;
     }
   };
 };
@@ -144,7 +134,7 @@ class GattServiceDevice {
  * service.
  */
 class CsisInstance {
- public:
+public:
   bluetooth::Uuid coordinated_service = bluetooth::groups::kGenericContextUuid;
 
   struct SvcData {
@@ -155,16 +145,15 @@ class CsisInstance {
     uint16_t rank_handle;
     struct hdl_pair size_handle;
   } svc_data = {
-      GAP_INVALID_HANDLE,
-      GAP_INVALID_HANDLE,
-      {GAP_INVALID_HANDLE, GAP_INVALID_HANDLE},
-      {GAP_INVALID_HANDLE, GAP_INVALID_HANDLE},
-      GAP_INVALID_HANDLE,
-      {GAP_INVALID_HANDLE, GAP_INVALID_HANDLE},
+          GAP_INVALID_HANDLE,
+          GAP_INVALID_HANDLE,
+          {GAP_INVALID_HANDLE, GAP_INVALID_HANDLE},
+          {GAP_INVALID_HANDLE, GAP_INVALID_HANDLE},
+          GAP_INVALID_HANDLE,
+          {GAP_INVALID_HANDLE, GAP_INVALID_HANDLE},
   };
 
-  CsisInstance(uint16_t start_handle, uint16_t end_handle,
-               const bluetooth::Uuid& uuid)
+  CsisInstance(uint16_t start_handle, uint16_t end_handle, const bluetooth::Uuid& uuid)
       : coordinated_service(uuid),
         group_id_(bluetooth::groups::kGroupUnknown),
         rank_(kUnknownRank),
@@ -174,36 +163,32 @@ class CsisInstance {
   }
 
   void SetLockState(CsisLockState state) {
-    LOG_DEBUG("current lock state: %d, new lock state: %d",
-              static_cast<int>(lock_state_), static_cast<int>(state));
+    log::debug("current lock state: {}, new lock state: {}", static_cast<int>(lock_state_),
+               static_cast<int>(state));
     lock_state_ = state;
   }
   CsisLockState GetLockState(void) const { return lock_state_; }
   uint8_t GetRank(void) const { return rank_; }
   void SetRank(uint8_t rank) {
-    LOG_DEBUG("current rank: %d, new rank: %d", static_cast<int>(rank_),
-              static_cast<int>(rank));
+    log::debug("current rank: {}, new rank: {}", static_cast<int>(rank_), static_cast<int>(rank));
     rank_ = rank;
   }
 
   void SetGroupId(int group_id) {
-    LOG_INFO("set group id: %d, instance handle: 0x%04x", group_id,
-             svc_data.start_handle);
+    log::info("set group id: {}, instance handle: 0x{:04x}", group_id, svc_data.start_handle);
     group_id_ = group_id;
   }
 
   int GetGroupId(void) const { return group_id_; }
 
   bool HasSameUuid(const CsisInstance& csis_instance) const {
-    return (csis_instance.coordinated_service == coordinated_service);
+    return csis_instance.coordinated_service == coordinated_service;
   }
 
   const bluetooth::Uuid& GetUuid(void) const { return coordinated_service; }
-  bool IsForUuid(const bluetooth::Uuid& uuid) const {
-    return coordinated_service == uuid;
-  }
+  bool IsForUuid(const bluetooth::Uuid& uuid) const { return coordinated_service == uuid; }
 
- private:
+private:
   int group_id_;
   uint8_t rank_;
   CsisLockState lock_state_;
@@ -218,7 +203,7 @@ class CsisInstance {
  * CsisDevice contains vector of the instances.
  */
 class CsisDevice : public GattServiceDevice {
- public:
+public:
   using GattServiceDevice::GattServiceDevice;
 
   void ClearSvcData() {
@@ -248,10 +233,9 @@ class CsisDevice : public GattServiceDevice {
   std::shared_ptr<CsisInstance> GetCsisInstanceByOwningHandle(uint16_t handle) {
     uint16_t hdl = 0;
     for (const auto& [h, inst] : csis_instances_) {
-      if (handle >= inst->svc_data.start_handle &&
-          handle <= inst->svc_data.end_handle) {
+      if (handle >= inst->svc_data.start_handle && handle <= inst->svc_data.end_handle) {
         hdl = h;
-        LOG_VERBOSE("found 0x%04x", hdl);
+        log::verbose("found 0x{:04x}", hdl);
         break;
       }
     }
@@ -269,17 +253,14 @@ class CsisDevice : public GattServiceDevice {
     return (hdl > 0) ? csis_instances_.at(hdl) : nullptr;
   }
 
-  void SetCsisInstance(uint16_t handle,
-                       std::shared_ptr<CsisInstance> csis_instance) {
+  void SetCsisInstance(uint16_t handle, std::shared_ptr<CsisInstance> csis_instance) {
     if (csis_instances_.count(handle)) {
-      LOG_DEBUG("instance is already here: %s",
-                csis_instance->GetUuid().ToString().c_str());
+      log::debug("instance is already here: {}", csis_instance->GetUuid().ToString());
       return;
     }
 
     csis_instances_.insert({handle, csis_instance});
-    LOG_DEBUG("instance added: 0x%04x, device %s", handle,
-              ADDRESS_TO_LOGGABLE_CSTR(addr));
+    log::debug("instance added: 0x{:04x}, device {}", handle, addr);
   }
 
   void RemoveCsisInstance(int group_id) {
@@ -293,29 +274,27 @@ class CsisDevice : public GattServiceDevice {
 
   int GetNumberOfCsisInstances(void) { return csis_instances_.size(); }
 
-  void ForEachCsisInstance(
-      std::function<void(const std::shared_ptr<CsisInstance>&)> cb) {
+  void ForEachCsisInstance(std::function<void(const std::shared_ptr<CsisInstance>&)> cb) {
     for (auto const& kv_pair : csis_instances_) {
       cb(kv_pair.second);
     }
   }
 
   void SetExpectedGroupIdMember(int group_id) {
-    LOG_INFO("Expected Group ID: %d, for member: %s is set", group_id,
-             ADDRESS_TO_LOGGABLE_CSTR(addr));
+    log::info("Expected Group ID: {}, for member: {} is set", group_id, addr);
     expected_group_id_member_ = group_id;
   }
 
   void SetPairingSirkReadFlag(bool flag) {
-    LOG_INFO("Pairing flag for Group ID: %d, member: %s is set to %d",
-             expected_group_id_member_, ADDRESS_TO_LOGGABLE_CSTR(addr), flag);
+    log::info("Pairing flag for Group ID: {}, member: {} is set to {}", expected_group_id_member_,
+              addr, flag);
     pairing_sirk_read_flag_ = flag;
   }
 
   inline int GetExpectedGroupIdMember() { return expected_group_id_member_; }
   inline bool GetPairingSirkReadFlag() { return pairing_sirk_read_flag_; }
 
- private:
+private:
   /* Instances per start handle  */
   std::map<uint16_t, std::shared_ptr<CsisInstance>> csis_instances_;
   int expected_group_id_member_ = bluetooth::groups::kGroupUnknown;
@@ -328,7 +307,7 @@ class CsisDevice : public GattServiceDevice {
  * resolve PRSI in order to find out if device belongs to given group
  */
 class CsisGroup {
- public:
+public:
   CsisGroup(int group_id, const bluetooth::Uuid& uuid)
       : group_id_(group_id),
         size_(kDefaultCsisSetSize),
@@ -338,25 +317,28 @@ class CsisGroup {
         target_lock_state_(CsisLockState::CSIS_STATE_UNSET),
         lock_transition_cnt_(0) {
     devices_.clear();
-    BTIF_STORAGE_FILL_PROPERTY(&model_name, BT_PROPERTY_REMOTE_MODEL_NUM,
-                               sizeof(model_name_val), &model_name_val);
+    BTIF_STORAGE_FILL_PROPERTY(&model_name, BT_PROPERTY_REMOTE_MODEL_NUM, sizeof(model_name_val),
+                               &model_name_val);
   }
 
   bt_property_t model_name;
   bt_bdname_t model_name_val = {0};
 
   void AddDevice(std::shared_ptr<CsisDevice> csis_device) {
-    auto it = find_if(devices_.begin(), devices_.end(),
-                      CsisDevice::MatchAddress(csis_device->addr));
-    if (it != devices_.end()) return;
+    auto it =
+            find_if(devices_.begin(), devices_.end(), CsisDevice::MatchAddress(csis_device->addr));
+    if (it != devices_.end()) {
+      return;
+    }
 
     devices_.push_back(std::move(csis_device));
   }
 
   void RemoveDevice(const RawAddress& bd_addr) {
-    auto it = find_if(devices_.begin(), devices_.end(),
-                      CsisDevice::MatchAddress(bd_addr));
-    if (it != devices_.end()) devices_.erase(it);
+    auto it = find_if(devices_.begin(), devices_.end(), CsisDevice::MatchAddress(bd_addr));
+    if (it != devices_.end()) {
+      devices_.erase(it);
+    }
   }
 
   int GetCurrentSize(void) const { return devices_.size(); }
@@ -369,20 +351,16 @@ class CsisGroup {
   bool IsEmpty(void) const { return devices_.empty(); }
 
   bool IsDeviceInTheGroup(std::shared_ptr<CsisDevice>& csis_device) {
-    auto it = find_if(devices_.begin(), devices_.end(),
-                      CsisDevice::MatchAddress(csis_device->addr));
-    return (it != devices_.end());
+    auto it =
+            find_if(devices_.begin(), devices_.end(), CsisDevice::MatchAddress(csis_device->addr));
+    return it != devices_.end();
   }
-  bool IsRsiMatching(const RawAddress& rsi) const {
-    return is_rsi_match_sirk(rsi, GetSirk());
-  }
-  bool IsSirkBelongsToGroup(Octet16 sirk) const {
-    return (sirk_available_ && sirk_ == sirk);
-  }
+  bool IsRsiMatching(const RawAddress& rsi) const { return is_rsi_match_sirk(rsi, GetSirk()); }
+  bool IsSirkBelongsToGroup(Octet16 sirk) const { return sirk_available_ && sirk_ == sirk; }
   Octet16 GetSirk(void) const { return sirk_; }
   void SetSirk(Octet16& sirk) {
     if (sirk_available_) {
-      LOG_DEBUG("Updating SIRK");
+      log::debug("Updating SIRK");
     }
     sirk_available_ = true;
     sirk_ = sirk;
@@ -393,20 +371,16 @@ class CsisGroup {
                          [](auto& d) { return d->IsConnected(); });
   }
 
-  CsisDiscoveryState GetDiscoveryState(void) const {
-    return member_discovery_state_;
-  }
+  CsisDiscoveryState GetDiscoveryState(void) const { return member_discovery_state_; }
   void SetDiscoveryState(CsisDiscoveryState state) {
-    LOG_DEBUG("current discovery state: %d, new discovery state: %d",
-              static_cast<int>(member_discovery_state_),
-              static_cast<int>(state));
+    log::debug("current discovery state: {}, new discovery state: {}",
+               static_cast<int>(member_discovery_state_), static_cast<int>(state));
     member_discovery_state_ = state;
   }
 
   void SetCurrentLockState(CsisLockState state) { lock_state_ = state; }
 
-  void SetTargetLockState(CsisLockState state,
-                          CsisLockCb cb = base::DoNothing()) {
+  void SetTargetLockState(CsisLockState state, CsisLockCb cb = base::DoNothing()) {
     target_lock_state_ = state;
     cb_ = std::move(cb);
     switch (state) {
@@ -428,34 +402,30 @@ class CsisGroup {
   bool IsAvailableForCsisLockOperation(void) {
     int id = group_id_;
     int number_of_connected = 0;
-    auto iter = std::find_if(
-        devices_.begin(), devices_.end(), [id, &number_of_connected](auto& d) {
-          if (!d->IsConnected()) {
-            LOG_DEBUG("Device %s is not connected in group %d",
-                      ADDRESS_TO_LOGGABLE_CSTR(d->addr), id);
-            return false;
-          }
-          auto inst = d->GetCsisInstanceByGroupId(id);
-          if (!inst) {
-            LOG_DEBUG("Instance not available for group %d", id);
-            return false;
-          }
-          number_of_connected++;
-          LOG_DEBUG("Device %s,  lock state: %d",
-                    ADDRESS_TO_LOGGABLE_CSTR(d->addr),
-                    (int)inst->GetLockState());
-          return inst->GetLockState() == CsisLockState::CSIS_STATE_LOCKED;
-        });
+    auto iter = std::find_if(devices_.begin(), devices_.end(), [id, &number_of_connected](auto& d) {
+      if (!d->IsConnected()) {
+        log::debug("Device {} is not connected in group {}", d->addr, id);
+        return false;
+      }
+      auto inst = d->GetCsisInstanceByGroupId(id);
+      if (!inst) {
+        log::debug("Instance not available for group {}", id);
+        return false;
+      }
+      number_of_connected++;
+      log::debug("Device {},  lock state: {}", d->addr, (int)inst->GetLockState());
+      return inst->GetLockState() == CsisLockState::CSIS_STATE_LOCKED;
+    });
 
-    LOG_DEBUG("Locked set: %d, number of connected %d", iter != devices_.end(),
-              number_of_connected);
+    log::debug("Locked set: {}, number of connected {}", iter != devices_.end(),
+               number_of_connected);
     /* If there is no locked device, we are good to go */
     if (iter != devices_.end()) {
-      LOG_WARN("Device %s is locked ", ADDRESS_TO_LOGGABLE_CSTR((*iter)->addr));
+      log::warn("Device {} is locked", (*iter)->addr);
       return false;
     }
 
-    return (number_of_connected > 0);
+    return number_of_connected > 0;
   }
 
   void SortByCsisRank(void) {
@@ -465,45 +435,47 @@ class CsisGroup {
       auto inst2 = dev2->GetCsisInstanceByGroupId(id);
       if (!inst1 || !inst2) {
         /* One of the device is not connected */
-        LOG_DEBUG("Device  %s is not connected.",
-                  inst1 == nullptr ? ADDRESS_TO_LOGGABLE_CSTR(dev1->addr)
-                                   : ADDRESS_TO_LOGGABLE_CSTR(dev2->addr));
+        log::debug("Device  {} is not connected.", inst1 == nullptr ? dev1->addr : dev2->addr);
         return dev1->IsConnected();
       }
-      return (inst1->GetRank() < inst2->GetRank());
+      return inst1->GetRank() < inst2->GetRank();
     });
   }
 
-  std::shared_ptr<CsisDevice> GetFirstDevice(void) {
-    return (devices_.front());
-  }
-  std::shared_ptr<CsisDevice> GetLastDevice(void) { return (devices_.back()); }
-  std::shared_ptr<CsisDevice> GetNextDevice(
-      std::shared_ptr<CsisDevice>& device) {
-    auto iter = std::find_if(devices_.begin(), devices_.end(),
-                             CsisDevice::MatchAddress(device->addr));
+  std::shared_ptr<CsisDevice> GetFirstDevice(void) { return devices_.front(); }
+  std::shared_ptr<CsisDevice> GetLastDevice(void) { return devices_.back(); }
+  std::shared_ptr<CsisDevice> GetNextDevice(std::shared_ptr<CsisDevice>& device) {
+    auto iter =
+            std::find_if(devices_.begin(), devices_.end(), CsisDevice::MatchAddress(device->addr));
 
     /* If reference device not found */
-    if (iter == devices_.end()) return nullptr;
+    if (iter == devices_.end()) {
+      return nullptr;
+    }
 
     iter++;
     /* If reference device is last in group */
-    if (iter == devices_.end()) return nullptr;
+    if (iter == devices_.end()) {
+      return nullptr;
+    }
 
-    return (*iter);
+    return *iter;
   }
-  std::shared_ptr<CsisDevice> GetPrevDevice(
-      std::shared_ptr<CsisDevice>& device) {
+  std::shared_ptr<CsisDevice> GetPrevDevice(std::shared_ptr<CsisDevice>& device) {
     auto iter = std::find_if(devices_.rbegin(), devices_.rend(),
                              CsisDevice::MatchAddress(device->addr));
 
     /* If reference device not found */
-    if (iter == devices_.rend()) return nullptr;
+    if (iter == devices_.rend()) {
+      return nullptr;
+    }
 
     iter++;
 
-    if (iter == devices_.rend()) return nullptr;
-    return (*iter);
+    if (iter == devices_.rend()) {
+      return nullptr;
+    }
+    return *iter;
   }
 
   int GetLockTransitionCnt(void) const { return lock_transition_cnt_; }
@@ -521,15 +493,15 @@ class CsisGroup {
     rand[1] = rsi.address[1];
     rand[2] = rsi.address[0];
 #ifdef CSIS_DEBUG
-    LOG_INFO("Prand %s", base::HexEncode(rand.data(), 3).c_str());
-    LOG_INFO("SIRK %s", base::HexEncode(sirk.data(), 16).c_str());
+    log::info("Prand {}", base::HexEncode(rand.data(), 3));
+    log::info("SIRK {}", base::HexEncode(sirk.data(), 16));
 #endif
 
     /* generate X = E irk(R0, R1, R2) and R is random address 3 LSO */
     Octet16 x = crypto_toolbox::aes_128(sirk, rand);
 
 #ifdef CSIS_DEBUG
-    LOG_INFO("X %s", base::HexEncode(x.data(), 16).c_str());
+    log::info("X {}", base::HexEncode(x.data(), 16));
 #endif
 
     rand[0] = rsi.address[5];
@@ -537,7 +509,7 @@ class CsisGroup {
     rand[2] = rsi.address[3];
 
 #ifdef CSIS_DEBUG
-    LOG_INFO("Hash %s", base::HexEncode(rand.data(), 3).c_str());
+    log::info("Hash {}", base::HexEncode(rand.data(), 3));
 #endif
 
     if (memcmp(x.data(), &rand[0], 3) == 0) {
@@ -548,7 +520,7 @@ class CsisGroup {
     return false;
   }
 
- private:
+private:
   int group_id_;
   Octet16 sirk_ = {0};
   bool sirk_available_ = false;

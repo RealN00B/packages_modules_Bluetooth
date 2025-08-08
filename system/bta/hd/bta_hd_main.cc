@@ -25,12 +25,15 @@
 
 #include <cstdint>
 
-// BTA_HD_INCLUDED
-#include "bt_target.h"  // Must be first to define build configuration
+#include "internal_include/bt_target.h"
 #if defined(BTA_HD_INCLUDED) && (BTA_HD_INCLUDED == TRUE)
+
+#include <bluetooth/log.h>
 
 #include "bta/hd/bta_hd_int.h"
 #include "stack/include/bt_hdr.h"
+
+using namespace bluetooth;
 
 /*****************************************************************************
  * Constants and types
@@ -42,7 +45,7 @@ enum {
   BTA_HD_IDLE_ST,              /* not connected, waiting for connection */
   BTA_HD_CONN_ST,              /* host connected */
   BTA_HD_TRANSIENT_TO_INIT_ST, /* transient state: going back from CONN to INIT
-                                  */
+                                */
 };
 typedef uint8_t tBTA_HD_STATE;
 
@@ -178,7 +181,7 @@ static void bta_hd_better_state_machine(uint16_t event, tBTA_HD_DATA* p_data) {
  *
  ******************************************************************************/
 bool bta_hd_hdl_event(const BT_HDR_RIGID* p_msg) {
-  LOG_VERBOSE("%s: p_msg->event=%d", __func__, p_msg->event);
+  log::verbose("p_msg->event={}", p_msg->event);
 
   switch (p_msg->event) {
     case BTA_HD_API_ENABLE_EVT:
@@ -187,12 +190,11 @@ bool bta_hd_hdl_event(const BT_HDR_RIGID* p_msg) {
 
     case BTA_HD_API_DISABLE_EVT:
       if (bta_hd_cb.state == BTA_HD_CONN_ST) {
-        LOG_WARN("%s: host connected, disconnect before disabling", __func__);
+        log::warn("host connected, disconnect before disabling");
 
         // unregister (and disconnect)
         bta_hd_cb.disable_w4_close = TRUE;
-        bta_hd_better_state_machine(BTA_HD_API_UNREGISTER_APP_EVT,
-                                    (tBTA_HD_DATA*)p_msg);
+        bta_hd_better_state_machine(BTA_HD_API_UNREGISTER_APP_EVT, (tBTA_HD_DATA*)p_msg);
       } else {
         bta_hd_api_disable();
       }
@@ -201,7 +203,7 @@ bool bta_hd_hdl_event(const BT_HDR_RIGID* p_msg) {
     default:
       bta_hd_better_state_machine(p_msg->event, (tBTA_HD_DATA*)p_msg);
   }
-  return (TRUE);
+  return TRUE;
 }
 
 #endif /* BTA_HD_INCLUDED */

@@ -14,16 +14,27 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "a2dp_sbc_decoder"
+#define LOG_TAG "bluetooth-a2dp"
 
 #include "a2dp_sbc_decoder.h"
 
-#include <base/logging.h>
+#include <bluetooth/log.h>
 
+#include <cstddef>
+#include <cstdint>
+
+#include "a2dp_codec_api.h"
 #include "embdrv/sbc/decoder/include/oi_codec_sbc.h"
+#include "embdrv/sbc/decoder/include/oi_cpu_dep.h"
 #include "embdrv/sbc/decoder/include/oi_status.h"
-#include "osi/include/log.h"
 #include "stack/include/bt_hdr.h"
+
+using namespace bluetooth;
+
+namespace std {
+template <>
+struct formatter<OI_STATUS> : enum_formatter<OI_STATUS> {};
+}  // namespace std
 
 typedef struct {
   OI_CODEC_SBC_DECODER_CONTEXT decoder_context;
@@ -34,20 +45,12 @@ typedef struct {
 
 static tA2DP_SBC_DECODER_CB a2dp_sbc_decoder_cb;
 
-bool A2DP_LoadDecoderSbc(void) {
-  // Nothing to do - the library is statically linked
-  return true;
-}
-
-void A2DP_UnloadDecoderSbc(void) { a2dp_sbc_decoder_cleanup(); }
-
 bool a2dp_sbc_decoder_init(decoded_data_callback_t decode_callback) {
   OI_STATUS status = OI_CODEC_SBC_DecoderReset(
-      &a2dp_sbc_decoder_cb.decoder_context, a2dp_sbc_decoder_cb.context_data,
-      sizeof(a2dp_sbc_decoder_cb.context_data), 2, 2, false);
+          &a2dp_sbc_decoder_cb.decoder_context, a2dp_sbc_decoder_cb.context_data,
+          sizeof(a2dp_sbc_decoder_cb.context_data), 2, 2, false);
   if (!OI_SUCCESS(status)) {
-    LOG_ERROR("%s: OI_CODEC_SBC_DecoderReset failed with error code %d",
-              __func__, status);
+    log::error("OI_CODEC_SBC_DecoderReset failed with error code {}", status);
     return false;
   }
 
@@ -64,7 +67,7 @@ bool a2dp_sbc_decoder_decode_packet(BT_HDR* p_buf) {
   size_t data_size = p_buf->len;
 
   if (data_size == 0) {
-    LOG_ERROR("%s: Empty packet", __func__);
+    log::error("Empty packet");
     return false;
   }
   size_t num_frames = data[0] & 0xf;
@@ -78,20 +81,18 @@ bool a2dp_sbc_decoder_decode_packet(BT_HDR* p_buf) {
 
   for (size_t i = 0; i < num_frames; ++i) {
     uint32_t out_size = out_avail;
-    OI_STATUS status =
-        OI_CODEC_SBC_DecodeFrame(&a2dp_sbc_decoder_cb.decoder_context, &oi_data,
-                                 &oi_size, out_ptr, &out_size);
+    OI_STATUS status = OI_CODEC_SBC_DecodeFrame(&a2dp_sbc_decoder_cb.decoder_context, &oi_data,
+                                                &oi_size, out_ptr, &out_size);
     if (!OI_SUCCESS(status)) {
-      LOG_ERROR("%s: Decoding failure: %d", __func__, status);
+      log::error("Decoding failure: {}", status);
       return false;
     }
     out_avail -= out_size;
     out_ptr += out_size / sizeof(*out_ptr);
   }
 
-  size_t out_used =
-      (out_ptr - a2dp_sbc_decoder_cb.decode_buf) * sizeof(*out_ptr);
-  a2dp_sbc_decoder_cb.decode_callback(
-      reinterpret_cast<uint8_t*>(a2dp_sbc_decoder_cb.decode_buf), out_used);
+  size_t out_used = (out_ptr - a2dp_sbc_decoder_cb.decode_buf) * sizeof(*out_ptr);
+  a2dp_sbc_decoder_cb.decode_callback(reinterpret_cast<uint8_t*>(a2dp_sbc_decoder_cb.decode_buf),
+                                      out_used);
   return true;
 }

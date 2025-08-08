@@ -49,7 +49,7 @@ impl GattServiceImpl {
         let me = Self {
             rt,
             btif_intf,
-            gatt: Arc::new(Mutex::new(Gatt::new(&btif_clone.lock().unwrap()).unwrap())),
+            gatt: Arc::new(Mutex::new(Gatt::new(&btif_clone.lock().unwrap()))),
             event_rx: Arc::new(TokioMutex::new(rx)),
             event_tx,
         };
@@ -104,6 +104,9 @@ impl GattServiceImpl {
             secondary_advertising_phy: 0,
             scan_request_notification_enable: 0,
             own_address_type: 0,
+            peer_address: self.create_raw_address(),
+            peer_address_type: 0,
+            discoverable: false,
         }
     }
 
@@ -124,10 +127,10 @@ impl GattServiceImpl {
             filt_logic_type: 0,
             rssi_high_thres: 0,
             rssi_low_thres: 0,
-            delay_mode: 0,
+            dely_mode: 0,
             found_timeout: 0,
             lost_timeout: 0,
-            found_timeout_count: 0,
+            found_timeout_cnt: 0,
             num_of_tracking_entries: 0,
         }
     }
@@ -364,7 +367,7 @@ impl GattService for GattServiceImpl {
 
     fn set_scan_parameters(&mut self, ctx: RpcContext<'_>, _req: Empty, sink: UnarySink<Empty>) {
         let scanner = &mut self.gatt.lock().unwrap().scanner;
-        scanner.set_scan_parameters(0, 0, 0);
+        scanner.set_scan_parameters(0, 0, 0, 0, 0);
         ctx.spawn(async move {
             sink.success(Empty::default()).await.unwrap();
         })
@@ -479,7 +482,7 @@ impl GattService for GattServiceImpl {
 
     fn client_connect(&mut self, ctx: RpcContext<'_>, _req: Empty, sink: UnarySink<Empty>) {
         let client = &mut self.gatt.lock().unwrap().client;
-        client.connect(0, &self.create_raw_address(), 0, true, 0, true, 0);
+        client.connect(0, &self.create_raw_address(), 0, true, 0, true, 0, 0);
         ctx.spawn(async move {
             sink.success(Empty::default()).await.unwrap();
         })

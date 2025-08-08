@@ -16,6 +16,8 @@
 
 package com.android.bluetooth.hfpclient;
 
+import static android.bluetooth.BluetoothUtils.writeStringToParcel;
+
 import android.bluetooth.BluetoothDevice;
 import android.os.Parcel;
 import android.os.Parcelable;
@@ -26,44 +28,37 @@ import java.util.UUID;
 /**
  * This class represents a single call, its state and properties.
  *
- * HfpClientCall is Parcelable so it can be passed through the TelecomManager Connection Service
+ * <p>HfpClientCall is Parcelable so it can be passed through the TelecomManager Connection Service
  * framework.
  */
 public final class HfpClientCall implements Parcelable {
 
     /* Call state */
-    /**
-     * Call is active.
-     */
+    /** Call is active. */
     public static final int CALL_STATE_ACTIVE = 0;
-    /**
-     * Call is in held state.
-     */
+
+    /** Call is in held state. */
     public static final int CALL_STATE_HELD = 1;
-    /**
-     * Outgoing call that is being dialed right now.
-     */
+
+    /** Outgoing call that is being dialed right now. */
     public static final int CALL_STATE_DIALING = 2;
-    /**
-     * Outgoing call that remote party has already been alerted about.
-     */
+
+    /** Outgoing call that remote party has already been alerted about. */
     public static final int CALL_STATE_ALERTING = 3;
-    /**
-     * Incoming call that can be accepted or rejected.
-     */
+
+    /** Incoming call that can be accepted or rejected. */
     public static final int CALL_STATE_INCOMING = 4;
-    /**
-     * Waiting call state when there is already an active call.
-     */
+
+    /** Waiting call state when there is already an active call. */
     public static final int CALL_STATE_WAITING = 5;
+
     /**
-     * Call that has been held by response and hold
-     * (see Bluetooth specification for further references).
+     * Call that has been held by response and hold (see Bluetooth specification for further
+     * references).
      */
     public static final int CALL_STATE_HELD_BY_RESPONSE_AND_HOLD = 6;
-    /**
-     * Call that has been already terminated and should not be referenced as a valid call.
-     */
+
+    /** Call that has been already terminated and should not be referenced as a valid call. */
     public static final int CALL_STATE_TERMINATED = 7;
 
     private final BluetoothDevice mDevice;
@@ -76,16 +71,27 @@ public final class HfpClientCall implements Parcelable {
     private final long mCreationElapsedMilli;
     private final boolean mInBandRing;
 
-    /**
-     * Creates HfpClientCall instance.
-     */
-    public HfpClientCall(BluetoothDevice device, int id, int state, String number,
-            boolean multiParty, boolean outgoing, boolean inBandRing) {
+    /** Creates HfpClientCall instance. */
+    public HfpClientCall(
+            BluetoothDevice device,
+            int id,
+            int state,
+            String number,
+            boolean multiParty,
+            boolean outgoing,
+            boolean inBandRing) {
         this(device, id, UUID.randomUUID(), state, number, multiParty, outgoing, inBandRing);
     }
 
-    private HfpClientCall(BluetoothDevice device, int id, UUID uuid, int state,
-            String number, boolean multiParty, boolean outgoing, boolean inBandRing) {
+    private HfpClientCall(
+            BluetoothDevice device,
+            int id,
+            UUID uuid,
+            int state,
+            String number,
+            boolean multiParty,
+            boolean outgoing,
+            boolean inBandRing) {
         mDevice = device;
         mId = id;
         mUUID = uuid;
@@ -100,7 +106,7 @@ public final class HfpClientCall implements Parcelable {
     /**
      * Sets call's state.
      *
-     * <p>Note: This is an internal function and shouldn't be exposed</p>
+     * <p>Note: This is an internal function and shouldn't be exposed
      *
      * @param state new call state.
      */
@@ -111,7 +117,7 @@ public final class HfpClientCall implements Parcelable {
     /**
      * Sets call's number.
      *
-     * <p>Note: This is an internal function and shouldn't be exposed</p>
+     * <p>Note: This is an internal function and shouldn't be exposed
      *
      * @param number String representing phone number.
      */
@@ -122,7 +128,7 @@ public final class HfpClientCall implements Parcelable {
     /**
      * Sets this call as multi party call.
      *
-     * <p>Note: This is an internal function and shouldn't be exposed</p>
+     * <p>Note: This is an internal function and shouldn't be exposed
      *
      * @param multiParty if <code>true</code> sets this call as a part of multi party conference.
      */
@@ -213,6 +219,7 @@ public final class HfpClientCall implements Parcelable {
 
     /**
      * Generate a log string for this call
+     *
      * @return log string
      */
     @Override
@@ -265,16 +272,19 @@ public final class HfpClientCall implements Parcelable {
         return builder.toString();
     }
 
-    /**
-     * {@link Parcelable.Creator} interface implementation.
-     */
+    /** {@link Parcelable.Creator} interface implementation. */
     public static final @android.annotation.NonNull Parcelable.Creator<HfpClientCall> CREATOR =
             new Parcelable.Creator<HfpClientCall>() {
                 @Override
                 public HfpClientCall createFromParcel(Parcel in) {
-                    return new HfpClientCall((BluetoothDevice) in.readParcelable(null),
-                            in.readInt(), UUID.fromString(in.readString()), in.readInt(),
-                            in.readString(), in.readInt() == 1, in.readInt() == 1,
+                    return new HfpClientCall(
+                            BluetoothDevice.CREATOR.createFromParcel(in),
+                            in.readInt(),
+                            UUID.fromString(in.readString()),
+                            in.readInt(),
+                            in.readString(),
+                            in.readInt() == 1,
+                            in.readInt() == 1,
                             in.readInt() == 1);
                 }
 
@@ -286,11 +296,11 @@ public final class HfpClientCall implements Parcelable {
 
     @Override
     public void writeToParcel(Parcel out, int flags) {
-        out.writeParcelable(mDevice, 0);
+        mDevice.writeToParcel(out, flags);
         out.writeInt(mId);
-        out.writeString(mUUID.toString());
+        writeStringToParcel(out, mUUID.toString());
         out.writeInt(mState);
-        out.writeString(mNumber);
+        writeStringToParcel(out, mNumber);
         out.writeInt(mMultiParty ? 1 : 0);
         out.writeInt(mOutgoing ? 1 : 0);
         out.writeInt(mInBandRing ? 1 : 0);

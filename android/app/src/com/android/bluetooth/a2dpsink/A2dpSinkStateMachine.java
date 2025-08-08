@@ -16,6 +16,12 @@
 package com.android.bluetooth.a2dpsink;
 
 import static android.Manifest.permission.BLUETOOTH_CONNECT;
+import static android.Manifest.permission.BLUETOOTH_PRIVILEGED;
+import static android.bluetooth.BluetoothProfile.CONNECTION_POLICY_FORBIDDEN;
+import static android.bluetooth.BluetoothProfile.STATE_CONNECTED;
+import static android.bluetooth.BluetoothProfile.STATE_CONNECTING;
+import static android.bluetooth.BluetoothProfile.STATE_DISCONNECTED;
+import static android.bluetooth.BluetoothProfile.STATE_DISCONNECTING;
 
 import android.annotation.RequiresPermission;
 import android.bluetooth.BluetoothA2dpSink;
@@ -38,18 +44,17 @@ import com.android.internal.util.StateMachine;
 
 class A2dpSinkStateMachine extends StateMachine {
     private static final String TAG = A2dpSinkStateMachine.class.getSimpleName();
-    static final boolean DBG = Log.isLoggable(TAG, Log.DEBUG);
 
     // 0->99 Events from Outside
-    @VisibleForTesting static final int CONNECT = 1;
-    @VisibleForTesting static final int DISCONNECT = 2;
+    @VisibleForTesting static final int MESSAGE_CONNECT = 1;
+    @VisibleForTesting static final int MESSAGE_DISCONNECT = 2;
 
     // 100->199 Internal Events
     @VisibleForTesting static final int CLEANUP = 100;
-    @VisibleForTesting static final int CONNECT_TIMEOUT = 101;
+    @VisibleForTesting static final int MESSAGE_CONNECT_TIMEOUT = 101;
 
     // 200->299 Events from Native
-    @VisibleForTesting static final int STACK_EVENT = 200;
+    @VisibleForTesting static final int MESSAGE_STACK_EVENT = 200;
 
     static final int CONNECT_TIMEOUT_MS = 10000;
 
@@ -62,20 +67,19 @@ class A2dpSinkStateMachine extends StateMachine {
     protected final Connected mConnected;
     protected final Disconnecting mDisconnecting;
 
-    protected int mMostRecentState = BluetoothProfile.STATE_DISCONNECTED;
+    protected int mMostRecentState = STATE_DISCONNECTED;
     protected BluetoothAudioConfig mAudioConfig = null;
 
     A2dpSinkStateMachine(
-            Looper looper,
-            BluetoothDevice device,
             A2dpSinkService service,
+            BluetoothDevice device,
+            Looper looper,
             A2dpSinkNativeInterface nativeInterface) {
         super(TAG, looper);
         mDevice = device;
         mDeviceAddress = Utils.getByteAddress(mDevice);
         mService = service;
         mNativeInterface = nativeInterface;
-        if (DBG) Log.d(TAG, device.toString());
 
         mDisconnected = new Disconnected();
         mConnecting = new Connecting();
@@ -88,6 +92,8 @@ class A2dpSinkStateMachine extends StateMachine {
         addState(mDisconnecting);
 
         setInitialState(mDisconnected);
+        Log.d(TAG, "[" + mDevice + "] State machine created");
+        start();
     }
 
     /**
@@ -99,9 +105,7 @@ class A2dpSinkStateMachine extends StateMachine {
         return mMostRecentState;
     }
 
-    /**
-     * get current audio config
-     */
+    /** get current audio config */
     BluetoothAudioConfig getAudioConfig() {
         return mAudioConfig;
     }
@@ -117,83 +121,89 @@ class A2dpSinkStateMachine extends StateMachine {
 
     /** send the Connect command asynchronously */
     final void connect() {
-        sendMessage(CONNECT);
+        sendMessage(MESSAGE_CONNECT);
     }
 
     /** send the Disconnect command asynchronously */
     final void disconnect() {
-        sendMessage(DISCONNECT);
+        sendMessage(MESSAGE_DISCONNECT);
     }
 
     /** send the stack event asynchronously */
     final void onStackEvent(StackEvent event) {
-        sendMessage(STACK_EVENT, event);
+        sendMessage(MESSAGE_STACK_EVENT, event);
     }
 
     /**
      * Dump the current State Machine to the string builder.
+     *
      * @param sb output string
      */
     public void dump(StringBuilder sb) {
-        ProfileService.println(sb, "mDevice: " + mDevice + "("
-                + Utils.getName(mDevice) + ") " + this.toString());
+        ProfileService.println(
+                sb, "mDevice: " + mDevice + "(" + Utils.getName(mDevice) + ") " + this.toString());
     }
 
     @Override
     protected void unhandledMessage(Message msg) {
-        Log.w(TAG, "unhandledMessage in state " + getCurrentState() + "msg.what=" + msg.what);
+        Log.w(
+                TAG,
+                "["
+                        + mDevice
+                        + "] unhandledMessage state="
+                        + getCurrentState()
+                        + ", msg.what="
+                        + msg.what);
     }
 
     class Disconnected extends State {
         @Override
         public void enter() {
-            if (DBG) Log.d(TAG, "Enter Disconnected");
-            if (mMostRecentState != BluetoothProfile.STATE_DISCONNECTED) {
+            Log.d(TAG, "[" + mDevice + "] Enter Disconnected");
+            if (mMostRecentState != STATE_DISCONNECTED) {
                 sendMessage(CLEANUP);
             }
-            onConnectionStateChanged(BluetoothProfile.STATE_DISCONNECTED);
+            onConnectionStateChanged(STATE_DISCONNECTED);
         }
 
         @Override
         public boolean processMessage(Message message) {
             switch (message.what) {
-                case STACK_EVENT:
-                    processStackEvent((StackEvent) message.obj);
-                    return true;
-                case CONNECT:
-                    if (DBG) Log.d(TAG, "Connect");
+                case MESSAGE_STACK_EVENT -> processStackEvent((StackEvent) message.obj);
+                case MESSAGE_CONNECT -> {
+                    Log.d(TAG, "[" + mDevice + "] Connect");
                     transitionTo(mConnecting);
-                    return true;
-                case CLEANUP:
-                    mService.removeStateMachine(A2dpSinkStateMachine.this);
-                    return true;
+                }
+                case CLEANUP -> mService.removeStateMachine(A2dpSinkStateMachine.this);
+                default -> {
+                    return false;
+                }
             }
-            return false;
+            return true;
         }
 
-        @RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)
+        @RequiresPermission(BLUETOOTH_PRIVILEGED)
         void processStackEvent(StackEvent event) {
-            switch (event.mType) {
-                case StackEvent.EVENT_TYPE_CONNECTION_STATE_CHANGED:
-                    switch (event.mState) {
-                        case StackEvent.CONNECTION_STATE_CONNECTING:
-                            if (mService.getConnectionPolicy(mDevice)
-                                    == BluetoothProfile.CONNECTION_POLICY_FORBIDDEN) {
-                                Log.w(TAG, "Ignore incoming connection, profile is"
-                                        + " turned off for " + mDevice);
-                                mNativeInterface.disconnectA2dpSink(mDevice);
-                            } else {
-                                mConnecting.mIncomingConnection = true;
-                                transitionTo(mConnecting);
-                            }
-                            break;
-                        case StackEvent.CONNECTION_STATE_CONNECTED:
-                            transitionTo(mConnected);
-                            break;
-                        case StackEvent.CONNECTION_STATE_DISCONNECTED:
-                            sendMessage(CLEANUP);
-                            break;
+            if (event.mType != StackEvent.EVENT_TYPE_CONNECTION_STATE_CHANGED) {
+                return;
+            }
+            switch (event.mState) {
+                case STATE_CONNECTING -> {
+                    if (mService.getConnectionPolicy(mDevice) == CONNECTION_POLICY_FORBIDDEN) {
+                        Log.w(
+                                TAG,
+                                "["
+                                        + mDevice
+                                        + "] Ignore incoming connection, profile"
+                                        + " is turned off");
+                        mNativeInterface.disconnectA2dpSink(mDevice);
+                    } else {
+                        mConnecting.mIncomingConnection = true;
+                        transitionTo(mConnecting);
                     }
+                }
+                case STATE_CONNECTED -> transitionTo(mConnected);
+                case STATE_DISCONNECTED -> sendMessage(CLEANUP);
             }
         }
     }
@@ -203,9 +213,9 @@ class A2dpSinkStateMachine extends StateMachine {
 
         @Override
         public void enter() {
-            if (DBG) Log.d(TAG, "Enter Connecting");
-            onConnectionStateChanged(BluetoothProfile.STATE_CONNECTING);
-            sendMessageDelayed(CONNECT_TIMEOUT, CONNECT_TIMEOUT_MS);
+            Log.d(TAG, "[" + mDevice + "] Enter Connecting");
+            onConnectionStateChanged(STATE_CONNECTING);
+            sendMessageDelayed(MESSAGE_CONNECT_TIMEOUT, CONNECT_TIMEOUT_MS);
 
             if (!mIncomingConnection) {
                 mNativeInterface.connectA2dpSink(mDevice);
@@ -217,78 +227,78 @@ class A2dpSinkStateMachine extends StateMachine {
         @Override
         public boolean processMessage(Message message) {
             switch (message.what) {
-                case STACK_EVENT:
-                    processStackEvent((StackEvent) message.obj);
-                    return true;
-                case CONNECT_TIMEOUT:
-                    transitionTo(mDisconnected);
-                    return true;
-                case DISCONNECT:
-                    Log.d(TAG, "Received disconnect message while connecting. deferred");
+                case MESSAGE_STACK_EVENT -> processStackEvent((StackEvent) message.obj);
+                case MESSAGE_CONNECT_TIMEOUT -> transitionTo(mDisconnected);
+                case MESSAGE_DISCONNECT -> {
+                    Log.d(
+                            TAG,
+                            "["
+                                    + mDevice
+                                    + "] Received disconnect message while connecting."
+                                    + "deferred");
                     deferMessage(message);
-                    return true;
+                }
+                default -> {
+                    return false;
+                }
             }
-            return false;
+            return true;
         }
 
         void processStackEvent(StackEvent event) {
-            switch (event.mType) {
-                case StackEvent.EVENT_TYPE_CONNECTION_STATE_CHANGED:
-                    switch (event.mState) {
-                        case StackEvent.CONNECTION_STATE_CONNECTED:
-                            transitionTo(mConnected);
-                            break;
-                        case StackEvent.CONNECTION_STATE_DISCONNECTED:
-                            transitionTo(mDisconnected);
-                            break;
-                    }
+            if (event.mType != StackEvent.EVENT_TYPE_CONNECTION_STATE_CHANGED) {
+                return;
+            }
+            switch (event.mState) {
+                case STATE_CONNECTED -> transitionTo(mConnected);
+                case STATE_DISCONNECTED -> transitionTo(mDisconnected);
             }
         }
+
         @Override
         public void exit() {
-            removeMessages(CONNECT_TIMEOUT);
+            removeMessages(MESSAGE_CONNECT_TIMEOUT);
             mIncomingConnection = false;
         }
-
     }
 
     class Connected extends State {
         @Override
         public void enter() {
-            if (DBG) Log.d(TAG, "Enter Connected");
-            onConnectionStateChanged(BluetoothProfile.STATE_CONNECTED);
+            Log.d(TAG, "[" + mDevice + "] Enter Connected");
+            onConnectionStateChanged(STATE_CONNECTED);
         }
 
         @Override
         public boolean processMessage(Message message) {
             switch (message.what) {
-                case DISCONNECT:
+                case MESSAGE_DISCONNECT -> {
                     transitionTo(mDisconnecting);
                     mNativeInterface.disconnectA2dpSink(mDevice);
-                    return true;
-                case STACK_EVENT:
-                    processStackEvent((StackEvent) message.obj);
-                    return true;
+                }
+                case MESSAGE_STACK_EVENT -> processStackEvent((StackEvent) message.obj);
+                default -> {
+                    return false;
+                }
             }
-            return false;
+            return true;
         }
 
         void processStackEvent(StackEvent event) {
             switch (event.mType) {
-                case StackEvent.EVENT_TYPE_CONNECTION_STATE_CHANGED:
+                case StackEvent.EVENT_TYPE_CONNECTION_STATE_CHANGED -> {
                     switch (event.mState) {
-                        case StackEvent.CONNECTION_STATE_DISCONNECTING:
-                            transitionTo(mDisconnecting);
-                            break;
-                        case StackEvent.CONNECTION_STATE_DISCONNECTED:
-                            transitionTo(mDisconnected);
-                            break;
+                        case STATE_DISCONNECTING -> transitionTo(mDisconnecting);
+                        case STATE_DISCONNECTED -> transitionTo(mDisconnected);
                     }
-                    break;
-                case StackEvent.EVENT_TYPE_AUDIO_CONFIG_CHANGED:
-                    mAudioConfig = new BluetoothAudioConfig(event.mSampleRate, event.mChannelCount,
-                            AudioFormat.ENCODING_PCM_16BIT);
-                    break;
+                }
+                case StackEvent.EVENT_TYPE_AUDIO_CONFIG_CHANGED -> {
+                    mAudioConfig =
+                            new BluetoothAudioConfig(
+                                    event.mSampleRate,
+                                    event.mChannelCount,
+                                    AudioFormat.ENCODING_PCM_16BIT);
+                }
             }
         }
     }
@@ -296,8 +306,8 @@ class A2dpSinkStateMachine extends StateMachine {
     protected class Disconnecting extends State {
         @Override
         public void enter() {
-            if (DBG) Log.d(TAG, "Enter Disconnecting");
-            onConnectionStateChanged(BluetoothProfile.STATE_DISCONNECTING);
+            Log.d(TAG, "[" + mDevice + "] Enter Disconnecting");
+            onConnectionStateChanged(STATE_DISCONNECTING);
             transitionTo(mDisconnected);
         }
     }
@@ -306,13 +316,10 @@ class A2dpSinkStateMachine extends StateMachine {
         if (mMostRecentState == currentState) {
             return;
         }
-        if (currentState == BluetoothProfile.STATE_CONNECTED) {
+        if (currentState == STATE_CONNECTED) {
             MetricsLogger.logProfileConnectionEvent(BluetoothMetricsProto.ProfileId.A2DP_SINK);
         }
-        if (DBG) {
-            Log.d(TAG, "Connection state " + mDevice + ": " + mMostRecentState + "->"
-                    + currentState);
-        }
+        Log.d(TAG, "[" + mDevice + "] Connection state: " + mMostRecentState + "->" + currentState);
         Intent intent = new Intent(BluetoothA2dpSink.ACTION_CONNECTION_STATE_CHANGED);
         intent.putExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, mMostRecentState);
         intent.putExtra(BluetoothProfile.EXTRA_STATE, currentState);
@@ -320,7 +327,7 @@ class A2dpSinkStateMachine extends StateMachine {
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         mService.connectionStateChanged(mDevice, mMostRecentState, currentState);
         mMostRecentState = currentState;
-        Utils.sendBroadcast(mService, intent, BLUETOOTH_CONNECT,
-                Utils.getTempAllowlistBroadcastOptions());
+        mService.sendBroadcast(
+                intent, BLUETOOTH_CONNECT, Utils.getTempBroadcastOptions().toBundle());
     }
 }

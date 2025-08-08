@@ -7,9 +7,8 @@ use crate::utils::converters::{bluetooth_property_to_event_data, event_data_from
 use bt_topshim_facade_protobuf::empty::Empty;
 use bt_topshim_facade_protobuf::facade::{
     EventType, FetchEventsRequest, FetchEventsResponse, SetDefaultEventMaskExceptRequest,
-    SetDiscoveryModeRequest, SetDiscoveryModeResponse, SetLocalIoCapsRequest,
-    SetLocalIoCapsResponse, ToggleDiscoveryRequest, ToggleDiscoveryResponse, ToggleStackRequest,
-    ToggleStackResponse,
+    SetDiscoveryModeRequest, SetLocalIoCapsRequest, SetLocalIoCapsResponse, ToggleDiscoveryRequest,
+    ToggleDiscoveryResponse, ToggleStackRequest, ToggleStackResponse,
 };
 use bt_topshim_facade_protobuf::facade_grpc::{create_adapter_service, AdapterService};
 use futures::sink::SinkExt;
@@ -34,7 +33,7 @@ fn get_bt_dispatcher(
                 BaseCallbacks::AdapterState(state) => {
                     println!("State changed to {:?}", state);
                 }
-                BaseCallbacks::SspRequest(addr, _, _, variant, passkey) => {
+                BaseCallbacks::SspRequest(addr, variant, passkey) => {
                     println!(
                         "SSP Request made for address {:?} with variant {:?} and passkey {:?}",
                         addr.to_string(),
@@ -92,10 +91,10 @@ impl AdapterServiceImpl {
     /// Create a new instance of the root facade service
     pub fn create(rt: Arc<Runtime>, btif_intf: Arc<Mutex<BluetoothInterface>>) -> grpcio::Service {
         let (event_tx, rx) = mpsc::channel(10);
-        btif_intf.lock().unwrap().initialize(
-            get_bt_dispatcher(btif_intf.clone(), event_tx.clone()),
-            vec!["INIT_gd_hci=true".to_string()],
-        );
+        btif_intf
+            .lock()
+            .unwrap()
+            .initialize(get_bt_dispatcher(btif_intf.clone(), event_tx.clone()), 0);
         create_adapter_service(Self {
             rt,
             btif_intf,
@@ -118,17 +117,17 @@ impl AdapterService for AdapterServiceImpl {
                 match event {
                     BaseCallbacks::AdapterState(_state) => {
                         let mut rsp = FetchEventsResponse::new();
-                        rsp.event_type = EventType::ADAPTER_STATE;
+                        rsp.event_type = EventType::ADAPTER_STATE.into();
                         rsp.params.insert(
                             String::from("state"),
                             event_data_from_string(String::from("ON")),
                         );
                         sink.send((rsp, WriteFlags::default())).await.unwrap();
                     }
-                    BaseCallbacks::SspRequest(_, _, _, _, _) => {}
+                    BaseCallbacks::SspRequest(_, _, _) => {}
                     BaseCallbacks::LeRandCallback(random) => {
                         let mut rsp = FetchEventsResponse::new();
-                        rsp.event_type = EventType::LE_RAND;
+                        rsp.event_type = EventType::LE_RAND.into();
                         rsp.params.insert(
                             String::from("data"),
                             event_data_from_string(random.to_string()),
@@ -137,7 +136,7 @@ impl AdapterService for AdapterServiceImpl {
                     }
                     BaseCallbacks::GenerateLocalOobData(transport, data) => {
                         let mut rsp = FetchEventsResponse::new();
-                        rsp.event_type = EventType::GENERATE_LOCAL_OOB_DATA;
+                        rsp.event_type = EventType::GENERATE_LOCAL_OOB_DATA.into();
                         rsp.params.insert(
                             String::from("is_valid"),
                             event_data_from_string(String::from(if data.is_valid {
@@ -166,7 +165,7 @@ impl AdapterService for AdapterServiceImpl {
                     }
                     BaseCallbacks::AdapterProperties(status, _, properties) => {
                         let mut rsp = FetchEventsResponse::new();
-                        rsp.event_type = EventType::ADAPTER_PROPERTY;
+                        rsp.event_type = EventType::ADAPTER_PROPERTY.into();
                         rsp.params.insert(
                             String::from("status"),
                             event_data_from_string(format!("{:?}", status)),
@@ -182,7 +181,7 @@ impl AdapterService for AdapterServiceImpl {
                     }
                     BaseCallbacks::DiscoveryState(state) => {
                         let mut rsp = FetchEventsResponse::new();
-                        rsp.event_type = EventType::DISCOVERY_STATE;
+                        rsp.event_type = EventType::DISCOVERY_STATE.into();
                         rsp.params.insert(
                             String::from("discovery_state"),
                             event_data_from_string(format!("{:?}", state)),
@@ -191,7 +190,7 @@ impl AdapterService for AdapterServiceImpl {
                     }
                     BaseCallbacks::DeviceFound(_, properties) => {
                         let mut rsp = FetchEventsResponse::new();
-                        rsp.event_type = EventType::DEVICE_FOUND;
+                        rsp.event_type = EventType::DEVICE_FOUND.into();
                         for property in properties.clone() {
                             let (key, event_data) = bluetooth_property_to_event_data(property);
                             if key == "skip" {
@@ -203,7 +202,7 @@ impl AdapterService for AdapterServiceImpl {
                     }
                     BaseCallbacks::BondState(_, address, state, _) => {
                         let mut rsp = FetchEventsResponse::new();
-                        rsp.event_type = EventType::BOND_STATE;
+                        rsp.event_type = EventType::BOND_STATE.into();
                         rsp.params.insert(
                             String::from("bond_state"),
                             event_data_from_string(format!("{:?}", state)),
@@ -239,7 +238,7 @@ impl AdapterService for AdapterServiceImpl {
         &mut self,
         ctx: RpcContext<'_>,
         req: SetDiscoveryModeRequest,
-        sink: UnarySink<SetDiscoveryModeResponse>,
+        sink: UnarySink<Empty>,
     ) {
         let scan_mode = if req.enable_inquiry_scan {
             btif::BtScanMode::ConnectableDiscoverable
@@ -248,16 +247,9 @@ impl AdapterService for AdapterServiceImpl {
         } else {
             btif::BtScanMode::None_
         };
-        let status = self
-            .btif_intf
-            .lock()
-            .unwrap()
-            .set_adapter_property(btif::BluetoothProperty::AdapterScanMode(scan_mode));
-
-        let mut resp = SetDiscoveryModeResponse::new();
-        resp.status = status;
+        self.btif_intf.lock().unwrap().set_scan_mode(scan_mode);
         ctx.spawn(async move {
-            sink.success(resp).await.unwrap();
+            sink.success(Empty::default()).await.unwrap();
         })
     }
 

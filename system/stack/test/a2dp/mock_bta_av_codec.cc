@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-#include <map>
-#include <string>
-
 #include "a2dp_codec_api.h"
 
-A2dpCodecConfig* bta_av_get_a2dp_current_codec(void) {
-  return nullptr;
-}
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
+A2dpCodecConfig* bta_av_get_a2dp_current_codec(void) { return nullptr; }

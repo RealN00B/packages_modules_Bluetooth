@@ -16,13 +16,13 @@
 
 #include "play_item.h"
 
+#include "internal_include/bt_trace.h"
+
 namespace bluetooth {
 namespace avrcp {
 
-std::unique_ptr<PlayItemResponseBuilder> PlayItemResponseBuilder::MakeBuilder(
-    Status status) {
-  std::unique_ptr<PlayItemResponseBuilder> builder(
-      new PlayItemResponseBuilder(status));
+std::unique_ptr<PlayItemResponseBuilder> PlayItemResponseBuilder::MakeBuilder(Status status) {
+  std::unique_ptr<PlayItemResponseBuilder> builder(new PlayItemResponseBuilder(status));
 
   return builder;
 }
@@ -33,8 +33,7 @@ size_t PlayItemResponseBuilder::size() const {
   return len;
 }
 
-bool PlayItemResponseBuilder::Serialize(
-    const std::shared_ptr<::bluetooth::Packet>& pkt) {
+bool PlayItemResponseBuilder::Serialize(const std::shared_ptr<::bluetooth::Packet>& pkt) {
   ReserveSpace(pkt, size());
 
   PacketBuilder::PushHeader(pkt);
@@ -62,7 +61,9 @@ uint16_t PlayItemRequest::GetUidCounter() const {
 }
 
 bool PlayItemRequest::IsValid() const {
-  if (!VendorPacket::IsValid()) return false;
+  if (!VendorPacket::IsValid()) {
+    return false;
+  }
   return size() == kMinSize();
 }
 

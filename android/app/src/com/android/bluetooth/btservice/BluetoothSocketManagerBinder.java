@@ -16,19 +16,27 @@
 
 package com.android.bluetooth.btservice;
 
+import static android.Manifest.permission.BLUETOOTH_PRIVILEGED;
+
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
+import android.bluetooth.BluetoothSocketSettings;
 import android.bluetooth.IBluetoothSocketManager;
+import android.content.AttributionSource;
 import android.os.Binder;
 import android.os.ParcelFileDescriptor;
 import android.os.ParcelUuid;
+import android.util.Log;
 
 import com.android.bluetooth.Utils;
+import com.android.bluetooth.flags.Flags;
 
 class BluetoothSocketManagerBinder extends IBluetoothSocketManager.Stub {
-    private static final String TAG = "BluetoothSocketManagerBinder";
+    private static final String TAG = "BtSocketManagerBinder";
 
     private static final int INVALID_FD = -1;
+
+    private static final int INVALID_CID = -1;
 
     private AdapterService mService;
 
@@ -50,18 +58,114 @@ class BluetoothSocketManagerBinder extends IBluetoothSocketManager.Stub {
             return null;
         }
 
+        String brEdrAddress =
+                Flags.identityAddressNullIfNotKnown()
+                        ? Utils.getBrEdrAddress(device)
+                        : mService.getIdentityAddress(device.getAddress());
+
+        Log.i(
+                TAG,
+                "connectSocket: device="
+                        + device
+                        + ", type="
+                        + type
+                        + ", uuid="
+                        + uuid
+                        + ", port="
+                        + port
+                        + ", from "
+                        + Utils.getUidPidString());
+
         return marshalFd(
                 mService.getNative()
                         .connectSocket(
                                 Utils.getBytesFromAddress(
                                         type == BluetoothSocket.TYPE_L2CAP_LE
                                                 ? device.getAddress()
-                                                : mService.getIdentityAddress(device.getAddress())),
+                                                : brEdrAddress),
                                 type,
                                 Utils.uuidToByteArray(uuid),
                                 port,
                                 flag,
-                                Binder.getCallingUid()));
+                                Binder.getCallingUid(),
+                                0,
+                                "",
+                                0,
+                                0,
+                                0));
+    }
+
+    @Override
+    public ParcelFileDescriptor connectSocketwithOffload(
+            BluetoothDevice device,
+            int type,
+            ParcelUuid uuid,
+            int port,
+            int flag,
+            int dataPath,
+            String socketName,
+            long hubId,
+            long endpointId,
+            int maximumPacketSize) {
+
+        enforceActiveUser();
+
+        if (!Utils.checkConnectPermissionForPreflight(mService)) {
+            return null;
+        }
+
+        if (dataPath != BluetoothSocketSettings.DATA_PATH_NO_OFFLOAD) {
+            mService.enforceCallingOrSelfPermission(BLUETOOTH_PRIVILEGED, null);
+            if (type != BluetoothSocket.TYPE_LE || !mService.isLeCocSocketOffloadSupported()) {
+                throw new IllegalStateException("Unsupported socket type for offload " + type);
+            }
+        }
+
+        String brEdrAddress =
+                Flags.identityAddressNullIfNotKnown()
+                        ? Utils.getBrEdrAddress(device)
+                        : mService.getIdentityAddress(device.getAddress());
+
+        Log.i(
+                TAG,
+                "connectSocketwithOffload: device="
+                        + device
+                        + ", type="
+                        + type
+                        + ", uuid="
+                        + uuid
+                        + ", port="
+                        + port
+                        + ", from "
+                        + Utils.getUidPidString()
+                        + ", dataPath="
+                        + dataPath
+                        + ", socketName="
+                        + socketName
+                        + ", hubId="
+                        + hubId
+                        + ", endpointId="
+                        + endpointId
+                        + ", maximumPacketSize="
+                        + maximumPacketSize);
+
+        return marshalFd(
+                mService.getNative()
+                        .connectSocket(
+                                Utils.getBytesFromAddress(
+                                        type == BluetoothSocket.TYPE_L2CAP_LE
+                                                ? device.getAddress()
+                                                : brEdrAddress),
+                                type,
+                                Utils.uuidToByteArray(uuid),
+                                port,
+                                flag,
+                                Binder.getCallingUid(),
+                                dataPath,
+                                socketName,
+                                hubId,
+                                endpointId,
+                                maximumPacketSize));
     }
 
     @Override
@@ -74,6 +178,19 @@ class BluetoothSocketManagerBinder extends IBluetoothSocketManager.Stub {
             return null;
         }
 
+        Log.i(
+                TAG,
+                "createSocketChannel: type="
+                        + type
+                        + ", serviceName="
+                        + serviceName
+                        + ", uuid="
+                        + uuid
+                        + ", port="
+                        + port
+                        + ", from "
+                        + Utils.getUidPidString());
+
         return marshalFd(
                 mService.getNative()
                         .createSocketChannel(
@@ -82,7 +199,77 @@ class BluetoothSocketManagerBinder extends IBluetoothSocketManager.Stub {
                                 Utils.uuidToByteArray(uuid),
                                 port,
                                 flag,
-                                Binder.getCallingUid()));
+                                Binder.getCallingUid(),
+                                0,
+                                "",
+                                0,
+                                0,
+                                0));
+    }
+
+    @Override
+    public ParcelFileDescriptor createSocketChannelWithOffload(
+            int type,
+            String serviceName,
+            ParcelUuid uuid,
+            int port,
+            int flag,
+            int dataPath,
+            String socketName,
+            long hubId,
+            long endpointId,
+            int maximumPacketSize) {
+
+        enforceActiveUser();
+
+        if (!Utils.checkConnectPermissionForPreflight(mService)) {
+            return null;
+        }
+
+        if (dataPath != BluetoothSocketSettings.DATA_PATH_NO_OFFLOAD) {
+            mService.enforceCallingOrSelfPermission(BLUETOOTH_PRIVILEGED, null);
+            if (type != BluetoothSocket.TYPE_LE || !mService.isLeCocSocketOffloadSupported()) {
+                throw new IllegalStateException("Unsupported socket type for offload " + type);
+            }
+        }
+
+        Log.i(
+                TAG,
+                "createSocketChannelWithOffload: type="
+                        + type
+                        + ", serviceName="
+                        + serviceName
+                        + ", uuid="
+                        + uuid
+                        + ", port="
+                        + port
+                        + ", from "
+                        + Utils.getUidPidString()
+                        + ", dataPath="
+                        + dataPath
+                        + ", socketName="
+                        + socketName
+                        + ", hubId="
+                        + hubId
+                        + ", endpointId="
+                        + endpointId
+                        + ", maximumPacketSize="
+                        + maximumPacketSize);
+
+        return marshalFd(
+                mService.getNative()
+                        .createSocketChannel(
+                                type,
+                                serviceName,
+                                Utils.uuidToByteArray(uuid),
+                                port,
+                                flag,
+                                Binder.getCallingUid(),
+                                dataPath,
+                                socketName,
+                                hubId,
+                                endpointId,
+                                maximumPacketSize));
     }
 
     @Override
@@ -95,6 +282,34 @@ class BluetoothSocketManagerBinder extends IBluetoothSocketManager.Stub {
 
         mService.getNative()
                 .requestMaximumTxDataLength(Utils.getBytesFromAddress(device.getAddress()));
+    }
+
+    @Override
+    public int getL2capLocalChannelId(ParcelUuid connectionUuid, AttributionSource source) {
+        AdapterService service = mService;
+        if (service == null
+                || !Utils.callerIsSystemOrActiveOrManagedUser(
+                        service, TAG, "getL2capLocalChannelId")
+                || !Utils.checkConnectPermissionForDataDelivery(
+                        service, source, "BluetoothSocketManagerBinder getL2capLocalChannelId")) {
+            return INVALID_CID;
+        }
+        service.enforceCallingOrSelfPermission(BLUETOOTH_PRIVILEGED, null);
+        return service.getNative().getSocketL2capLocalChannelId(connectionUuid);
+    }
+
+    @Override
+    public int getL2capRemoteChannelId(ParcelUuid connectionUuid, AttributionSource source) {
+        AdapterService service = mService;
+        if (service == null
+                || !Utils.callerIsSystemOrActiveOrManagedUser(
+                        service, TAG, "getL2capRemoteChannelId")
+                || !Utils.checkConnectPermissionForDataDelivery(
+                        service, source, "BluetoothSocketManagerBinder getL2capRemoteChannelId")) {
+            return INVALID_CID;
+        }
+        service.enforceCallingOrSelfPermission(BLUETOOTH_PRIVILEGED, null);
+        return service.getNative().getSocketL2capRemoteChannelId(connectionUuid);
     }
 
     private void enforceActiveUser() {

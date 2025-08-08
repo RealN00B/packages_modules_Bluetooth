@@ -28,7 +28,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
 import org.junit.runner.RunWith
-import org.mockito.Mockito.times
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 
@@ -58,9 +57,9 @@ internal fun enableMode(resolver: ContentResolver, looper: Looper, modeKey: Stri
 
 @RunWith(RobolectricTestRunner::class)
 class RadioModeListenerTest {
+    @get:Rule val testName = TestName()
     private val resolver: ContentResolver =
         ApplicationProvider.getApplicationContext<Context>().getContentResolver()
-    @JvmField @Rule val testName = TestName()
 
     private val looper: Looper = Looper.getMainLooper()
 
@@ -180,7 +179,7 @@ class RadioModeListenerTest {
     }
 
     @Test
-    fun disable_whenDisabled_isDicarded() {
+    fun disable_whenDisabled_isDiscarded() {
         enableSensitive()
         disableMode()
 

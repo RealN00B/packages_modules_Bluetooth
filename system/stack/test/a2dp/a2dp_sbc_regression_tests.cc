@@ -16,15 +16,13 @@
 
 #include <gtest/gtest.h>
 
-#include <cstring>
-
 #include "a2dp_sbc.h"
 
 namespace bluetooth {
 namespace testing {
 
 class A2DPRegressionTests : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {}
   void TearDown() override {}
 };

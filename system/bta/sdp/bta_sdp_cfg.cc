@@ -20,22 +20,20 @@
  *  This file contains compile-time configurable constants for SDP Search
  ******************************************************************************/
 
-#include "bt_target.h"  // Must be first to define build configuration
-
 #include "bta/include/bta_sdp_api.h"
+#include "internal_include/bt_target.h"
 #include "stack/include/sdp_api.h"
 
 #ifndef BTA_SDP_DB_SIZE
 #define BTA_SDP_DB_SIZE 4500
 #endif
 
-static tSDP_DISCOVERY_DB
-    bta_sdp_db_data[BTA_SDP_DB_SIZE / sizeof(tSDP_DISCOVERY_DB)];
+static tSDP_DISCOVERY_DB bta_sdp_db_data[BTA_SDP_DB_SIZE / sizeof(tSDP_DISCOVERY_DB)];
 
 /* SDP configuration structure */
 const tBTA_SDP_CFG bta_sdp_cfg = {
-    (BTA_SDP_DB_SIZE / sizeof(tSDP_DISCOVERY_DB)) * sizeof(tSDP_DISCOVERY_DB),
-    bta_sdp_db_data /* The data buffer to keep SDP database */
+        (BTA_SDP_DB_SIZE / sizeof(tSDP_DISCOVERY_DB)) * sizeof(tSDP_DISCOVERY_DB),
+        bta_sdp_db_data /* The data buffer to keep SDP database */
 };
 
 const tBTA_SDP_CFG* p_bta_sdp_cfg = &bta_sdp_cfg;

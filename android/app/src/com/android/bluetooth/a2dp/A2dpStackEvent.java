@@ -16,12 +16,14 @@
 
 package com.android.bluetooth.a2dp;
 
+import static android.bluetooth.BluetoothProfile.getConnectionStateName;
+
 import android.bluetooth.BluetoothCodecStatus;
 import android.bluetooth.BluetoothDevice;
 
 /**
- * Stack event sent via a callback from JNI to Java, or generated
- * internally by the A2DP State Machine.
+ * Stack event sent via a callback from JNI to Java, or generated internally by the A2DP State
+ * Machine.
  */
 public class A2dpStackEvent {
     // Event types for STACK_EVENT message (coming from native)
@@ -30,12 +32,6 @@ public class A2dpStackEvent {
     public static final int EVENT_TYPE_AUDIO_STATE_CHANGED = 2;
     public static final int EVENT_TYPE_CODEC_CONFIG_CHANGED = 3;
 
-    // Do not modify without updating the HAL bt_av.h files.
-    // Match up with btav_connection_state_t enum of bt_av.h
-    static final int CONNECTION_STATE_DISCONNECTED = 0;
-    static final int CONNECTION_STATE_CONNECTING = 1;
-    static final int CONNECTION_STATE_CONNECTED = 2;
-    static final int CONNECTION_STATE_DISCONNECTING = 3;
     // Match up with btav_audio_state_t enum of bt_av.h
     static final int AUDIO_STATE_REMOTE_SUSPEND = 0;
     static final int AUDIO_STATE_STOPPED = 1;
@@ -54,11 +50,11 @@ public class A2dpStackEvent {
     public String toString() {
         // event dump
         StringBuilder result = new StringBuilder();
-        result.append("A2dpStackEvent {type:" + eventTypeToString(type));
-        result.append(", device:" + device);
-        result.append(", value1:" + eventTypeValueIntToString(type, valueInt));
+        result.append("A2dpStackEvent {type:").append(eventTypeToString(type));
+        result.append(", device:").append(device);
+        result.append(", value1:").append(eventTypeValueIntToString(type, valueInt));
         if (codecStatus != null) {
-            result.append(", codecStatus:" + codecStatus);
+            result.append(", codecStatus:").append(codecStatus);
         }
         result.append("}");
         return result.toString();
@@ -82,19 +78,7 @@ public class A2dpStackEvent {
     private static String eventTypeValueIntToString(int type, int value) {
         switch (type) {
             case EVENT_TYPE_CONNECTION_STATE_CHANGED:
-                switch (value) {
-                    case CONNECTION_STATE_DISCONNECTED:
-                        return "DISCONNECTED";
-                    case CONNECTION_STATE_CONNECTING:
-                        return "CONNECTING";
-                    case CONNECTION_STATE_CONNECTED:
-                        return "CONNECTED";
-                    case CONNECTION_STATE_DISCONNECTING:
-                        return "DISCONNECTING";
-                    default:
-                        break;
-                }
-                break;
+                return getConnectionStateName(value);
             case EVENT_TYPE_AUDIO_STATE_CHANGED:
                 switch (value) {
                     case AUDIO_STATE_REMOTE_SUSPEND:

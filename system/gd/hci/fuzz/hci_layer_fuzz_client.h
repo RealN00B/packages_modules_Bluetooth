@@ -16,8 +16,12 @@
 
 #pragma once
 
+#include <fuzzer/FuzzedDataProvider.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include <vector>
+
 #include "hci/fuzz/status_vs_complete_commands.h"
 #include "hci/hci_layer.h"
 #include "hci/hci_packets.h"
@@ -25,14 +29,12 @@
 #include "os/fuzz/dev_null_queue.h"
 #include "os/fuzz/fuzz_inject_queue.h"
 
-#include <fuzzer/FuzzedDataProvider.h>
-
 namespace bluetooth {
 namespace hci {
 namespace fuzz {
 
 class HciLayerFuzzClient : public Module {
- public:
+public:
   HciLayerFuzzClient() : Module() {}
 
   void Start() override;
@@ -40,17 +42,13 @@ class HciLayerFuzzClient : public Module {
 
   void injectArbitrary(FuzzedDataProvider& fdp);
 
-  void ListDependencies(ModuleList* list) const override {
-    list->add<hci::HciLayer>();
-  }
+  void ListDependencies(ModuleList* list) const override { list->add<hci::HciLayer>(); }
 
   static const ModuleFactory Factory;
 
-  std::string ToString() const override {
-    return "DevNullHci";
-  }
+  std::string ToString() const override { return "DevNullHci"; }
 
- private:
+private:
   void injectAclData(std::vector<uint8_t> data);
   void injectHciCommand(std::vector<uint8_t> data);
   void injectSecurityCommand(std::vector<uint8_t> data);
@@ -67,14 +65,16 @@ class HciLayerFuzzClient : public Module {
       return;
     }
 
-    if (uses_command_status(commandPacket.GetOpCode())) {
+    if (uses_command_status_or_complete(commandPacket.GetOpCode())) {
       interface->EnqueueCommand(
-          TBUILDER::FromView(commandPacket),
-          GetHandler()->BindOnce([](CommandStatusView /* status */) {}));
+              TBUILDER::FromView(commandPacket),
+              GetHandler()->BindOnce([](CommandStatusOrCompleteView /* status */) {}));
+    } else if (uses_command_status(commandPacket.GetOpCode())) {
+      interface->EnqueueCommand(TBUILDER::FromView(commandPacket),
+                                GetHandler()->BindOnce([](CommandStatusView /* status */) {}));
     } else {
-      interface->EnqueueCommand(
-          TBUILDER::FromView(commandPacket),
-          GetHandler()->BindOnce([](CommandCompleteView /* status */) {}));
+      interface->EnqueueCommand(TBUILDER::FromView(commandPacket),
+                                GetHandler()->BindOnce([](CommandCompleteView /* status */) {}));
     }
   }
 

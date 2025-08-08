@@ -16,10 +16,13 @@
 
 #define LOG_TAG "hfp_lc3_encoder"
 
+#include <bluetooth/log.h>
+
 #include "hfp_lc3_encoder.h"
 #include "mmc/codec_client/codec_client.h"
 #include "mmc/proto/mmc_config.pb.h"
-#include "osi/include/log.h"
+
+using namespace bluetooth;
 
 const int HFP_LC3_PCM_BYTES = 480;
 const int HFP_LC3_PKT_FRAME_LEN = 58;
@@ -46,8 +49,7 @@ void hfp_lc3_encoder_init() {
 
   int ret = client->init(config);
   if (ret < 0) {
-    LOG_ERROR("%s: Init failed with error message, %s", __func__,
-              strerror(-ret));
+    log::error("Init failed with error message, {}", strerror(-ret));
   }
   return;
 }
@@ -62,21 +64,19 @@ void hfp_lc3_encoder_cleanup() {
 
 uint32_t hfp_lc3_encode_frames(int16_t* input, uint8_t* output) {
   if (input == nullptr || output == nullptr) {
-    LOG_ERROR("%s: Buffer is null", __func__);
+    log::error("Buffer is null");
     return 0;
   }
 
   if (!client) {
-    LOG_ERROR("%s: CodecClient has not been initialized", __func__);
+    log::error("CodecClient has not been initialized");
     return 0;
   }
 
-  int rc = client->transcode((uint8_t*)input, HFP_LC3_PCM_BYTES, output,
-                             HFP_LC3_PKT_FRAME_LEN);
+  int rc = client->transcode((uint8_t*)input, HFP_LC3_PCM_BYTES, output, HFP_LC3_PKT_FRAME_LEN);
 
   if (rc < 0) {
-    LOG_WARN("%s: Encode failed with error message, %s", __func__,
-             strerror(-rc));
+    log::warn("Encode failed with error message, {}", strerror(-rc));
     return 0;
   }
 

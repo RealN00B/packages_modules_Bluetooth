@@ -29,6 +29,9 @@
 #include "stack/include/main_thread.h"
 #include "types/raw_address.h"
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 /*******************************************************************************
  *
  * Function         bta_dm_ci_rmt_oob
@@ -40,17 +43,13 @@
  * Returns          void
  *
  ******************************************************************************/
-void bta_dm_ci_rmt_oob(bool accept, const RawAddress& bd_addr, const Octet16& c,
-                       const Octet16& r) {
-  std::unique_ptr<tBTA_DM_CI_RMT_OOB> msg =
-      std::make_unique<tBTA_DM_CI_RMT_OOB>();
+void bta_dm_ci_rmt_oob(bool accept, const RawAddress& bd_addr, const Octet16& c, const Octet16& r) {
+  std::unique_ptr<tBTA_DM_CI_RMT_OOB> msg = std::make_unique<tBTA_DM_CI_RMT_OOB>();
 
   msg->bd_addr = bd_addr;
   msg->accept = accept;
   msg->c = c;
   msg->r = r;
 
-  do_in_main_thread(FROM_HERE,
-                    base::Bind(bta_dm_ci_rmt_oob_act, base::Passed(&msg)));
+  do_in_main_thread(base::Bind(bta_dm_ci_rmt_oob_act, base::Passed(&msg)));
 }
-

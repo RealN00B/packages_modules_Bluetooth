@@ -16,23 +16,18 @@
 
 package com.android.bluetooth.gatt;
 
-import android.os.Looper;
 import android.util.Log;
 
 import com.android.bluetooth.Utils;
 import com.android.bluetooth.btservice.AdapterService;
-import com.android.bluetooth.btservice.BluetoothAdapterProxy;
 
-/**
- * Factory class for object initialization to help with unit testing
- */
+/** Factory class for object initialization to help with unit testing */
 public class GattObjectsFactory {
     private static final String TAG = GattObjectsFactory.class.getSimpleName();
     private static GattObjectsFactory sInstance;
     private static final Object INSTANCE_LOCK = new Object();
 
-    private GattObjectsFactory() {
-    }
+    private GattObjectsFactory() {}
 
     /**
      * Get the singleton instance of object factory
@@ -53,7 +48,7 @@ public class GattObjectsFactory {
      *
      * @param objectsFactory a test instance of the GattObjectsFactory
      */
-    static void setInstanceForTesting(GattObjectsFactory objectsFactory) {
+    public static void setInstanceForTesting(GattObjectsFactory objectsFactory) {
         Utils.enforceInstrumentationTestMode();
         synchronized (INSTANCE_LOCK) {
             Log.d(TAG, "setInstanceForTesting(), set to " + objectsFactory);
@@ -63,31 +58,6 @@ public class GattObjectsFactory {
 
     public GattNativeInterface getNativeInterface() {
         return GattNativeInterface.getInstance();
-    }
-
-    public ScanNativeInterface getScanNativeInterface() {
-        return ScanNativeInterface.getInstance();
-    }
-
-    /**
-     * Create an instance of ScanManager
-     *
-     * @param service a GattService instance
-     * @param adapterService an AdapterService instance
-     * @param bluetoothAdapterProxy a bluetoothAdapterProxy instance
-     * @param looper the looper to be used for processing messages
-     * @return the created ScanManager instance
-     */
-    public ScanManager createScanManager(
-            GattService service,
-            AdapterService adapterService,
-            BluetoothAdapterProxy bluetoothAdapterProxy,
-            Looper looper) {
-        return new ScanManager(service, adapterService, bluetoothAdapterProxy, looper);
-    }
-
-    public PeriodicScanManager createPeriodicScanManager(AdapterService adapterService) {
-        return new PeriodicScanManager(adapterService);
     }
 
     public DistanceMeasurementManager createDistanceMeasurementManager(

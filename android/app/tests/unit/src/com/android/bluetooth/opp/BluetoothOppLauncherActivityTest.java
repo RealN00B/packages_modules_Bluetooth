@@ -16,9 +16,6 @@
 
 package com.android.bluetooth.opp;
 
-import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
-import static android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
-import static android.content.pm.PackageManager.DONT_KILL_APP;
 
 import static androidx.test.espresso.intent.Intents.intended;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.hasAction;
@@ -26,18 +23,27 @@ import static androidx.test.espresso.intent.matcher.IntentMatchers.hasComponent;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.junit.Assume.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 
 import android.bluetooth.BluetoothDevicePicker;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.platform.test.annotations.DisableFlags;
+import android.platform.test.annotations.EnableFlags;
+import android.platform.test.flag.junit.SetFlagsRule;
+import android.sysprop.BluetoothProperties;
 
 import androidx.lifecycle.Lifecycle;
 import androidx.test.core.app.ActivityScenario;
@@ -48,6 +54,7 @@ import androidx.test.runner.AndroidJUnit4;
 
 import com.android.bluetooth.BluetoothMethodProxy;
 import com.android.bluetooth.TestUtils;
+import com.android.bluetooth.flags.Flags;
 
 import org.junit.After;
 import org.junit.Before;
@@ -57,37 +64,45 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 @MediumTest
 @RunWith(AndroidJUnit4.class)
 public class BluetoothOppLauncherActivityTest {
+    public static final String CONTENT_TYPE = "image/png";
+
     Context mTargetContext;
     Intent mIntent;
 
     BluetoothMethodProxy mMethodProxy;
-    @Mock
-    BluetoothOppManager mBluetoothOppManager;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
+    @Mock BluetoothOppManager mBluetoothOppManager;
 
     // Activity tests can sometimes flaky because of external factors like system dialog, etc.
     // making the expected Espresso's root not focused or the activity doesn't show up.
     // Add retry rule to resolve this problem.
     @Rule public TestUtils.RetryTestRule mRetryTestRule = new TestUtils.RetryTestRule();
 
+    @Rule public SetFlagsRule.ClassRule mSetFlagsClassRule = new SetFlagsRule.ClassRule();
+
     @Before
     public void setUp() throws Exception {
-        MockitoAnnotations.initMocks(this);
-        mTargetContext = spy(new ContextWrapper(
-                ApplicationProvider.getApplicationContext()));
+        assumeTrue(BluetoothProperties.isProfileOppEnabled().orElse(false));
+
+        mTargetContext = spy(new ContextWrapper(ApplicationProvider.getApplicationContext()));
         mMethodProxy = spy(BluetoothMethodProxy.getInstance());
         BluetoothMethodProxy.setInstanceForTesting(mMethodProxy);
 
         mIntent = new Intent();
         mIntent.setClass(mTargetContext, BluetoothOppLauncherActivity.class);
 
-        BluetoothOppTestUtils.enableOppActivities(true, mTargetContext);
         TestUtils.setUpUiTest();
 
         BluetoothOppManager.setInstance(mBluetoothOppManager);
@@ -96,25 +111,27 @@ public class BluetoothOppLauncherActivityTest {
 
     @After
     public void tearDown() throws Exception {
+        if (!BluetoothProperties.isProfileOppEnabled().orElse(false)) {
+            return;
+        }
         TestUtils.tearDownUiTest();
         BluetoothMethodProxy.setInstanceForTesting(null);
         BluetoothOppManager.setInstance(null);
         Intents.release();
-        BluetoothOppTestUtils.enableOppActivities(false, mTargetContext);
     }
 
     @Test
     public void onCreate_withNoAction_returnImmediately() throws Exception {
-        ActivityScenario<BluetoothOppLauncherActivity> activityScenario = ActivityScenario.launch(
-                mIntent);
+        ActivityScenario<BluetoothOppLauncherActivity> activityScenario =
+                ActivityScenario.launch(mIntent);
         assertActivityState(activityScenario, Lifecycle.State.DESTROYED);
     }
 
     @Test
     public void onCreate_withActionSend_withoutMetadata_finishImmediately() throws Exception {
         mIntent.setAction(Intent.ACTION_SEND);
-        ActivityScenario<BluetoothOppLauncherActivity> activityScenario = ActivityScenario.launch(
-                mIntent);
+        ActivityScenario<BluetoothOppLauncherActivity> activityScenario =
+                ActivityScenario.launch(mIntent);
         assertActivityState(activityScenario, Lifecycle.State.DESTROYED);
     }
 
@@ -122,9 +139,232 @@ public class BluetoothOppLauncherActivityTest {
     public void onCreate_withActionSendMultiple_withoutMetadata_finishImmediately()
             throws Exception {
         mIntent.setAction(Intent.ACTION_SEND_MULTIPLE);
-        ActivityScenario<BluetoothOppLauncherActivity> activityScenario = ActivityScenario.launch(
-                mIntent);
+        ActivityScenario<BluetoothOppLauncherActivity> activityScenario =
+                ActivityScenario.launch(mIntent);
         assertActivityState(activityScenario, Lifecycle.State.DESTROYED);
+    }
+
+    @Test
+    @EnableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSend_checkEnabled_noPermission_doesNotSaveFileInfo()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_DENIED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        String uriString = "content://test.provider/1";
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendIntent(uriString));
+
+        verify(mBluetoothOppManager, never())
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriString),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @EnableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSend_checkEnabled_hasPermission_savesFileInfo()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_GRANTED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        String uriString = "content://test.provider/1";
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendIntent(uriString));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriString),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @DisableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSend_checkNotEnabled_noPermission_savesFileInfo()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_DENIED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        String uriString = "content://test.provider/1";
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendIntent(uriString));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriString),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @DisableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSend_checkNotEnabled_hasPermission_savesFileInfo()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_GRANTED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        String uriString = "content://test.provider/1";
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendIntent(uriString));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriString),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    private Intent createSendIntent(String uriString) {
+        return new Intent(Intent.ACTION_SEND)
+                .setClass(mTargetContext, BluetoothOppLauncherActivity.class)
+                .setType(CONTENT_TYPE)
+                .putExtra(Intent.EXTRA_STREAM, Uri.parse(uriString));
+    }
+
+    @Test
+    @EnableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSendMultiple_checkEnabled_noPermission_doesNotSaveFileInfos()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_DENIED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        List<Uri> uriList =
+                Arrays.asList(
+                        Uri.parse("content://test.provider/1"),
+                        Uri.parse("content://test.provider/2"));
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendMultipleIntent(uriList));
+
+        verify(mBluetoothOppManager, never())
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriList),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @EnableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSendMultiple_checkEnabled_hasPermission_savesFileInfos()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_GRANTED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        List<Uri> uriList =
+                Arrays.asList(
+                        Uri.parse("content://test.provider/1"),
+                        Uri.parse("content://test.provider/2"));
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendMultipleIntent(uriList));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriList),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @EnableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void
+            onCreate_withActionSendMultiple_checkEnabled_partialPermission_savesPermittedFileInfo()
+                    throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_GRANTED, PackageManager.PERMISSION_DENIED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        List<Uri> uriList =
+                Arrays.asList(
+                        Uri.parse("content://test.provider/1"),
+                        Uri.parse("content://test.provider/2"));
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendMultipleIntent(uriList));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(Arrays.asList(Uri.parse("content://test.provider/1"))),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @DisableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSendMultiple_checkNotEnabled_noPermission_savesFileInfos()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_DENIED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        List<Uri> uriList =
+                Arrays.asList(
+                        Uri.parse("content://test.provider/1"),
+                        Uri.parse("content://test.provider/2"));
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendMultipleIntent(uriList));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriList),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @DisableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSendMultiple_checkNotEnabled_hasPermission_savesFileInfos()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_GRANTED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        List<Uri> uriList =
+                Arrays.asList(
+                        Uri.parse("content://test.provider/1"),
+                        Uri.parse("content://test.provider/2"));
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendMultipleIntent(uriList));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriList),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    @Test
+    @DisableFlags(Flags.FLAG_OPP_CHECK_CONTENT_URI_PERMISSIONS)
+    public void onCreate_withActionSendMultiple_checkNotEnabled_partialPermission_savesFileInfos()
+            throws Exception {
+        doReturn(true).when(mMethodProxy).bluetoothAdapterIsEnabled(any());
+        doReturn(PackageManager.PERMISSION_GRANTED, PackageManager.PERMISSION_DENIED)
+                .when(mMethodProxy)
+                .componentCallerCheckContentUriPermission(any(), any(), anyInt());
+        List<Uri> uriList =
+                Arrays.asList(
+                        Uri.parse("content://test.provider/1"),
+                        Uri.parse("content://test.provider/2"));
+
+        ActivityScenario<BluetoothOppLauncherActivity> unused =
+                ActivityScenario.launch(createSendMultipleIntent(uriList));
+
+        verify(mBluetoothOppManager)
+                .saveSendingFileInfo(
+                        eq(CONTENT_TYPE), eq(uriList),
+                        anyBoolean() /* isHandover */, anyBoolean() /* fromExternal */);
+    }
+
+    private Intent createSendMultipleIntent(List<Uri> uriList) {
+        return new Intent(Intent.ACTION_SEND_MULTIPLE)
+                .setClass(mTargetContext, BluetoothOppLauncherActivity.class)
+                .setType(CONTENT_TYPE)
+                .putParcelableArrayListExtra(Intent.EXTRA_STREAM, new ArrayList<>(uriList));
     }
 
     @Test
@@ -179,10 +419,10 @@ public class BluetoothOppLauncherActivityTest {
         final String shareContent =
                 "\na < b & c > a string to trigger pattern match with url: \r"
                         + "www.google.com, phone number: +821023456798, and email: abc@test.com";
-        scenario.onActivity(activity -> {
-            fileUri[0] = activity.createFileForSharedContent(activity, shareContent);
-
-        });
+        scenario.onActivity(
+                activity -> {
+                    fileUri[0] = activity.createFileForSharedContent(activity, shareContent);
+                });
         assertThat(fileUri[0].toString().endsWith(".html")).isTrue();
 
         File file = new File(fileUri[0].getPath());
@@ -197,11 +437,13 @@ public class BluetoothOppLauncherActivityTest {
         // Unsupported action, the activity will stay without being finished right the way
         mIntent.setAction("unsupported-action");
         ActivityScenario<BluetoothOppLauncherActivity> scenario = ActivityScenario.launch(mIntent);
-        doThrow(new IllegalArgumentException()).when(mBluetoothOppManager).saveSendingFileInfo(
-                any(), any(String.class), any(), any());
-        scenario.onActivity(activity -> {
-            activity.sendFileInfo("text/plain", "content:///abc.txt", false, false);
-        });
+        doThrow(new IllegalArgumentException())
+                .when(mBluetoothOppManager)
+                .saveSendingFileInfo(any(), any(String.class), any(), any());
+        scenario.onActivity(
+                activity -> {
+                    activity.sendFileInfo("text/plain", "content:///abc.txt", false, false);
+                });
 
         assertActivityState(scenario, Lifecycle.State.DESTROYED);
     }
@@ -210,19 +452,5 @@ public class BluetoothOppLauncherActivityTest {
             throws Exception {
         Thread.sleep(2_000);
         assertThat(activityScenario.getState()).isEqualTo(state);
-    }
-
-
-    private void enableActivity(boolean enable) {
-        int enabledState = enable ? COMPONENT_ENABLED_STATE_ENABLED
-                : COMPONENT_ENABLED_STATE_DEFAULT;
-
-        mTargetContext.getPackageManager().setApplicationEnabledSetting(
-                mTargetContext.getPackageName(), enabledState, DONT_KILL_APP);
-
-        ComponentName activityName = new ComponentName(mTargetContext,
-                BluetoothOppLauncherActivity.class);
-        mTargetContext.getPackageManager().setComponentEnabledSetting(
-                activityName, enabledState, DONT_KILL_APP);
     }
 }

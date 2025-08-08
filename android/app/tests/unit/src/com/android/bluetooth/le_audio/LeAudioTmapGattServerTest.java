@@ -25,7 +25,6 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.bluetooth.BluetoothGattCharacteristic;
@@ -37,11 +36,13 @@ import androidx.test.runner.AndroidJUnit4;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 @MediumTest
 @RunWith(AndroidJUnit4.class)
@@ -49,14 +50,14 @@ public class LeAudioTmapGattServerTest {
     private static final int TEST_ROLE_MASK =
             LeAudioTmapGattServer.TMAP_ROLE_FLAG_CG | LeAudioTmapGattServer.TMAP_ROLE_FLAG_UMS;
 
-    @Mock
-    private LeAudioTmapGattServer.BluetoothGattServerProxy mGattServerProxy;
+    @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
+
+    @Mock private LeAudioTmapGattServer.BluetoothGattServerProxy mGattServerProxy;
 
     private LeAudioTmapGattServer mServer;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         doReturn(true).when(mGattServerProxy).open(any());
         doReturn(true).when(mGattServerProxy).addService(any());
         mServer = new LeAudioTmapGattServer(mGattServerProxy);
@@ -72,8 +73,8 @@ public class LeAudioTmapGattServerTest {
         ArgumentCaptor<BluetoothGattService> captor =
                 ArgumentCaptor.forClass(BluetoothGattService.class);
         mServer.start(TEST_ROLE_MASK);
-        verify(mGattServerProxy, times(1)).open(any());
-        verify(mGattServerProxy, times(1)).addService(captor.capture());
+        verify(mGattServerProxy).open(any());
+        verify(mGattServerProxy).addService(captor.capture());
 
         // verify primary service with TMAP UUID
         BluetoothGattService service = captor.getValue();
@@ -94,7 +95,7 @@ public class LeAudioTmapGattServerTest {
 
         // verify stop triggers stop method call
         mServer.stop();
-        verify(mGattServerProxy, times(1)).close();
+        verify(mGattServerProxy).close();
     }
 
     @Test

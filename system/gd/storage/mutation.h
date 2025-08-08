@@ -17,7 +17,6 @@
 
 #include <queue>
 
-#include "os/log.h"
 #include "storage/config_cache.h"
 #include "storage/mutation_entry.h"
 
@@ -25,13 +24,13 @@ namespace bluetooth {
 namespace storage {
 
 class Mutation {
- public:
+public:
   Mutation(ConfigCache* config, ConfigCache* memory_only_config);
   void Add(MutationEntry entry);
   void Commit();
   friend ConfigCache;
 
- private:
+private:
   ConfigCache* config_;
   ConfigCache* memory_only_config_;
   std::queue<MutationEntry> normal_config_entries_;

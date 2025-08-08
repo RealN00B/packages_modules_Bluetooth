@@ -50,7 +50,7 @@ APTXBTENCEXPORT const char* aptxbtenc_version(void);
  * (0=little endian. Big endian otherwise)
  * The function returns 1 if an error occurred during the initialisation.
  * The function returns 0 if no error occurred during the initialisation. */
-APTXBTENCEXPORT int aptxbtenc_init(void* _state, short endian);
+APTXBTENCEXPORT int aptxbtenc_init(void* _state, int16_t endian);
 
 /* aptxbtenc_setsync_mode is used to initialise the sync mode in the encoder
  * state structure. _state should be a pointer to the encoder structure (stereo,
@@ -61,8 +61,7 @@ APTXBTENCEXPORT int aptxbtenc_setsync_mode(void* _state, int32_t sync_mode);
 
 /* StereoEncode will take 8 audio samples (16-bit per sample)
  * and generate one 32-bit codeword with autosync inserted. */
-APTXBTENCEXPORT int aptxbtenc_encodestereo(void* _state, void* _pcmL,
-                                           void* _pcmR, void* _buffer);
+APTXBTENCEXPORT int aptxbtenc_encodestereo(void* _state, void* _pcmL, void* _pcmR, void* _buffer);
 
 #ifdef __cplusplus
 }  //  /extern "C"

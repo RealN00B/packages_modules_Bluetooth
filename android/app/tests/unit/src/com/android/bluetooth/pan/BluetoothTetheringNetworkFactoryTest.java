@@ -18,7 +18,6 @@ package com.android.bluetooth.pan;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,31 +31,26 @@ import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
 import androidx.test.runner.AndroidJUnit4;
 
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Test cases for {@link BluetoothTetheringNetworkFactory}.
- */
+/** Test cases for {@link BluetoothTetheringNetworkFactory}. */
 @SmallTest
 @RunWith(AndroidJUnit4.class)
 public class BluetoothTetheringNetworkFactoryTest {
 
-    @Mock
-    private PanService mPanService;
+    @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
+
+    @Mock private PanService mPanService;
 
     private Context mContext = ApplicationProvider.getApplicationContext();
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
 
     @Test
     public void networkStartReverseTetherEmptyIface() {
@@ -102,8 +96,7 @@ public class BluetoothTetheringNetworkFactoryTest {
 
         assertThat(bluetoothTetheringNetworkFactory.getProvider()).isNotNull();
 
-        BluetoothAdapter adapter =
-                mContext.getSystemService(BluetoothManager.class).getAdapter();
+        BluetoothAdapter adapter = mContext.getSystemService(BluetoothManager.class).getAdapter();
         List<BluetoothDevice> bluetoothDevices = new ArrayList<>();
         BluetoothDevice bluetoothDevice = adapter.getRemoteDevice("11:11:11:11:11:11");
         bluetoothDevices.add(bluetoothDevice);
@@ -112,8 +105,8 @@ public class BluetoothTetheringNetworkFactoryTest {
 
         bluetoothTetheringNetworkFactory.stopReverseTether();
 
-        verify(mPanService, times(1)).getConnectedDevices();
-        verify(mPanService, times(1)).disconnect(bluetoothDevice);
+        verify(mPanService).getConnectedDevices();
+        verify(mPanService).disconnect(bluetoothDevice);
     }
 
     @Test

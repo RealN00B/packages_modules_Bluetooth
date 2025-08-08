@@ -22,35 +22,32 @@
  *
  ******************************************************************************/
 
-#define LOG_TAG "bluetooth"
+#define LOG_TAG "smp"
 
-#include <base/logging.h>
-#include <string.h>
+#include <bluetooth/log.h>
+#include <com_android_bluetooth_flags.h>
 
-#include "bt_target.h"
-#include "btm_ble_api.h"
-#include "common/metrics.h"
-#include "l2c_api.h"
-#include "main/shim/dumpsys.h"
+#include "internal_include/bt_target.h"
 #include "osi/include/allocator.h"
-#include "osi/include/log.h"
-#include "osi/include/osi.h"  // UNUSED_ATTR
 #include "smp_int.h"
 #include "stack/btm/btm_dev.h"
 #include "stack/include/bt_hdr.h"
+#include "stack/include/bt_types.h"
+#include "stack/include/l2cap_interface.h"
+#include "stack/include/l2cdefs.h"
 #include "types/raw_address.h"
 
-static void smp_connect_callback(uint16_t channel, const RawAddress& bd_addr,
-                                 bool connected, uint16_t reason,
-                                 tBT_TRANSPORT transport);
-static void smp_data_received(uint16_t channel, const RawAddress& bd_addr,
-                              BT_HDR* p_buf);
+using namespace bluetooth;
 
-static void smp_br_connect_callback(uint16_t channel, const RawAddress& bd_addr,
-                                    bool connected, uint16_t reason,
-                                    tBT_TRANSPORT transport);
-static void smp_br_data_received(uint16_t channel, const RawAddress& bd_addr,
-                                 BT_HDR* p_buf);
+static void smp_tx_complete_callback(uint16_t cid, uint16_t num_pkt);
+
+static void smp_connect_callback(uint16_t channel, const RawAddress& bd_addr, bool connected,
+                                 uint16_t reason, tBT_TRANSPORT transport);
+static void smp_data_received(uint16_t channel, const RawAddress& bd_addr, BT_HDR* p_buf);
+
+static void smp_br_connect_callback(uint16_t channel, const RawAddress& bd_addr, bool connected,
+                                    uint16_t reason, tBT_TRANSPORT transport);
+static void smp_br_data_received(uint16_t channel, const RawAddress& bd_addr, BT_HDR* p_buf);
 
 /*******************************************************************************
  *
@@ -62,22 +59,26 @@ static void smp_br_data_received(uint16_t channel, const RawAddress& bd_addr,
  ******************************************************************************/
 void smp_l2cap_if_init(void) {
   tL2CAP_FIXED_CHNL_REG fixed_reg;
-  LOG_VERBOSE("SMDBG l2c %s", __func__);
+  log::verbose("SMDBG l2c");
 
   fixed_reg.pL2CA_FixedConn_Cb = smp_connect_callback;
   fixed_reg.pL2CA_FixedData_Cb = smp_data_received;
+  fixed_reg.pL2CA_FixedTxComplete_Cb = smp_tx_complete_callback;
 
-  fixed_reg.pL2CA_FixedCong_Cb =
-      NULL; /* do not handle congestion on this channel */
-  fixed_reg.default_idle_tout =
-      60; /* set 60 seconds timeout, 0xffff default idle timeout */
+  fixed_reg.pL2CA_FixedCong_Cb = NULL; /* do not handle congestion on this channel */
+  fixed_reg.default_idle_tout = 60;    /* set 60 seconds timeout, 0xffff default idle timeout */
 
-  L2CA_RegisterFixedChannel(L2CAP_SMP_CID, &fixed_reg);
+  if (!stack::l2cap::get_interface().L2CA_RegisterFixedChannel(L2CAP_SMP_CID, &fixed_reg)) {
+    log::error("Unable to register with L2CAP fixed channel profile SMP psm:{}", L2CAP_SMP_CID);
+  }
 
   fixed_reg.pL2CA_FixedConn_Cb = smp_br_connect_callback;
   fixed_reg.pL2CA_FixedData_Cb = smp_br_data_received;
 
-  L2CA_RegisterFixedChannel(L2CAP_SMP_BR_CID, &fixed_reg);
+  if (!stack::l2cap::get_interface().L2CA_RegisterFixedChannel(L2CAP_SMP_BR_CID, &fixed_reg)) {
+    log::error("Unable to register with L2CAP fixed channel profile SMP_BR psm:{}",
+               L2CAP_SMP_BR_CID);
+  }
 }
 
 /*******************************************************************************
@@ -89,42 +90,32 @@ void smp_l2cap_if_init(void) {
  *                      connected (conn = true)/disconnected (conn = false).
  *
  ******************************************************************************/
-static void smp_connect_callback(UNUSED_ATTR uint16_t channel,
-                                 const RawAddress& bd_addr, bool connected,
-                                 UNUSED_ATTR uint16_t reason,
-                                 tBT_TRANSPORT transport) {
+static void smp_connect_callback(uint16_t /* channel */, const RawAddress& bd_addr, bool connected,
+                                 uint16_t /* reason */, tBT_TRANSPORT transport) {
   tSMP_CB* p_cb = &smp_cb;
   tSMP_INT_DATA int_data;
 
+  log::debug("bd_addr:{} transport:{}, connected:{}", bd_addr, bt_transport_text(transport),
+             connected);
+
   if (bd_addr.IsEmpty()) {
-    LOG_WARN("Received unexpected callback for empty address");
+    log::warn("empty address");
     return;
   }
 
   if (transport == BT_TRANSPORT_BR_EDR) {
-    LOG_WARN("Received unexpected callback on classic channel peer:%s",
-             ADDRESS_TO_LOGGABLE_CSTR(bd_addr));
+    log::warn("unexpected transport");
     return;
   }
 
-  if (connected) {
-    LOG_DEBUG("SMP Received connect callback bd_addr:%s transport:%s",
-              ADDRESS_TO_LOGGABLE_CSTR(bd_addr), bt_transport_text(transport).c_str());
-  } else {
-    LOG_DEBUG("SMP Received disconnect callback bd_addr:%s transport:%s",
-              ADDRESS_TO_LOGGABLE_CSTR(bd_addr), bt_transport_text(transport).c_str());
-  }
-
   if (bd_addr == p_cb->pairing_bda) {
-    LOG_DEBUG("Received callback for device in pairing process:%s state:%s",
-              ADDRESS_TO_LOGGABLE_CSTR(bd_addr),
-              (connected) ? "connected" : "disconnected");
+    log::debug("in pairing process");
 
     if (connected) {
       if (!p_cb->connect_initialized) {
         p_cb->connect_initialized = true;
         /* initiating connection established */
-        p_cb->role = L2CA_GetBleConnRole(bd_addr);
+        p_cb->role = stack::l2cap::get_interface().L2CA_GetBleConnRole(bd_addr);
 
         /* initialize local i/r key to be default keys */
         p_cb->local_r_key = p_cb->local_i_key = SMP_SEC_DEFAULT_KEY;
@@ -150,36 +141,33 @@ static void smp_connect_callback(UNUSED_ATTR uint16_t channel,
  * Returns          void
  *
  ******************************************************************************/
-static void smp_data_received(uint16_t channel, const RawAddress& bd_addr,
-                              BT_HDR* p_buf) {
+static void smp_data_received(uint16_t channel, const RawAddress& bd_addr, BT_HDR* p_buf) {
   tSMP_CB* p_cb = &smp_cb;
   uint8_t* p = (uint8_t*)(p_buf + 1) + p_buf->offset;
   uint8_t cmd;
 
   if (p_buf->len < 1) {
-    LOG_WARN("%s: smp packet length %d too short: must be at least 1", __func__,
-             p_buf->len);
+    log::warn("packet too short");
     osi_free(p_buf);
     return;
   }
 
   STREAM_TO_UINT8(cmd, p);
 
-  LOG_VERBOSE("%s: SMDBG l2c, cmd=0x%x", __func__, cmd);
+  log::verbose("cmd={}[0x{:02x}]", smp_opcode_text(static_cast<tSMP_OPCODE>(cmd)), cmd);
 
   /* sanity check */
   if ((SMP_OPCODE_MAX < cmd) || (SMP_OPCODE_MIN > cmd)) {
-    LOG_WARN("Ignore received command with RESERVED code 0x%02x", cmd);
+    log::warn("invalid command");
     osi_free(p_buf);
     return;
   }
 
   /* reject the pairing request if there is an on-going SMP pairing */
   if (SMP_OPCODE_PAIRING_REQ == cmd || SMP_OPCODE_SEC_REQ == cmd) {
-    if ((p_cb->state == SMP_STATE_IDLE) &&
-        (p_cb->br_state == SMP_BR_STATE_IDLE) &&
+    if ((p_cb->state == SMP_STATE_IDLE) && (p_cb->br_state == SMP_BR_STATE_IDLE) &&
         !(p_cb->flags & SMP_PAIR_FLAGS_WE_STARTED_DD)) {
-      p_cb->role = L2CA_GetBleConnRole(bd_addr);
+      p_cb->role = bluetooth::stack::l2cap::get_interface().L2CA_GetBleConnRole(bd_addr);
       p_cb->pairing_bda = bd_addr;
     } else if (bd_addr != p_cb->pairing_bda) {
       osi_free(p_buf);
@@ -191,21 +179,16 @@ static void smp_data_received(uint16_t channel, const RawAddress& bd_addr,
   }
 
   if (bd_addr == p_cb->pairing_bda) {
-    alarm_set_on_mloop(p_cb->smp_rsp_timer_ent, SMP_WAIT_FOR_RSP_TIMEOUT_MS,
-                       smp_rsp_timeout, NULL);
+    alarm_set_on_mloop(p_cb->smp_rsp_timer_ent, SMP_WAIT_FOR_RSP_TIMEOUT_MS, smp_rsp_timeout, NULL);
 
-    smp_log_metrics(p_cb->pairing_bda, false /* incoming */,
-                    p_buf->data + p_buf->offset, p_buf->len,
-                    false /* is_over_br */);
+    smp_log_metrics(p_cb->pairing_bda, false /* incoming */, p_buf->data + p_buf->offset,
+                    p_buf->len, false /* is_over_br */);
 
     if (cmd == SMP_OPCODE_CONFIRM) {
-      LOG_VERBOSE(
-          "in %s cmd = 0x%02x, peer_auth_req = 0x%02x,"
-          "loc_auth_req = 0x%02x",
-          __func__, cmd, p_cb->peer_auth_req, p_cb->loc_auth_req);
+      log::verbose("peer_auth_req=0x{:02x}, loc_auth_req=0x{:02x}", p_cb->peer_auth_req,
+                   p_cb->loc_auth_req);
 
-      if ((p_cb->peer_auth_req & SMP_SC_SUPPORT_BIT) &&
-          (p_cb->loc_auth_req & SMP_SC_SUPPORT_BIT)) {
+      if ((p_cb->peer_auth_req & SMP_SC_SUPPORT_BIT) && (p_cb->loc_auth_req & SMP_SC_SUPPORT_BIT)) {
         cmd = SMP_OPCODE_PAIR_COMMITM;
       }
     }
@@ -216,10 +199,45 @@ static void smp_data_received(uint16_t channel, const RawAddress& bd_addr,
     smp_int_data.p_data = p;
     smp_sm_event(p_cb, static_cast<tSMP_EVENT>(cmd), &smp_int_data);
   } else {
-    L2CA_RemoveFixedChnl(channel, bd_addr);
+    if (!stack::l2cap::get_interface().L2CA_RemoveFixedChnl(channel, bd_addr)) {
+      log::error("Unable to remove fixed channel peer:{} cid:{}", bd_addr, channel);
+    }
   }
 
   osi_free(p_buf);
+}
+
+/*******************************************************************************
+ *
+ * Function         smp_tx_complete_callback
+ *
+ * Description      SMP channel tx complete callback
+ *
+ ******************************************************************************/
+static void smp_tx_complete_callback(uint16_t cid, uint16_t num_pkt) {
+  tSMP_CB* p_cb = &smp_cb;
+
+  if (!com::android::bluetooth::flags::l2cap_tx_complete_cb_info()) {
+    log::verbose("Exit since l2cap_tx_complete_cb_info is disabled");
+    return;
+  }
+
+  log::verbose("l2cap_tx_complete_cb_info is enabled, continue");
+  if (p_cb->total_tx_unacked >= num_pkt) {
+    p_cb->total_tx_unacked -= num_pkt;
+  } else {
+    log::error("Unexpected complete callback: num_pkt = {}", num_pkt);
+  }
+
+  if (p_cb->total_tx_unacked == 0 && p_cb->wait_for_authorization_complete) {
+    tSMP_INT_DATA smp_int_data;
+    smp_int_data.status = SMP_SUCCESS;
+    if (cid == L2CAP_SMP_CID) {
+      smp_sm_event(p_cb, SMP_AUTH_CMPL_EVT, &smp_int_data);
+    } else {
+      smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &smp_int_data);
+    }
+  }
 }
 
 /*******************************************************************************
@@ -231,34 +249,42 @@ static void smp_data_received(uint16_t channel, const RawAddress& bd_addr,
  *                      connected (conn = true)/disconnected (conn = false).
  *
  ******************************************************************************/
-static void smp_br_connect_callback(uint16_t channel, const RawAddress& bd_addr,
-                                    bool connected, uint16_t reason,
+static void smp_br_connect_callback(uint16_t /* channel */, const RawAddress& bd_addr,
+                                    bool connected, uint16_t /* reason */,
                                     tBT_TRANSPORT transport) {
   tSMP_CB* p_cb = &smp_cb;
   tSMP_INT_DATA int_data;
 
-  LOG_VERBOSE("%s", __func__);
-
   if (transport != BT_TRANSPORT_BR_EDR) {
-    LOG_WARN("%s is called on unexpected transport %d", __func__, transport);
+    log::warn("unexpected transport {}", bt_transport_text(transport));
     return;
   }
 
-  VLOG(1) << __func__ << " for pairing BDA: "
-          << ADDRESS_TO_LOGGABLE_STR(bd_addr)
-          << ", pairing_bda:" << ADDRESS_TO_LOGGABLE_STR(p_cb->pairing_bda)
-          << " Event: " << ((connected) ? "connected" : "disconnected");
+  log::info("BDA:{} pairing_bda:{}, connected:{}", bd_addr, p_cb->pairing_bda, connected);
 
-  if (bd_addr != p_cb->pairing_bda) return;
+  if (bd_addr != p_cb->pairing_bda) {
+    if (!com::android::bluetooth::flags::smp_state_machine_stuck_after_disconnection_fix()) {
+      log::info(
+              "If your pairing failed, get a build with "
+              "smp_state_machine_stuck_after_disconnection_fix and try again :)");
+      return;
+    }
+
+    tBTM_SEC_DEV_REC* p_dev_rec = btm_find_dev(bd_addr);
+    /* When pairing was initiated to RPA, and connection was on LE transport first using RPA, then
+     * we must check record pseudo address, it might be same device */
+    if (p_dev_rec == nullptr || p_dev_rec->RemoteAddress() != p_cb->pairing_bda) {
+      return;
+    }
+  }
 
   /* Check if we already finished SMP pairing over LE, and are waiting to
    * check if other side returns some errors. Connection/disconnection on
    * Classic transport shouldn't impact that.
    */
   tBTM_SEC_DEV_REC* p_dev_rec = btm_find_dev(p_cb->pairing_bda);
-  if ((smp_get_state() == SMP_STATE_BOND_PENDING ||
-       smp_get_state() == SMP_STATE_IDLE) &&
-      (p_dev_rec && p_dev_rec->is_link_key_known()) &&
+  if ((smp_get_state() == SMP_STATE_BOND_PENDING || smp_get_state() == SMP_STATE_IDLE) &&
+      (p_dev_rec && p_dev_rec->sec_rec.is_link_key_known()) &&
       alarm_is_scheduled(p_cb->delayed_auth_timer_ent)) {
     /* If we were to not return here, we would reset SMP control block, and
      * delayed_auth_timer_ent would never be executed. Even though we stored all
@@ -266,7 +292,7 @@ static void smp_br_connect_callback(uint16_t channel, const RawAddress& bd_addr,
      * stack restart, when we re-read record from storage. Service discovery
      * would stay broken.
      */
-    LOG_INFO("Classic event after CTKD on LE transport");
+    log::info("Classic event after CTKD on LE transport");
     return;
   }
 
@@ -282,10 +308,10 @@ static void smp_br_connect_callback(uint16_t channel, const RawAddress& bd_addr,
   } else {
     /* Disconnected while doing security */
     if (p_cb->smp_over_br) {
-      LOG_DEBUG("SMP over BR/EDR not supported, terminate the ongoing pairing");
+      log::debug("SMP over BR/EDR not supported, terminate the ongoing pairing");
       smp_br_state_machine_event(p_cb, SMP_BR_L2CAP_DISCONN_EVT, &int_data);
     } else {
-      LOG_DEBUG("SMP over BR/EDR not supported, continue the LE pairing");
+      log::debug("SMP over BR/EDR not supported, continue the LE pairing");
     }
   }
 }
@@ -300,33 +326,31 @@ static void smp_br_connect_callback(uint16_t channel, const RawAddress& bd_addr,
  * Returns          void
  *
  ******************************************************************************/
-static void smp_br_data_received(uint16_t channel, const RawAddress& bd_addr,
-                                 BT_HDR* p_buf) {
+static void smp_br_data_received(uint16_t /* channel */, const RawAddress& bd_addr, BT_HDR* p_buf) {
   tSMP_CB* p_cb = &smp_cb;
   uint8_t* p = (uint8_t*)(p_buf + 1) + p_buf->offset;
   uint8_t cmd;
-  LOG_VERBOSE("SMDBG l2c %s", __func__);
+  log::verbose("SMDBG l2c");
 
   if (p_buf->len < 1) {
-    LOG_WARN("%s: smp packet length %d too short: must be at least 1", __func__,
-             p_buf->len);
+    log::warn("packet too short");
     osi_free(p_buf);
     return;
   }
 
   STREAM_TO_UINT8(cmd, p);
+  log::verbose("cmd={}[0x{:02x}]", smp_opcode_text(static_cast<tSMP_OPCODE>(cmd)), cmd);
 
   /* sanity check */
   if ((SMP_OPCODE_MAX < cmd) || (SMP_OPCODE_MIN > cmd)) {
-    LOG_WARN("Ignore received command with RESERVED code 0x%02x", cmd);
+    log::warn("invalid command 0x{:02x}", cmd);
     osi_free(p_buf);
     return;
   }
 
   /* reject the pairing request if there is an on-going SMP pairing */
   if (SMP_OPCODE_PAIRING_REQ == cmd) {
-    if ((p_cb->state == SMP_STATE_IDLE) &&
-        (p_cb->br_state == SMP_BR_STATE_IDLE)) {
+    if ((p_cb->state == SMP_STATE_IDLE) && (p_cb->br_state == SMP_BR_STATE_IDLE)) {
       p_cb->role = HCI_ROLE_PERIPHERAL;
       p_cb->smp_over_br = true;
       p_cb->pairing_bda = bd_addr;
@@ -339,19 +363,16 @@ static void smp_br_data_received(uint16_t channel, const RawAddress& bd_addr,
   }
 
   if (bd_addr == p_cb->pairing_bda) {
-    alarm_set_on_mloop(p_cb->smp_rsp_timer_ent, SMP_WAIT_FOR_RSP_TIMEOUT_MS,
-                       smp_rsp_timeout, NULL);
+    alarm_set_on_mloop(p_cb->smp_rsp_timer_ent, SMP_WAIT_FOR_RSP_TIMEOUT_MS, smp_rsp_timeout, NULL);
 
-    smp_log_metrics(p_cb->pairing_bda, false /* incoming */,
-                    p_buf->data + p_buf->offset, p_buf->len,
-                    true /* is_over_br */);
+    smp_log_metrics(p_cb->pairing_bda, false /* incoming */, p_buf->data + p_buf->offset,
+                    p_buf->len, true /* is_over_br */);
 
     p_cb->rcvd_cmd_code = cmd;
     p_cb->rcvd_cmd_len = (uint8_t)p_buf->len;
     tSMP_INT_DATA smp_int_data;
     smp_int_data.p_data = p;
-    smp_br_state_machine_event(p_cb, static_cast<tSMP_EVENT>(cmd),
-                               &smp_int_data);
+    smp_br_state_machine_event(p_cb, static_cast<tSMP_EVENT>(cmd), &smp_int_data);
   }
 
   osi_free(p_buf);

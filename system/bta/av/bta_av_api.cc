@@ -24,17 +24,30 @@
  *
  ******************************************************************************/
 
-#define LOG_TAG "bt_bta_av"
+#define LOG_TAG "bluetooth-a2dp"
 
-#include "bt_target.h"  // Must be first to define build configuration
+#include "bta_av_api.h"
+
+#include <bluetooth/log.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+#include "avdt_api.h"
+#include "avrc_defs.h"
 #include "bta/av/bta_av_int.h"
+#include "bta_api.h"
+#include "bta_sys.h"
 #include "btif/include/btif_av.h"
-#include "os/log.h"
+#include "internal_include/bt_target.h"
 #include "osi/include/allocator.h"
 #include "osi/include/compat.h"
 #include "stack/include/bt_hdr.h"
 #include "stack/include/bt_uuid16.h"
 #include "types/raw_address.h"
+
+using namespace bluetooth;
 
 /*****************************************************************************
  *  Constants
@@ -56,8 +69,7 @@ static const tBTA_SYS_REG bta_av_reg = {bta_av_hdl_event, BTA_AvDisable};
  *
  ******************************************************************************/
 void BTA_AvEnable(tBTA_AV_FEAT features, tBTA_AV_CBACK* p_cback) {
-  tBTA_AV_API_ENABLE* p_buf =
-      (tBTA_AV_API_ENABLE*)osi_malloc(sizeof(tBTA_AV_API_ENABLE));
+  tBTA_AV_API_ENABLE* p_buf = (tBTA_AV_API_ENABLE*)osi_malloc(sizeof(tBTA_AV_API_ENABLE));
 
   /* register with BTA system manager */
   bta_sys_register(BTA_ID_AV, &bta_av_reg);
@@ -100,18 +112,17 @@ void BTA_AvDisable(void) {
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvRegister(tBTA_AV_CHNL chnl, const char* p_service_name,
-                    uint8_t app_id, tBTA_AV_SINK_DATA_CBACK* p_sink_data_cback,
-                    uint16_t service_uuid) {
-  tBTA_AV_API_REG* p_buf =
-      (tBTA_AV_API_REG*)osi_malloc(sizeof(tBTA_AV_API_REG));
+void BTA_AvRegister(tBTA_AV_CHNL chnl, const char* p_service_name, uint8_t app_id,
+                    tBTA_AV_SINK_DATA_CBACK* p_sink_data_cback, uint16_t service_uuid) {
+  tBTA_AV_API_REG* p_buf = (tBTA_AV_API_REG*)osi_malloc(sizeof(tBTA_AV_API_REG));
 
   p_buf->hdr.layer_specific = chnl;
   p_buf->hdr.event = BTA_AV_API_REGISTER_EVT;
-  if (p_service_name)
-    strlcpy(p_buf->p_service_name, p_service_name, BTA_SERVICE_NAME_LEN);
-  else
+  if (p_service_name) {
+    osi_strlcpy(p_buf->p_service_name, p_service_name, BTA_SERVICE_NAME_LEN);
+  } else {
     p_buf->p_service_name[0] = 0;
+  }
   p_buf->app_id = app_id;
   p_buf->p_app_sink_data_cback = p_sink_data_cback;
   p_buf->service_uuid = service_uuid;
@@ -148,14 +159,10 @@ void BTA_AvDeregister(tBTA_AV_HNDL hndl) {
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvOpen(const RawAddress& bd_addr, tBTA_AV_HNDL handle, bool use_rc,
-                uint16_t uuid) {
-  LOG_INFO("%s: peer %s bta_handle:0x%x use_rc=%s uuid=0x%x", __func__,
-           ADDRESS_TO_LOGGABLE_CSTR(bd_addr), handle,
-           (use_rc) ? "true" : "false", uuid);
+void BTA_AvOpen(const RawAddress& bd_addr, tBTA_AV_HNDL handle, bool use_rc, uint16_t uuid) {
+  log::info("peer {} bta_handle:0x{:x} use_rc={} uuid=0x{:x}", bd_addr, handle, use_rc, uuid);
 
-  tBTA_AV_API_OPEN* p_buf =
-      (tBTA_AV_API_OPEN*)osi_malloc(sizeof(tBTA_AV_API_OPEN));
+  tBTA_AV_API_OPEN* p_buf = (tBTA_AV_API_OPEN*)osi_malloc(sizeof(tBTA_AV_API_OPEN));
 
   p_buf->hdr.event = BTA_AV_API_OPEN_EVT;
   p_buf->hdr.layer_specific = handle;
@@ -188,7 +195,7 @@ void BTA_AvOpen(const RawAddress& bd_addr, tBTA_AV_HNDL handle, bool use_rc,
  *
  ******************************************************************************/
 void BTA_AvClose(tBTA_AV_HNDL handle) {
-  LOG_INFO("%s: bta_handle:0x%x", __func__, handle);
+  log::info("bta_handle:0x{:x}", handle);
 
   BT_HDR_RIGID* p_buf = (BT_HDR_RIGID*)osi_malloc(sizeof(BT_HDR_RIGID));
 
@@ -208,10 +215,9 @@ void BTA_AvClose(tBTA_AV_HNDL handle) {
  *
  ******************************************************************************/
 void BTA_AvDisconnect(tBTA_AV_HNDL handle) {
-  LOG_INFO("%s: bta_handle=0x%x", __func__, handle);
+  log::info("bta_handle=0x{:x}", handle);
 
-  tBTA_AV_API_DISCNT* p_buf =
-      (tBTA_AV_API_DISCNT*)osi_malloc(sizeof(tBTA_AV_API_DISCNT));
+  tBTA_AV_API_DISCNT* p_buf = (tBTA_AV_API_DISCNT*)osi_malloc(sizeof(tBTA_AV_API_DISCNT));
 
   p_buf->hdr.event = BTA_AV_API_DISCONNECT_EVT;
   p_buf->hdr.layer_specific = handle;
@@ -229,14 +235,11 @@ void BTA_AvDisconnect(tBTA_AV_HNDL handle) {
  *
  ******************************************************************************/
 void BTA_AvStart(tBTA_AV_HNDL handle, bool use_latency_mode) {
-  LOG_INFO(
-      "Starting audio/video stream data transfer bta_handle:%hhu, "
-      "use_latency_mode:%s",
-      handle, use_latency_mode ? "true" : "false");
+  log::info("Starting audio/video stream data transfer bta_handle:{}, use_latency_mode:{}", handle,
+            use_latency_mode);
 
-  tBTA_AV_DO_START* p_buf =
-      (tBTA_AV_DO_START*)osi_malloc(sizeof(tBTA_AV_DO_START));
-  p_buf->hdr.event = BTA_AV_API_START_EVT;
+  tBTA_AV_DO_START* p_buf = (tBTA_AV_DO_START*)osi_malloc(sizeof(tBTA_AV_DO_START));
+  p_buf->hdr.event = BTA_AV_AP_START_EVT;
   p_buf->hdr.layer_specific = handle;
   p_buf->use_latency_mode = use_latency_mode;
 
@@ -253,32 +256,12 @@ void BTA_AvStart(tBTA_AV_HNDL handle, bool use_latency_mode) {
  *
  ******************************************************************************/
 void BTA_AvOffloadStart(tBTA_AV_HNDL hndl) {
-  LOG_INFO("%s: bta_handle=0x%x", __func__, hndl);
+  log::info("bta_handle=0x{:x}", hndl);
 
   BT_HDR_RIGID* p_buf = (BT_HDR_RIGID*)osi_malloc(sizeof(BT_HDR_RIGID));
 
   p_buf->event = BTA_AV_API_OFFLOAD_START_EVT;
   p_buf->layer_specific = hndl;
-
-  bta_sys_sendmsg(p_buf);
-}
-
-/*******************************************************************************
- *
- * Function         BTA_AvOffloadStartRsp
- *
- * Description      Response from vendor lib for A2DP Offload Start request.
- *
- * Returns          void
- *
- ******************************************************************************/
-void BTA_AvOffloadStartRsp(tBTA_AV_HNDL hndl, tBTA_AV_STATUS status) {
-  tBTA_AV_API_STATUS_RSP* p_buf =
-      (tBTA_AV_API_STATUS_RSP*)osi_malloc(sizeof(tBTA_AV_API_STATUS_RSP));
-
-  p_buf->hdr.event = BTA_AV_API_OFFLOAD_START_RSP_EVT;
-  p_buf->hdr.layer_specific = hndl;
-  p_buf->status = status;
 
   bta_sys_sendmsg(p_buf);
 }
@@ -295,13 +278,11 @@ void BTA_AvOffloadStartRsp(tBTA_AV_HNDL hndl, tBTA_AV_STATUS status) {
  *
  ******************************************************************************/
 void BTA_AvStop(tBTA_AV_HNDL handle, bool suspend) {
-  LOG_INFO("%s: bta_handle=0x%x suspend=%s", __func__, handle,
-           logbool(suspend).c_str());
+  log::info("bta_handle=0x{:x} suspend={}", handle, suspend);
 
-  tBTA_AV_API_STOP* p_buf =
-      (tBTA_AV_API_STOP*)osi_malloc(sizeof(tBTA_AV_API_STOP));
+  tBTA_AV_API_STOP* p_buf = (tBTA_AV_API_STOP*)osi_malloc(sizeof(tBTA_AV_API_STOP));
 
-  p_buf->hdr.event = BTA_AV_API_STOP_EVT;
+  p_buf->hdr.event = BTA_AV_AP_STOP_EVT;
   p_buf->hdr.layer_specific = handle;
   p_buf->flush = true;
   p_buf->suspend = suspend;
@@ -323,14 +304,11 @@ void BTA_AvStop(tBTA_AV_HNDL handle, bool suspend) {
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvReconfig(tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx,
-                    uint8_t* p_codec_info, uint8_t num_protect,
-                    const uint8_t* p_protect_info) {
-  LOG_INFO("%s: bta_handle=0x%x suspend=%s sep_info_idx=%d", __func__, hndl,
-           logbool(suspend).c_str(), sep_info_idx);
+void BTA_AvReconfig(tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx, uint8_t* p_codec_info,
+                    uint8_t num_protect, const uint8_t* p_protect_info) {
+  log::info("bta_handle=0x{:x} suspend={} sep_info_idx={}", hndl, suspend, sep_info_idx);
 
-  tBTA_AV_API_RCFG* p_buf =
-      (tBTA_AV_API_RCFG*)osi_malloc(sizeof(tBTA_AV_API_RCFG) + num_protect);
+  tBTA_AV_API_RCFG* p_buf = (tBTA_AV_API_RCFG*)osi_malloc(sizeof(tBTA_AV_API_RCFG) + num_protect);
 
   p_buf->hdr.layer_specific = hndl;
   p_buf->hdr.event = BTA_AV_API_RECONFIG_EVT;
@@ -355,8 +333,8 @@ void BTA_AvReconfig(tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx,
  *
  ******************************************************************************/
 void BTA_AvProtectReq(tBTA_AV_HNDL hndl, uint8_t* p_data, uint16_t len) {
-  tBTA_AV_API_PROTECT_REQ* p_buf = (tBTA_AV_API_PROTECT_REQ*)osi_malloc(
-      sizeof(tBTA_AV_API_PROTECT_REQ) + len);
+  tBTA_AV_API_PROTECT_REQ* p_buf =
+          (tBTA_AV_API_PROTECT_REQ*)osi_malloc(sizeof(tBTA_AV_API_PROTECT_REQ) + len);
 
   p_buf->hdr.layer_specific = hndl;
   p_buf->hdr.event = BTA_AV_API_PROTECT_REQ_EVT;
@@ -383,10 +361,9 @@ void BTA_AvProtectReq(tBTA_AV_HNDL hndl, uint8_t* p_data, uint16_t len) {
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvProtectRsp(tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data,
-                      uint16_t len) {
-  tBTA_AV_API_PROTECT_RSP* p_buf = (tBTA_AV_API_PROTECT_RSP*)osi_malloc(
-      sizeof(tBTA_AV_API_PROTECT_RSP) + len);
+void BTA_AvProtectRsp(tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data, uint16_t len) {
+  tBTA_AV_API_PROTECT_RSP* p_buf =
+          (tBTA_AV_API_PROTECT_RSP*)osi_malloc(sizeof(tBTA_AV_API_PROTECT_RSP) + len);
 
   p_buf->hdr.layer_specific = hndl;
   p_buf->hdr.event = BTA_AV_API_PROTECT_RSP_EVT;
@@ -412,10 +389,9 @@ void BTA_AvProtectRsp(tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data,
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvRemoteCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id,
-                     tBTA_AV_STATE key_state) {
+void BTA_AvRemoteCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id, tBTA_AV_STATE key_state) {
   tBTA_AV_API_REMOTE_CMD* p_buf =
-      (tBTA_AV_API_REMOTE_CMD*)osi_malloc(sizeof(tBTA_AV_API_REMOTE_CMD));
+          (tBTA_AV_API_REMOTE_CMD*)osi_malloc(sizeof(tBTA_AV_API_REMOTE_CMD));
 
   p_buf->hdr.event = BTA_AV_API_REMOTE_CMD_EVT;
   p_buf->hdr.layer_specific = rc_handle;
@@ -439,11 +415,10 @@ void BTA_AvRemoteCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id,
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvRemoteVendorUniqueCmd(uint8_t rc_handle, uint8_t label,
-                                 tBTA_AV_STATE key_state, uint8_t* p_msg,
-                                 uint8_t buf_len) {
-  tBTA_AV_API_REMOTE_CMD* p_buf = (tBTA_AV_API_REMOTE_CMD*)osi_malloc(
-      sizeof(tBTA_AV_API_REMOTE_CMD) + buf_len);
+void BTA_AvRemoteVendorUniqueCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_STATE key_state,
+                                 uint8_t* p_msg, uint8_t buf_len) {
+  tBTA_AV_API_REMOTE_CMD* p_buf =
+          (tBTA_AV_API_REMOTE_CMD*)osi_malloc(sizeof(tBTA_AV_API_REMOTE_CMD) + buf_len);
 
   p_buf->label = label;
   p_buf->hdr.event = BTA_AV_API_REMOTE_CMD_EVT;
@@ -471,10 +446,9 @@ void BTA_AvRemoteVendorUniqueCmd(uint8_t rc_handle, uint8_t label,
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvVendorCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code,
-                     uint8_t* p_data, uint16_t len) {
-  tBTA_AV_API_VENDOR* p_buf =
-      (tBTA_AV_API_VENDOR*)osi_malloc(sizeof(tBTA_AV_API_VENDOR) + len);
+void BTA_AvVendorCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code, uint8_t* p_data,
+                     uint16_t len) {
+  tBTA_AV_API_VENDOR* p_buf = (tBTA_AV_API_VENDOR*)osi_malloc(sizeof(tBTA_AV_API_VENDOR) + len);
 
   p_buf->hdr.event = BTA_AV_API_VENDOR_CMD_EVT;
   p_buf->hdr.layer_specific = rc_handle;
@@ -506,20 +480,20 @@ void BTA_AvVendorCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code,
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvVendorRsp(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
-                     uint8_t* p_data, uint16_t len, uint32_t company_id) {
-  tBTA_AV_API_VENDOR* p_buf =
-      (tBTA_AV_API_VENDOR*)osi_malloc(sizeof(tBTA_AV_API_VENDOR) + len);
+void BTA_AvVendorRsp(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, uint8_t* p_data,
+                     uint16_t len, uint32_t company_id) {
+  tBTA_AV_API_VENDOR* p_buf = (tBTA_AV_API_VENDOR*)osi_malloc(sizeof(tBTA_AV_API_VENDOR) + len);
 
   p_buf->hdr.event = BTA_AV_API_VENDOR_RSP_EVT;
   p_buf->hdr.layer_specific = rc_handle;
   p_buf->msg.hdr.ctype = rsp_code;
   p_buf->msg.hdr.subunit_type = AVRC_SUB_PANEL;
   p_buf->msg.hdr.subunit_id = 0;
-  if (company_id)
+  if (company_id) {
     p_buf->msg.company_id = company_id;
-  else
+  } else {
     p_buf->msg.company_id = p_bta_av_cfg->company_id;
+  }
   p_buf->label = label;
   p_buf->msg.vendor_len = len;
   if (p_data == NULL) {
@@ -543,8 +517,7 @@ void BTA_AvVendorRsp(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
  *
  ******************************************************************************/
 void BTA_AvOpenRc(tBTA_AV_HNDL handle) {
-  tBTA_AV_API_OPEN_RC* p_buf =
-      (tBTA_AV_API_OPEN_RC*)osi_malloc(sizeof(tBTA_AV_API_OPEN_RC));
+  tBTA_AV_API_OPEN_RC* p_buf = (tBTA_AV_API_OPEN_RC*)osi_malloc(sizeof(tBTA_AV_API_OPEN_RC));
 
   p_buf->hdr.event = BTA_AV_API_RC_OPEN_EVT;
   p_buf->hdr.layer_specific = handle;
@@ -562,8 +535,7 @@ void BTA_AvOpenRc(tBTA_AV_HNDL handle) {
  *
  ******************************************************************************/
 void BTA_AvCloseRc(uint8_t rc_handle) {
-  tBTA_AV_API_CLOSE_RC* p_buf =
-      (tBTA_AV_API_CLOSE_RC*)osi_malloc(sizeof(tBTA_AV_API_CLOSE_RC));
+  tBTA_AV_API_CLOSE_RC* p_buf = (tBTA_AV_API_CLOSE_RC*)osi_malloc(sizeof(tBTA_AV_API_CLOSE_RC));
 
   p_buf->hdr.event = BTA_AV_API_RC_CLOSE_EVT;
   p_buf->hdr.layer_specific = rc_handle;
@@ -584,10 +556,8 @@ void BTA_AvCloseRc(uint8_t rc_handle) {
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvMetaRsp(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
-                   BT_HDR* p_pkt) {
-  tBTA_AV_API_META_RSP* p_buf =
-      (tBTA_AV_API_META_RSP*)osi_malloc(sizeof(tBTA_AV_API_META_RSP));
+void BTA_AvMetaRsp(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, BT_HDR* p_pkt) {
+  tBTA_AV_API_META_RSP* p_buf = (tBTA_AV_API_META_RSP*)osi_malloc(sizeof(tBTA_AV_API_META_RSP));
 
   p_buf->hdr.event = BTA_AV_API_META_RSP_EVT;
   p_buf->hdr.layer_specific = rc_handle;
@@ -604,22 +574,20 @@ void BTA_AvMetaRsp(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
  * Function         BTA_AvMetaCmd
  *
  * Description      Send a Metadata/Advanced Control command. The message
-*contained
+ *contained
  *                  in p_pkt can be composed with AVRC utility functions.
  *                  This function can only be used if AV is enabled with feature
  *                  BTA_AV_FEAT_METADATA.
  *                  This message is sent only when the peer supports the TG
-*role.
-*8                  The only command makes sense right now is the absolute
-*volume command.
+ *role.
+ *8                  The only command makes sense right now is the absolute
+ *volume command.
  *
  * Returns          void
  *
  ******************************************************************************/
-void BTA_AvMetaCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code,
-                   BT_HDR* p_pkt) {
-  tBTA_AV_API_META_RSP* p_buf =
-      (tBTA_AV_API_META_RSP*)osi_malloc(sizeof(tBTA_AV_API_META_RSP));
+void BTA_AvMetaCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code, BT_HDR* p_pkt) {
+  tBTA_AV_API_META_RSP* p_buf = (tBTA_AV_API_META_RSP*)osi_malloc(sizeof(tBTA_AV_API_META_RSP));
 
   p_buf->hdr.event = BTA_AV_API_META_RSP_EVT;
   p_buf->hdr.layer_specific = rc_handle;
@@ -641,12 +609,11 @@ void BTA_AvMetaCmd(uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code,
  *
  ******************************************************************************/
 void BTA_AvSetLatency(tBTA_AV_HNDL handle, bool is_low_latency) {
-  LOG_INFO(
-      "Set audio/video stream low latency bta_handle:%hhu, is_low_latency:%s",
-      handle, is_low_latency ? "true" : "false");
+  log::info("Set audio/video stream low latency bta_handle:{}, is_low_latency:{}", handle,
+            is_low_latency);
 
   tBTA_AV_API_SET_LATENCY* p_buf =
-      (tBTA_AV_API_SET_LATENCY*)osi_malloc(sizeof(tBTA_AV_API_SET_LATENCY));
+          (tBTA_AV_API_SET_LATENCY*)osi_malloc(sizeof(tBTA_AV_API_SET_LATENCY));
   p_buf->hdr.event = BTA_AV_API_SET_LATENCY_EVT;
   p_buf->hdr.layer_specific = handle;
   p_buf->is_low_latency = is_low_latency;
@@ -666,8 +633,7 @@ void BTA_AvSetLatency(tBTA_AV_HNDL handle, bool is_low_latency) {
  *
  ******************************************************************************/
 void BTA_AvSetPeerSep(const RawAddress& bdaddr, uint8_t sep) {
-  tBTA_AV_API_PEER_SEP* p_buf =
-      (tBTA_AV_API_PEER_SEP*)osi_malloc(sizeof(tBTA_AV_API_PEER_SEP));
+  tBTA_AV_API_PEER_SEP* p_buf = (tBTA_AV_API_PEER_SEP*)osi_malloc(sizeof(tBTA_AV_API_PEER_SEP));
 
   p_buf->hdr.event = BTA_AV_API_PEER_SEP_EVT;
   p_buf->addr = bdaddr;

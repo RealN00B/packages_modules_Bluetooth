@@ -30,6 +30,9 @@
 
 // Mocked internal structures, if any
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 namespace test {
 namespace mock {
 namespace stack_avrc_apt {
@@ -67,13 +70,11 @@ uint16_t AVRC_UnitCmd(uint8_t handle, uint8_t label) {
   inc_func_call_count(__func__);
   return test::mock::stack_avrc_apt::AVRC_UnitCmd(handle, label);
 }
-uint16_t AVRC_VendorCmd(uint8_t handle, uint8_t label,
-                        tAVRC_MSG_VENDOR* p_msg) {
+uint16_t AVRC_VendorCmd(uint8_t handle, uint8_t label, tAVRC_MSG_VENDOR* p_msg) {
   inc_func_call_count(__func__);
   return test::mock::stack_avrc_apt::AVRC_VendorCmd(handle, label, p_msg);
 }
-uint16_t AVRC_VendorRsp(uint8_t handle, uint8_t label,
-                        tAVRC_MSG_VENDOR* p_msg) {
+uint16_t AVRC_VendorRsp(uint8_t handle, uint8_t label, tAVRC_MSG_VENDOR* p_msg) {
   inc_func_call_count(__func__);
   return test::mock::stack_avrc_apt::AVRC_VendorRsp(handle, label, p_msg);
 }

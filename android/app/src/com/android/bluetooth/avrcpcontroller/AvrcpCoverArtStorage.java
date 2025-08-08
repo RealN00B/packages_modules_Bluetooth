@@ -25,12 +25,9 @@ import android.util.Log;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * An abstraction of the cover art image storage mechanism.
- */
+/** An abstraction of the cover art image storage mechanism. */
 public class AvrcpCoverArtStorage {
-    private static final String TAG = "AvrcpCoverArtStorage";
-    private static final boolean DBG = Log.isLoggable(TAG, Log.DEBUG);
+    private static final String TAG = AvrcpCoverArtStorage.class.getSimpleName();
 
     private final Context mContext;
 
@@ -43,9 +40,7 @@ public class AvrcpCoverArtStorage {
     private final Map<BluetoothDevice, Map<String, Bitmap>> mDeviceImages =
             new ConcurrentHashMap<>(1);
 
-    /**
-     * Create and initialize this Cover Art storage interface
-     */
+    /** Create and initialize this Cover Art storage interface */
     public AvrcpCoverArtStorage(Context context) {
         mContext = context;
     }
@@ -142,9 +137,7 @@ public class AvrcpCoverArtStorage {
         mDeviceImages.remove(device);
     }
 
-    /**
-     * Clear the entirety of storage
-     */
+    /** Clear the entirety of storage */
     public void clear() {
         debug("Clearing all images");
         mDeviceImages.clear();
@@ -152,25 +145,19 @@ public class AvrcpCoverArtStorage {
 
     @Override
     public String toString() {
-        String s = "CoverArtStorage:\n";
+        StringBuilder sb = new StringBuilder("CoverArtStorage:\n");
         for (BluetoothDevice device : mDeviceImages.keySet()) {
             Map<String, Bitmap> images = mDeviceImages.get(device);
-            s += "  " + device + " (" + images.size() + "):";
+            sb.append("  ").append(device).append(" (").append(images.size()).append("):");
             for (String uuid : images.keySet()) {
-                s += "\n    " + uuid;
+                sb.append("\n    ").append(uuid);
             }
-            s += "\n";
+            sb.append("\n");
         }
-        return s;
+        return sb.toString();
     }
 
     private void debug(String msg) {
-        if (DBG) {
-            Log.d(TAG, msg);
-        }
-    }
-
-    private void error(String msg) {
-        Log.e(TAG, msg);
+        Log.d(TAG, msg);
     }
 }

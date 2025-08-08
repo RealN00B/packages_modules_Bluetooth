@@ -15,15 +15,15 @@
  */
 
 #include <base/functional/bind.h>
-#include <base/logging.h>
 #include <base/run_loop.h>
 #include <base/threading/thread.h>
+#include <bluetooth/log.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <unistd.h>
+
 #include <chrono>
 #include <future>
-#include <iostream>
 #include <thread>
 
 #include "abstract_message_loop.h"
@@ -31,14 +31,18 @@
 #include "osi/include/fixed_queue.h"
 #include "osi/include/thread.h"
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 using bluetooth::common::MessageLoopThread;
+using namespace bluetooth;
 
 #define NUM_MESSAGES_TO_SEND 100000
 
-volatile static int g_counter = 0;
+static int g_counter = 0;
 static std::unique_ptr<std::promise<void>> g_counter_promise = nullptr;
 
-void callback_batch(fixed_queue_t* queue, void* data) {
+void callback_batch(fixed_queue_t* queue, void* /* data */) {
   if (queue != nullptr) {
     fixed_queue_dequeue(queue);
   }
@@ -49,7 +53,7 @@ void callback_batch(fixed_queue_t* queue, void* data) {
 }
 
 class PerformanceTest : public testing::Test {
- protected:
+protected:
   void SetUp() override {
     set_up_promise_ = std::make_unique<std::promise<void>>();
     g_counter = 0;
@@ -66,7 +70,7 @@ class PerformanceTest : public testing::Test {
 };
 
 class MessageLoopPerformanceTest : public PerformanceTest {
- public:
+public:
   static void RunThread(void* context) {
     auto test = static_cast<MessageLoopPerformanceTest*>(context);
     test->RunMessageLoop();
@@ -80,8 +84,8 @@ class MessageLoopPerformanceTest : public PerformanceTest {
     message_loop_ = new btbase::AbstractMessageLoop();
     run_loop_ = new base::RunLoop();
     message_loop_->task_runner()->PostTask(
-        FROM_HERE, base::Bind(&std::promise<void>::set_value,
-                              base::Unretained(set_up_promise_.get())));
+            FROM_HERE,
+            base::Bind(&std::promise<void>::set_value, base::Unretained(set_up_promise_.get())));
     run_loop_->Run();
     delete message_loop_;
     message_loop_ = nullptr;
@@ -89,13 +93,13 @@ class MessageLoopPerformanceTest : public PerformanceTest {
     run_loop_ = nullptr;
   }
 
- protected:
+protected:
   btbase::AbstractMessageLoop* message_loop_ = nullptr;
   base::RunLoop* run_loop_ = nullptr;
 };
 
 class OsiThreadMessageLoopPerformanceTest : public MessageLoopPerformanceTest {
- protected:
+protected:
   void SetUp() override {
     MessageLoopPerformanceTest::SetUp();
     std::future<void> set_up_future = set_up_promise_->get_future();
@@ -105,8 +109,7 @@ class OsiThreadMessageLoopPerformanceTest : public MessageLoopPerformanceTest {
   }
 
   void TearDown() override {
-    message_loop_->task_runner()->PostTask(FROM_HERE,
-                                           run_loop_->QuitWhenIdleClosure());
+    message_loop_->task_runner()->PostTask(FROM_HERE, run_loop_->QuitWhenIdleClosure());
     thread_free(thread_);
     thread_ = nullptr;
     MessageLoopPerformanceTest::TearDown();
@@ -119,28 +122,25 @@ TEST_F(OsiThreadMessageLoopPerformanceTest, message_loop_speed_test) {
   g_counter = 0;
   g_counter_promise = std::make_unique<std::promise<void>>();
   std::future<void> counter_future = g_counter_promise->get_future();
-  std::chrono::steady_clock::time_point start_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
   for (int i = 0; i < NUM_MESSAGES_TO_SEND; i++) {
     fixed_queue_enqueue(bt_msg_queue_, (void*)&g_counter);
-    message_loop_->task_runner()->PostTask(
-        FROM_HERE, base::Bind(&callback_batch, bt_msg_queue_, nullptr));
+    message_loop_->task_runner()->PostTask(FROM_HERE,
+                                           base::Bind(&callback_batch, bt_msg_queue_, nullptr));
   }
   counter_future.wait();
 
-  std::chrono::steady_clock::time_point end_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
   std::chrono::milliseconds duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
-                                                            start_time);
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-  LOG(INFO) << "OsiThreadMessageLoopPerformanceTest, " << duration.count()
-            << " ms, " << NUM_MESSAGES_TO_SEND << " messages";
+  log::info("OsiThreadMessageLoopPerformanceTest, {} ms, {} messages", duration.count(),
+            NUM_MESSAGES_TO_SEND);
 }
 
 class StlThreadMessageLoopPerformanceTest : public MessageLoopPerformanceTest {
- protected:
+protected:
   void SetUp() override {
     MessageLoopPerformanceTest::SetUp();
     std::future<void> set_up_future = set_up_promise_->get_future();
@@ -149,8 +149,7 @@ class StlThreadMessageLoopPerformanceTest : public MessageLoopPerformanceTest {
   }
 
   void TearDown() override {
-    message_loop_->task_runner()->PostTask(FROM_HERE,
-                                           run_loop_->QuitWhenIdleClosure());
+    message_loop_->task_runner()->PostTask(FROM_HERE, run_loop_->QuitWhenIdleClosure());
     thread_->join();
     delete thread_;
     thread_ = nullptr;
@@ -164,40 +163,34 @@ TEST_F(StlThreadMessageLoopPerformanceTest, stl_thread_speed_test) {
   g_counter = 0;
   g_counter_promise = std::make_unique<std::promise<void>>();
   std::future<void> counter_future = g_counter_promise->get_future();
-  std::chrono::steady_clock::time_point start_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
   for (int i = 0; i < NUM_MESSAGES_TO_SEND; i++) {
     fixed_queue_enqueue(bt_msg_queue_, (void*)&g_counter);
-    message_loop_->task_runner()->PostTask(
-        FROM_HERE, base::Bind(&callback_batch, bt_msg_queue_, nullptr));
+    message_loop_->task_runner()->PostTask(FROM_HERE,
+                                           base::Bind(&callback_batch, bt_msg_queue_, nullptr));
   }
   counter_future.wait();
 
-  std::chrono::steady_clock::time_point end_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
   std::chrono::milliseconds duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
-                                                            start_time);
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-  LOG(INFO) << "StlThreadMessageLoopPerformanceTest, " << duration.count()
-            << " ms, " << NUM_MESSAGES_TO_SEND << " messages";
+  log::info("StlThreadMessageLoopPerformanceTest, {} ms, {} messages", duration.count(),
+            NUM_MESSAGES_TO_SEND);
 }
 
-class PosixThreadMessageLoopPerformanceTest
-    : public MessageLoopPerformanceTest {
- protected:
+class PosixThreadMessageLoopPerformanceTest : public MessageLoopPerformanceTest {
+protected:
   void SetUp() override {
     MessageLoopPerformanceTest::SetUp();
     std::future<void> set_up_future = set_up_promise_->get_future();
-    pthread_create(&thread_, nullptr, &MessageLoopPerformanceTest::RunPThread,
-                   (void*)this);
+    pthread_create(&thread_, nullptr, &MessageLoopPerformanceTest::RunPThread, (void*)this);
     set_up_future.wait();
   }
 
   void TearDown() override {
-    message_loop_->task_runner()->PostTask(FROM_HERE,
-                                           run_loop_->QuitWhenIdleClosure());
+    message_loop_->task_runner()->PostTask(FROM_HERE, run_loop_->QuitWhenIdleClosure());
     pthread_join(thread_, nullptr);
     MessageLoopPerformanceTest::TearDown();
   }
@@ -210,28 +203,25 @@ TEST_F(PosixThreadMessageLoopPerformanceTest, stl_thread_speed_test) {
   g_counter_promise = std::make_unique<std::promise<void>>();
   std::future<void> counter_future = g_counter_promise->get_future();
 
-  std::chrono::steady_clock::time_point start_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
   for (int i = 0; i < NUM_MESSAGES_TO_SEND; i++) {
     fixed_queue_enqueue(bt_msg_queue_, (void*)&g_counter);
-    message_loop_->task_runner()->PostTask(
-        FROM_HERE, base::Bind(&callback_batch, bt_msg_queue_, nullptr));
+    message_loop_->task_runner()->PostTask(FROM_HERE,
+                                           base::Bind(&callback_batch, bt_msg_queue_, nullptr));
   }
   counter_future.wait();
 
-  std::chrono::steady_clock::time_point end_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
   std::chrono::milliseconds duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
-                                                            start_time);
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-  LOG(INFO) << "PosixThreadMessageLoopPerformanceTest, " << duration.count()
-            << " ms, " << NUM_MESSAGES_TO_SEND << " messages";
+  log::info("PosixThreadMessageLoopPerformanceTest, {} ms, {} messages", duration.count(),
+            NUM_MESSAGES_TO_SEND);
 }
 
 class ReactorPerformanceTest : public PerformanceTest {
- protected:
+protected:
   void SetUp() override {
     PerformanceTest::SetUp();
     thread_ = thread_new("ReactorPerformanceTest thread");
@@ -250,39 +240,32 @@ TEST_F(ReactorPerformanceTest, reactor_thread_speed_test) {
   g_counter = 0;
   g_counter_promise = std::make_unique<std::promise<void>>();
   std::future<void> counter_future = g_counter_promise->get_future();
-  fixed_queue_register_dequeue(bt_msg_queue_, thread_get_reactor(thread_),
-                               callback_batch, nullptr);
+  fixed_queue_register_dequeue(bt_msg_queue_, thread_get_reactor(thread_), callback_batch, nullptr);
 
-  std::chrono::steady_clock::time_point start_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
   for (int i = 0; i < NUM_MESSAGES_TO_SEND; i++) {
     fixed_queue_enqueue(bt_msg_queue_, (void*)&g_counter);
   }
   counter_future.wait();
 
-  std::chrono::steady_clock::time_point end_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
   std::chrono::milliseconds duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
-                                                            start_time);
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   fixed_queue_unregister_dequeue(bt_msg_queue_);
 
-  LOG(INFO) << "ReactorPerformanceTest, " << duration.count() << " ms, "
-            << NUM_MESSAGES_TO_SEND << " messages";
+  log::info("ReactorPerformanceTest, {} ms, {} messages", duration.count(), NUM_MESSAGES_TO_SEND);
 }
 
 class WorkerThreadPerformanceTest : public PerformanceTest {
- protected:
+protected:
   void SetUp() override {
     PerformanceTest::SetUp();
     std::future<void> set_up_future = set_up_promise_->get_future();
-    worker_thread_ =
-        new MessageLoopThread("WorkerThreadPerformanceTest thread");
+    worker_thread_ = new MessageLoopThread("WorkerThreadPerformanceTest thread");
     worker_thread_->StartUp();
-    worker_thread_->DoInThread(
-        FROM_HERE, base::Bind(&std::promise<void>::set_value,
-                              base::Unretained(set_up_promise_.get())));
+    worker_thread_->DoInThread(FROM_HERE, base::BindOnce(&std::promise<void>::set_value,
+                                                         base::Unretained(set_up_promise_.get())));
     set_up_future.wait();
   }
 
@@ -301,36 +284,32 @@ TEST_F(WorkerThreadPerformanceTest, worker_thread_speed_test) {
   g_counter_promise = std::make_unique<std::promise<void>>();
   std::future<void> counter_future = g_counter_promise->get_future();
 
-  std::chrono::steady_clock::time_point start_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
   for (int i = 0; i < NUM_MESSAGES_TO_SEND; i++) {
     fixed_queue_enqueue(bt_msg_queue_, (void*)&g_counter);
-    worker_thread_->DoInThread(
-        FROM_HERE, base::Bind(&callback_batch, bt_msg_queue_, nullptr));
+    worker_thread_->DoInThread(FROM_HERE, base::BindOnce(&callback_batch, bt_msg_queue_, nullptr));
   }
   counter_future.wait();
 
-  std::chrono::steady_clock::time_point end_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
   std::chrono::milliseconds duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
-                                                            start_time);
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-  LOG(INFO) << "WorkerThreadPerformanceTest, " << duration.count() << " ms, "
-            << NUM_MESSAGES_TO_SEND << " messages";
+  log::info("WorkerThreadPerformanceTest, {} ms, {} messages", duration.count(),
+            NUM_MESSAGES_TO_SEND);
 }
 
 class LibChromeThreadPerformanceTest : public PerformanceTest {
- protected:
+protected:
   void SetUp() override {
     PerformanceTest::SetUp();
     std::future<void> set_up_future = set_up_promise_->get_future();
     thread_ = new base::Thread("LibChromeThreadPerformanceTest thread");
     thread_->Start();
     thread_->task_runner()->PostTask(
-        FROM_HERE, base::Bind(&std::promise<void>::set_value,
-                              base::Unretained(set_up_promise_.get())));
+            FROM_HERE,
+            base::Bind(&std::promise<void>::set_value, base::Unretained(set_up_promise_.get())));
     set_up_future.wait();
   }
 
@@ -349,22 +328,19 @@ TEST_F(LibChromeThreadPerformanceTest, worker_thread_speed_test) {
   g_counter_promise = std::make_unique<std::promise<void>>();
   std::future<void> counter_future = g_counter_promise->get_future();
 
-  std::chrono::steady_clock::time_point start_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
 
   for (int i = 0; i < NUM_MESSAGES_TO_SEND; i++) {
     fixed_queue_enqueue(bt_msg_queue_, (void*)&g_counter);
-    thread_->task_runner()->PostTask(
-        FROM_HERE, base::Bind(&callback_batch, bt_msg_queue_, nullptr));
+    thread_->task_runner()->PostTask(FROM_HERE,
+                                     base::Bind(&callback_batch, bt_msg_queue_, nullptr));
   }
   counter_future.wait();
 
-  std::chrono::steady_clock::time_point end_time =
-      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
   std::chrono::milliseconds duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
-                                                            start_time);
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-  LOG(INFO) << "LibChromeThreadPerformanceTest, " << duration.count() << " ms, "
-            << NUM_MESSAGES_TO_SEND << " messages";
+  log::info("LibChromeThreadPerformanceTest, {} ms, {} messages", duration.count(),
+            NUM_MESSAGES_TO_SEND);
 }

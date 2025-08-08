@@ -21,14 +21,14 @@
 #include <mutex>
 #include <string>
 
-#include "gd/hci/octets.h"
-#include "raw_address.h"
+#include "hci/octets.h"
+#include "types/raw_address.h"
 
 namespace bluetooth {
 namespace common {
 
 class AddressObfuscator {
- public:
+public:
   static constexpr unsigned int kOctet32Length = hci::kOctet32Length;
   using Octet32 = hci::Octet32;
   static AddressObfuscator* GetInstance() {
@@ -66,7 +66,7 @@ class AddressObfuscator {
    */
   std::string Obfuscate(const RawAddress& address);
 
- private:
+private:
   AddressObfuscator() : salt_256bit_({0}) {}
   Octet32 salt_256bit_;
   std::recursive_mutex instance_mutex_;

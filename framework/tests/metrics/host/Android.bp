@@ -16,8 +16,12 @@ java_test_host {
         "tradefed",
     ],
 
-    data: [
+    device_common_data: [
         ":BluetoothMetricsTestApp",
+    ],
+
+    data_native_bins: [
+        "bumble_pandora_server",
     ],
 
     required: ["bumble_pandora_server"],

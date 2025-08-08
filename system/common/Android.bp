@@ -55,10 +55,9 @@ cc_library_static {
     header_libs: ["libbluetooth_headers"],
     static_libs: [
         "libbluetooth_crypto_toolbox",
+        "libbluetooth_log",
         "libbt-platform-protos-lite",
-        "libbt_shim_bridge",
     ],
-    cflags: ["-Wno-unused-parameter"],
 }
 
 cc_test {
@@ -96,15 +95,17 @@ cc_test {
         },
     },
     shared_libs: [
+        "libbase",
         "libcrypto",
         "liblog",
     ],
     static_libs: [
         "libbluetooth-types",
         "libbluetooth_crypto_toolbox",
+        "libbluetooth_log",
+        "libbluetooth_log",
         "libbt-common",
         "libbt-platform-protos-lite",
-        "libbt_shim_bridge",
         "libchrome",
         "libevent",
         "libgmock",
@@ -114,7 +115,6 @@ cc_test {
         cfi: false,
     },
     header_libs: ["libbluetooth_headers"],
-    cflags: ["-Wno-unused-parameter"],
 }
 
 cc_test {
@@ -124,23 +124,28 @@ cc_test {
         "mts_defaults",
     ],
     test_suites: ["general-tests"],
-    include_dirs: ["packages/modules/Bluetooth/system"],
+    include_dirs: [
+        "packages/modules/Bluetooth/system",
+        "packages/modules/Bluetooth/system/gd",
+    ],
     host_supported: true,
     srcs: [
         "test/thread_performance_test.cc",
     ],
     shared_libs: [
+        "libbase",
         "liblog",
     ],
     static_libs: [
+        "libbluetooth_log",
         "libbt-common",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libevent",
         "libgmock",
         "libosi",
     ],
     header_libs: ["libbluetooth_headers"],
-    cflags: ["-Wno-unused-parameter"],
 }
 
 cc_benchmark {
@@ -149,19 +154,24 @@ cc_benchmark {
         "fluoride_defaults",
     ],
     host_supported: true,
-    include_dirs: ["packages/modules/Bluetooth/system"],
+    include_dirs: [
+        "packages/modules/Bluetooth/system",
+        "packages/modules/Bluetooth/system/gd",
+    ],
     srcs: [
         "benchmark/thread_performance_benchmark.cc",
     ],
     shared_libs: [
+        "libbase",
         "liblog",
     ],
     static_libs: [
+        "libbluetooth_log",
         "libbt-common",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libevent",
         "libosi",
     ],
     header_libs: ["libbluetooth_headers"],
-    cflags: ["-Wno-unused-parameter"],
 }

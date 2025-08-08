@@ -30,16 +30,19 @@
 
 #include <base/functional/bind.h>
 #include <base/functional/callback.h>
-#include <base/logging.h>
-#include <base/strings/stringprintf.h>
+#include <bluetooth/log.h>
 #include <string.h>
 
+#include <cstdint>
 #include <list>
+#include <string>
 
-#include "btif/include/stack_manager.h"
+#include "btif/include/stack_manager_t.h"
 #include "btif_common.h"
-#include "main/shim/dumpsys.h"
+#include "hardware/bluetooth.h"
 #include "types/raw_address.h"
+
+using namespace bluetooth;
 
 /*******************************************************************************
  *  Local type definitions
@@ -47,15 +50,12 @@
 
 // Class to store connect info.
 class ConnectNode {
- public:
-  ConnectNode(const RawAddress& address, uint16_t uuid,
-              btif_connect_cb_t connect_cb)
+public:
+  ConnectNode(const RawAddress& address, uint16_t uuid, btif_connect_cb_t connect_cb)
       : address_(address), uuid_(uuid), busy_(false), connect_cb_(connect_cb) {}
 
   std::string ToString() const {
-    return base::StringPrintf("address=%s UUID=%04X busy=%s",
-                              ADDRESS_TO_LOGGABLE_CSTR(address_), uuid_,
-                              (busy_) ? "true" : "false");
+    return std::format("address={} UUID={:04X} busy={}", address_, uuid_, busy_);
   }
 
   const RawAddress& address() const { return address_; }
@@ -69,12 +69,14 @@ class ConnectNode {
    * return value is BT_STATUS_SUCCESS.
    */
   bt_status_t connect() {
-    if (busy_) return BT_STATUS_SUCCESS;
+    if (busy_) {
+      return BT_STATUS_SUCCESS;
+    }
     busy_ = true;
     return connect_cb_(&address_, uuid_);
   }
 
- private:
+private:
   RawAddress address_;
   uint16_t uuid_;
   bool busy_;
@@ -93,46 +95,45 @@ static const size_t MAX_REASONABLE_REQUESTS = 20;
  *  Queue helper functions
  ******************************************************************************/
 
-static void queue_int_add(uint16_t uuid, const RawAddress& bda,
-                          btif_connect_cb_t connect_cb) {
+static void queue_int_add(uint16_t uuid, const RawAddress& bda, btif_connect_cb_t connect_cb) {
   // Sanity check to make sure we're not leaking connection requests
-  CHECK(connect_queue.size() < MAX_REASONABLE_REQUESTS);
+  log::assert_that(connect_queue.size() < MAX_REASONABLE_REQUESTS,
+                   "assert failed: connect_queue.size() < MAX_REASONABLE_REQUESTS");
 
   ConnectNode param(bda, uuid, connect_cb);
   for (const auto& node : connect_queue) {
     if (node.uuid() == param.uuid() && node.address() == param.address()) {
-      LOG_ERROR("Dropping duplicate profile connection request:%s",
-                param.ToString().c_str());
+      log::error("Dropping duplicate profile connection request:{}", param.ToString());
       return;
     }
   }
 
-  LOG_INFO("Queueing profile connection request:%s", param.ToString().c_str());
+  log::info("Queueing profile connection request:{}", param.ToString());
   connect_queue.push_back(param);
 
   btif_queue_connect_next();
 }
 
 static void queue_int_advance() {
-  if (connect_queue.empty()) return;
+  if (connect_queue.empty()) {
+    return;
+  }
 
   const ConnectNode& head = connect_queue.front();
-  LOG_INFO("%s: removing connection request: %s", __func__,
-           head.ToString().c_str());
+  log::info("removing connection request: {}", head.ToString());
   connect_queue.pop_front();
 
   btif_queue_connect_next();
 }
 
 static void queue_int_cleanup(uint16_t uuid) {
-  LOG_INFO("%s: UUID=%04X", __func__, uuid);
+  log::info("UUID={:04X}", uuid);
 
   for (auto it = connect_queue.begin(); it != connect_queue.end();) {
     auto it_prev = it++;
     const ConnectNode& node = *it_prev;
     if (node.uuid() == uuid) {
-      LOG_INFO("%s: removing connection request: %s", __func__,
-               node.ToString().c_str());
+      log::info("removing connection request: {}", node.ToString());
       connect_queue.erase(it_prev);
     }
   }
@@ -150,10 +151,8 @@ static void queue_int_release() { connect_queue.clear(); }
  * Returns          BT_STATUS_SUCCESS if successful
  *
  ******************************************************************************/
-bt_status_t btif_queue_connect(uint16_t uuid, const RawAddress* bda,
-                               btif_connect_cb_t connect_cb) {
-  return do_in_jni_thread(
-      FROM_HERE, base::BindOnce(&queue_int_add, uuid, *bda, connect_cb));
+bt_status_t btif_queue_connect(uint16_t uuid, const RawAddress* bda, btif_connect_cb_t connect_cb) {
+  return do_in_jni_thread(base::BindOnce(&queue_int_add, uuid, *bda, connect_cb));
 }
 
 /*******************************************************************************
@@ -166,7 +165,7 @@ bt_status_t btif_queue_connect(uint16_t uuid, const RawAddress* bda,
  *
  ******************************************************************************/
 void btif_queue_cleanup(uint16_t uuid) {
-  do_in_jni_thread(FROM_HERE, base::BindOnce(&queue_int_cleanup, uuid));
+  do_in_jni_thread(base::BindOnce(&queue_int_cleanup, uuid));
 }
 
 /*******************************************************************************
@@ -179,26 +178,26 @@ void btif_queue_cleanup(uint16_t uuid) {
  * Returns          void
  *
  ******************************************************************************/
-void btif_queue_advance() {
-  do_in_jni_thread(FROM_HERE, base::BindOnce(&queue_int_advance));
-}
+void btif_queue_advance() { do_in_jni_thread(base::BindOnce(&queue_int_advance)); }
 
 bt_status_t btif_queue_connect_next(void) {
   // The call must be on the JNI thread, otherwise the access to connect_queue
   // is not thread-safe.
-  CHECK(is_on_jni_thread());
+  log::assert_that(is_on_jni_thread(), "assert failed: is_on_jni_thread()");
 
-  if (connect_queue.empty()) return BT_STATUS_FAIL;
-  if (!stack_manager_get_interface()->get_stack_is_running())
+  if (connect_queue.empty()) {
     return BT_STATUS_FAIL;
+  }
+  if (!stack_manager_get_interface()->get_stack_is_running()) {
+    return BT_STATUS_UNEXPECTED_STATE;
+  }
 
   ConnectNode& head = connect_queue.front();
 
-  LOG_INFO("Executing profile connection request:%s", head.ToString().c_str());
+  log::info("Executing profile connection request:{}", head.ToString());
   bt_status_t b_status = head.connect();
   if (b_status != BT_STATUS_SUCCESS) {
-    LOG_INFO("%s: connect %s failed, advance to next scheduled connection.",
-             __func__, head.ToString().c_str());
+    log::info("connect {} failed, advance to next scheduled connection.", head.ToString());
     btif_queue_advance();
   }
   return b_status;
@@ -214,9 +213,8 @@ bt_status_t btif_queue_connect_next(void) {
  *
  ******************************************************************************/
 void btif_queue_release() {
-  LOG_INFO("%s", __func__);
-  if (do_in_jni_thread(FROM_HERE, base::BindOnce(&queue_int_release)) !=
-      BT_STATUS_SUCCESS) {
-    LOG(FATAL) << __func__ << ": Failed to schedule on JNI thread";
+  log::info("");
+  if (do_in_jni_thread(base::BindOnce(&queue_int_release)) != BT_STATUS_SUCCESS) {
+    log::fatal("Failed to schedule on JNI thread");
   }
 }

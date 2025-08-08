@@ -30,17 +30,17 @@ import com.android.internal.annotations.VisibleForTesting;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
- * A proxy class of android.telecom.Call that
- * 1) facilitates testing of the BluetoothInCallService class; We can't mock the final class
- * Call directly;
- * 2) Some helper functions, to let Call have same methods as com.android.server.telecom.Call
+ * A proxy class of android.telecom.Call that 1) facilitates testing of the BluetoothInCallService
+ * class; We can't mock the final class Call directly; 2) Some helper functions, to let Call have
+ * same methods as com.android.server.telecom.Call
  *
- * This is necessary due to the "final" attribute of the Call class. In order to
- * test the correct functioning of the BluetoothInCallService class, the final class must be put
- * into a container that can be mocked correctly.
+ * <p>This is necessary due to the "final" attribute of the Call class. In order to test the correct
+ * functioning of the BluetoothInCallService class, the final class must be put into a container
+ * that can be mocked correctly.
  */
 @VisibleForTesting
 public class BluetoothCall {
@@ -183,9 +183,7 @@ public class BluetoothCall {
         mCall.removeExtras(keys);
     }
 
-    /**
-     * Returns the parent Call id.
-     */
+    /** Returns the parent Call id. */
     public Integer getParentId() {
         Call parent = mCall.getParent();
         if (parent != null) {
@@ -272,17 +270,28 @@ public class BluetoothCall {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (o == null) {
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null) {
             return getCall() == null;
         }
-        return o instanceof BluetoothCall && getCall() == ((BluetoothCall) o).getCall();
+        if (!(obj instanceof BluetoothCall other)) {
+            return false;
+        }
+        return getCall() == other.getCall();
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(getCall());
     }
 
     // helper functions
     public boolean isSilentRingingRequested() {
-        return BluetoothCallShimImpl.newInstance().isSilentRingingRequested(
-                getDetails().getExtras());
+        return BluetoothCallShimImpl.newInstance()
+                .isSilentRingingRequested(getDetails().getExtras());
     }
 
     public boolean isConference() {
@@ -309,22 +318,24 @@ public class BluetoothCall {
         return getDetails().hasProperty(Call.Details.PROPERTY_IS_EXTERNAL_CALL);
     }
 
+    public boolean isHighDefAudio() {
+        return getDetails().hasProperty(Call.Details.PROPERTY_HIGH_DEF_AUDIO);
+    }
+
     public Integer getId() {
         return System.identityHashCode(mCall);
     }
 
     public boolean wasConferencePreviouslyMerged() {
-        return can(Call.Details.CAPABILITY_SWAP_CONFERENCE) &&
-                !can(Call.Details.CAPABILITY_MERGE_CONFERENCE);
+        return can(Call.Details.CAPABILITY_SWAP_CONFERENCE)
+                && !can(Call.Details.CAPABILITY_MERGE_CONFERENCE);
     }
 
     public DisconnectCause getDisconnectCause() {
         return getDetails().getDisconnectCause();
     }
 
-    /**
-     * Returns the list of ids of corresponding Call List.
-     */
+    /** Returns the list of ids of corresponding Call List. */
     public static List<Integer> getIds(List<Call> calls) {
         List<Integer> result = new ArrayList<>();
         for (Call call : calls) {

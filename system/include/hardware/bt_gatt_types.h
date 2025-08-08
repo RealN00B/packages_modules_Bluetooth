@@ -21,7 +21,7 @@
 #include <stdint.h>
 #include <sys/cdefs.h>
 
-#include <bluetooth/uuid.h>
+#include "types/bluetooth/uuid.h"
 
 __BEGIN_DECLS
 
@@ -50,11 +50,7 @@ typedef struct {
 } btgatt_srvc_id_t;
 
 /** Preferred physical Transport for GATT connection */
-typedef enum {
-  GATT_TRANSPORT_AUTO,
-  GATT_TRANSPORT_BREDR,
-  GATT_TRANSPORT_LE
-} btgatt_transport_t;
+typedef enum { GATT_TRANSPORT_AUTO, GATT_TRANSPORT_BREDR, GATT_TRANSPORT_LE } btgatt_transport_t;
 
 __END_DECLS
 

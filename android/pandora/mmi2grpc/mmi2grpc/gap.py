@@ -1,16 +1,31 @@
-from threading import Thread
-from mmi2grpc._helpers import assert_description, match_description
-from mmi2grpc._rootcanal import Dongle
-from mmi2grpc._proxy import ProfileProxy
-from time import sleep
-import sys
+# Copyright (C) 2024 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from pandora_experimental.gatt_grpc import GATT
-from pandora_experimental.gatt_pb2 import GattServiceParams, GattCharacteristicParams
+import sys
+from threading import Thread
+from time import sleep
+
+from mmi2grpc._helpers import assert_description, match_description
+from mmi2grpc._proxy import ProfileProxy
+from mmi2grpc._rootcanal import Dongle
 from pandora.host_grpc import Host
-from pandora.host_pb2 import PUBLIC, RANDOM, DISCOVERABLE_GENERAL, NOT_DISCOVERABLE, DISCOVERABLE_LIMITED, NOT_CONNECTABLE, DataTypes
+from pandora.host_pb2 import (DISCOVERABLE_GENERAL, DISCOVERABLE_LIMITED, NOT_CONNECTABLE, NOT_DISCOVERABLE, PUBLIC,
+                              RANDOM, DataTypes)
 from pandora.security_grpc import Security, SecurityStorage
-from pandora.security_pb2 import LEVEL1, LEVEL2, LE_LEVEL3, PairingEventAnswer
+from pandora.security_pb2 import LE_LEVEL3, LEVEL1, LEVEL2, PairingEventAnswer
+from pandora_experimental.gatt_grpc import GATT
+from pandora_experimental.gatt_pb2 import (GattCharacteristicParams, GattServiceParams)
 
 
 class GAPProxy(ProfileProxy):

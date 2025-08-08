@@ -26,6 +26,7 @@
 #include <cstdint>
 
 // Original included files, if any
+#include "stack/include/smp_api.h"
 #include "test/common/mock_functions.h"
 #include "types/raw_address.h"
 
@@ -42,7 +43,6 @@ struct smp_send_pair_fail smp_send_pair_fail;
 struct smp_send_pair_req smp_send_pair_req;
 struct smp_send_pair_rsp smp_send_pair_rsp;
 struct smp_send_confirm smp_send_confirm;
-struct smp_send_init smp_send_init;
 struct smp_send_rand smp_send_rand;
 struct smp_send_pair_public_key smp_send_pair_public_key;
 struct smp_send_commitment smp_send_commitment;
@@ -81,8 +81,7 @@ struct smp_key_pick_key smp_key_pick_key;
 struct smp_key_distribution smp_key_distribution;
 struct smp_decide_association_model smp_decide_association_model;
 struct smp_process_io_response smp_process_io_response;
-struct smp_br_process_peripheral_keys_response
-    smp_br_process_peripheral_keys_response;
+struct smp_br_process_peripheral_keys_response smp_br_process_peripheral_keys_response;
 struct smp_br_send_pair_response smp_br_send_pair_response;
 struct smp_pairing_cmpl smp_pairing_cmpl;
 struct smp_pair_terminate smp_pair_terminate;
@@ -92,24 +91,19 @@ struct smp_start_secure_connection_phase1 smp_start_secure_connection_phase1;
 struct smp_process_local_nonce smp_process_local_nonce;
 struct smp_process_peer_nonce smp_process_peer_nonce;
 struct smp_match_dhkey_checks smp_match_dhkey_checks;
-struct smp_move_to_secure_connections_phase2
-    smp_move_to_secure_connections_phase2;
-struct smp_phase_2_dhkey_checks_are_present
-    smp_phase_2_dhkey_checks_are_present;
+struct smp_move_to_secure_connections_phase2 smp_move_to_secure_connections_phase2;
+struct smp_phase_2_dhkey_checks_are_present smp_phase_2_dhkey_checks_are_present;
 struct smp_wait_for_both_public_keys smp_wait_for_both_public_keys;
 struct smp_start_passkey_verification smp_start_passkey_verification;
-struct smp_process_secure_connection_oob_data
-    smp_process_secure_connection_oob_data;
+struct smp_process_secure_connection_oob_data smp_process_secure_connection_oob_data;
 struct smp_set_local_oob_keys smp_set_local_oob_keys;
 struct smp_set_local_oob_random_commitment smp_set_local_oob_random_commitment;
 struct smp_link_encrypted smp_link_encrypted;
 struct smp_cancel_start_encryption_attempt smp_cancel_start_encryption_attempt;
 struct smp_proc_ltk_request smp_proc_ltk_request;
-struct smp_process_secure_connection_long_term_key
-    smp_process_secure_connection_long_term_key;
+struct smp_process_secure_connection_long_term_key smp_process_secure_connection_long_term_key;
 struct smp_set_derive_link_key smp_set_derive_link_key;
-struct smp_derive_link_key_from_long_term_key
-    smp_derive_link_key_from_long_term_key;
+struct smp_derive_link_key_from_long_term_key smp_derive_link_key_from_long_term_key;
 struct smp_br_process_link_key smp_br_process_link_key;
 struct smp_br_pairing_complete smp_br_pairing_complete;
 
@@ -137,10 +131,6 @@ void smp_send_pair_rsp(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
 void smp_send_confirm(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
   test::mock::stack_smp_act::smp_send_confirm(p_cb, p_data);
-}
-void smp_send_init(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
-  inc_func_call_count(__func__);
-  test::mock::stack_smp_act::smp_send_init(p_cb, p_data);
 }
 void smp_send_rand(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
@@ -294,11 +284,9 @@ void smp_process_io_response(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
   test::mock::stack_smp_act::smp_process_io_response(p_cb, p_data);
 }
-void smp_br_process_peripheral_keys_response(tSMP_CB* p_cb,
-                                             tSMP_INT_DATA* p_data) {
+void smp_br_process_peripheral_keys_response(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
-  test::mock::stack_smp_act::smp_br_process_peripheral_keys_response(p_cb,
-                                                                     p_data);
+  test::mock::stack_smp_act::smp_br_process_peripheral_keys_response(p_cb, p_data);
 }
 void smp_br_send_pair_response(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
@@ -336,14 +324,11 @@ void smp_match_dhkey_checks(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
   test::mock::stack_smp_act::smp_match_dhkey_checks(p_cb, p_data);
 }
-void smp_move_to_secure_connections_phase2(tSMP_CB* p_cb,
-                                           tSMP_INT_DATA* p_data) {
+void smp_move_to_secure_connections_phase2(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
-  test::mock::stack_smp_act::smp_move_to_secure_connections_phase2(p_cb,
-                                                                   p_data);
+  test::mock::stack_smp_act::smp_move_to_secure_connections_phase2(p_cb, p_data);
 }
-void smp_phase_2_dhkey_checks_are_present(tSMP_CB* p_cb,
-                                          tSMP_INT_DATA* p_data) {
+void smp_phase_2_dhkey_checks_are_present(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
   test::mock::stack_smp_act::smp_phase_2_dhkey_checks_are_present(p_cb, p_data);
 }
@@ -355,11 +340,9 @@ void smp_start_passkey_verification(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
   test::mock::stack_smp_act::smp_start_passkey_verification(p_cb, p_data);
 }
-void smp_process_secure_connection_oob_data(tSMP_CB* p_cb,
-                                            tSMP_INT_DATA* p_data) {
+void smp_process_secure_connection_oob_data(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
-  test::mock::stack_smp_act::smp_process_secure_connection_oob_data(p_cb,
-                                                                    p_data);
+  test::mock::stack_smp_act::smp_process_secure_connection_oob_data(p_cb, p_data);
 }
 void smp_set_local_oob_keys(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
@@ -389,11 +372,9 @@ void smp_set_derive_link_key(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
   test::mock::stack_smp_act::smp_set_derive_link_key(p_cb, p_data);
 }
-void smp_derive_link_key_from_long_term_key(tSMP_CB* p_cb,
-                                            tSMP_INT_DATA* p_data) {
+void smp_derive_link_key_from_long_term_key(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);
-  test::mock::stack_smp_act::smp_derive_link_key_from_long_term_key(p_cb,
-                                                                    p_data);
+  test::mock::stack_smp_act::smp_derive_link_key_from_long_term_key(p_cb, p_data);
 }
 void smp_br_process_link_key(tSMP_CB* p_cb, tSMP_INT_DATA* p_data) {
   inc_func_call_count(__func__);

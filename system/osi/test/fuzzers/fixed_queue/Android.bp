@@ -15,12 +15,14 @@ cc_fuzz {
         "fuzz_fixed_queue.cc",
     ],
     shared_libs: [
+        "libbase",
         "libcutils",
         "liblog",
     ],
     static_libs: [
+        "libbluetooth_log",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libosi",
     ],
-    cflags: ["-Wno-unused-parameter"],
 }

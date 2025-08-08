@@ -16,14 +16,18 @@
 
 #pragma once
 
+#include <bluetooth/log.h>
+
 #include <cstdint>
 #include <string>
+#include <vector>
 
-#include "btm_sco_hfp_hal.h"
 #include "device/include/esco_parameters.h"
-#include "raw_address.h"
+#include "internal_include/bt_target.h"
+#include "macros.h"
 #include "stack/btm/sco_pkt_status.h"
 #include "stack/include/btm_api_types.h"
+#include "types/raw_address.h"
 
 #define BTM_MSBC_CODE_SIZE 240
 #define BTM_LC3_CODE_SIZE 480
@@ -187,12 +191,6 @@ size_t dequeue_packet(const uint8_t** output);
 tBTM_SCO_PKT_STATUS* get_pkt_status();
 }  // namespace bluetooth::audio::sco::swb
 
-#ifndef CASE_RETURN_TEXT
-#define CASE_RETURN_TEXT(code) \
-  case code:                   \
-    return #code
-#endif
-
 /* Define the structures needed by sco */
 typedef enum : uint16_t {
   SCO_ST_UNUSED = 0,
@@ -218,12 +216,9 @@ inline std::string sco_state_text(const tSCO_STATE& state) {
     CASE_RETURN_TEXT(SCO_ST_PEND_ROLECHANGE);
     CASE_RETURN_TEXT(SCO_ST_PEND_MODECHANGE);
     default:
-      return std::string("unknown_sco_state: ") +
-       std::to_string(static_cast<uint16_t>(state));
+      return std::string("unknown_sco_state: ") + std::to_string(static_cast<uint16_t>(state));
   }
 }
-
-#undef CASE_RETURN_TEXT
 
 /* Define the structure that contains (e)SCO data */
 typedef struct {
@@ -240,12 +235,10 @@ typedef struct {
   tBTM_SCO_CB* p_disc_cb; /* Callback for when disconnect */
   tSCO_STATE state;       /* The state of the SCO link    */
 
-  uint16_t hci_handle;    /* HCI Handle                   */
- public:
+  uint16_t hci_handle; /* HCI Handle                   */
+public:
   bool is_active() const { return state != SCO_ST_UNUSED; }
-  bool is_inband() const {
-    return esco.setup.input_data_path == ESCO_DATA_PATH_HCI;
-  }
+  bool is_inband() const { return esco.setup.input_data_path == ESCO_DATA_PATH_HCI; }
   tBTM_SCO_CODEC_TYPE get_codec_type() const {
     switch (esco.setup.coding_format) {
       case ESCO_CODING_FORMAT_CVSD:
@@ -260,16 +253,15 @@ typedef struct {
   }
   uint16_t Handle() const { return hci_handle; }
 
-  bool is_orig;           /* true if the originator       */
-  bool rem_bd_known;      /* true if remote BD addr known */
-
+  bool is_orig;      /* true if the originator       */
+  bool rem_bd_known; /* true if remote BD addr known */
 } tSCO_CONN;
 
 /* SCO Management control block */
-typedef struct {
+struct tSCO_CB {
   tSCO_CONN sco_db[BTM_MAX_SCO_LINKS];
   enh_esco_params_t def_esco_parms;
-  bool esco_supported;        /* true if 1.2 cntlr AND supports eSCO links */
+  bool esco_supported; /* true if 1.2 cntlr AND supports eSCO links */
 
   tSCO_CONN* get_sco_connection_from_index(uint16_t index) {
     return (index < kMaxScoLinks) ? (&sco_db[index]) : nullptr;
@@ -290,7 +282,7 @@ typedef struct {
   void Free();
 
   uint16_t get_index(const tSCO_CONN* p_sco) const {
-    CHECK(p_sco != nullptr);
+    bluetooth::log::assert_that(p_sco != nullptr, "assert failed: p_sco != nullptr");
     const tSCO_CONN* p = sco_db;
     for (uint16_t xx = 0; xx < kMaxScoLinks; xx++, p++) {
       if (p_sco == p) {
@@ -299,8 +291,7 @@ typedef struct {
     }
     return 0xffff;
   }
-
-} tSCO_CB;
+};
 
 void btm_sco_chk_pend_rolechange(uint16_t hci_handle);
 void btm_sco_disc_chk_pend_for_modechange(uint16_t hci_handle);

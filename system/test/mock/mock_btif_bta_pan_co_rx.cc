@@ -30,6 +30,9 @@
 // Mocked compile conditionals, if any
 // Mocked internal structures, if any
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 namespace test {
 namespace mock {
 namespace btif_bta_pan_co_rx {
@@ -56,19 +59,15 @@ void bta_pan_co_close(uint16_t handle, uint8_t app_id) {
   inc_func_call_count(__func__);
   test::mock::btif_bta_pan_co_rx::bta_pan_co_close(handle, app_id);
 }
-void bta_pan_co_mfilt_ind(uint16_t handle, bool indication,
-                          tBTA_PAN_STATUS result, uint16_t len,
+void bta_pan_co_mfilt_ind(uint16_t handle, bool indication, tBTA_PAN_STATUS result, uint16_t len,
                           uint8_t* p_filters) {
   inc_func_call_count(__func__);
-  test::mock::btif_bta_pan_co_rx::bta_pan_co_mfilt_ind(handle, indication,
-                                                       result, len, p_filters);
+  test::mock::btif_bta_pan_co_rx::bta_pan_co_mfilt_ind(handle, indication, result, len, p_filters);
 }
-void bta_pan_co_pfilt_ind(uint16_t handle, bool indication,
-                          tBTA_PAN_STATUS result, uint16_t len,
+void bta_pan_co_pfilt_ind(uint16_t handle, bool indication, tBTA_PAN_STATUS result, uint16_t len,
                           uint8_t* p_filters) {
   inc_func_call_count(__func__);
-  test::mock::btif_bta_pan_co_rx::bta_pan_co_pfilt_ind(handle, indication,
-                                                       result, len, p_filters);
+  test::mock::btif_bta_pan_co_rx::bta_pan_co_pfilt_ind(handle, indication, result, len, p_filters);
 }
 void bta_pan_co_rx_flow(uint16_t handle, uint8_t app_id, bool enable) {
   inc_func_call_count(__func__);

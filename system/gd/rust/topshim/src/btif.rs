@@ -12,12 +12,12 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter, Result};
 use std::hash::{Hash, Hasher};
 use std::mem;
+use std::os::fd::RawFd;
 use std::os::raw::c_char;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::vec::Vec;
-use topshim_macros::cb_variant;
-
-use cxx::{type_id, ExternType};
+use topshim_macros::{cb_variant, gen_cxx_extern_trivial};
 
 #[derive(Clone, Debug, FromPrimitive, ToPrimitive, PartialEq, PartialOrd)]
 #[repr(u32)]
@@ -49,6 +49,18 @@ impl From<i32> for BtTransport {
 impl From<BtTransport> for i32 {
     fn from(item: BtTransport) -> Self {
         item.to_i32().unwrap_or(0)
+    }
+}
+
+impl From<u8> for BtTransport {
+    fn from(transport: u8) -> Self {
+        BtTransport::from_u8(transport).unwrap_or(BtTransport::Auto)
+    }
+}
+
+impl Into<u8> for BtTransport {
+    fn into(self) -> u8 {
+        self.to_u8().unwrap_or(0)
     }
 }
 
@@ -140,7 +152,7 @@ pub enum BtPropertyType {
     ClassOfDevice,
     TypeOfDevice,
     ServiceRecord,
-    AdapterScanMode,
+    Reserved07,
     AdapterBondedDevices,
     AdapterDiscoverableTimeout,
     RemoteFriendlyName,
@@ -154,7 +166,6 @@ pub enum BtPropertyType {
     Appearance,
     VendorProductInfo,
     // Unimplemented:
-    //  BT_PROPERTY_WL_MEDIA_PLAYERS_LIST,
     //  BT_PROPERTY_REMOTE_ASHA_CAPABILITY,
     //  BT_PROPERTY_REMOTE_ASHA_TRUNCATED_HISYNCID,
     //  BT_PROPERTY_REMOTE_MODEL_NUM,
@@ -208,6 +219,9 @@ pub enum BtStatus {
     JniThreadAttachError,
     WakeLockError,
     Timeout,
+    DeviceNotFound,
+    UnexpectedState,
+    SocketError,
 
     // Any statuses that couldn't be cleanly converted
     Unknown = 0xff,
@@ -315,6 +329,12 @@ impl From<bindings::bt_scan_mode_t> for BtScanMode {
     }
 }
 
+impl Into<bindings::bt_scan_mode_t> for BtScanMode {
+    fn into(self) -> bindings::bt_scan_mode_t {
+        BtScanMode::to_u32(&self).unwrap_or_default()
+    }
+}
+
 #[derive(Clone, Debug, FromPrimitive, ToPrimitive, PartialEq, PartialOrd)]
 #[repr(u32)]
 pub enum BtDiscMode {
@@ -390,13 +410,39 @@ impl Into<u32> for BtAddrType {
     }
 }
 
+impl From<u8> for BtAddrType {
+    fn from(address_type: u8) -> Self {
+        BtAddrType::from_u8(address_type).unwrap_or(BtAddrType::Unknown)
+    }
+}
+
+impl Into<u8> for BtAddrType {
+    fn into(self) -> u8 {
+        self.to_u8().unwrap_or(0)
+    }
+}
+
 pub type BtHciErrorCode = u8;
 pub type BtLocalLeFeatures = bindings::bt_local_le_features_t;
 pub type BtPinCode = bindings::bt_pin_code_t;
 pub type BtRemoteVersion = bindings::bt_remote_version_t;
 pub type BtVendorProductInfo = bindings::bt_vendor_product_info_t;
-pub type Uuid = bindings::bluetooth::Uuid;
-pub type Uuid128Bit = bindings::bluetooth::Uuid_UUID128Bit;
+
+impl ToString for BtVendorProductInfo {
+    fn to_string(&self) -> String {
+        format!(
+            "{}:v{:04X}p{:04X}d{:04X}",
+            match self.vendor_id_src {
+                1 => "bluetooth",
+                2 => "usb",
+                _ => "unknown",
+            },
+            self.vendor_id,
+            self.product_id,
+            self.version
+        )
+    }
+}
 
 impl TryFrom<Uuid> for Vec<u8> {
     type Error = &'static str;
@@ -452,25 +498,92 @@ impl Hash for Uuid {
 }
 
 impl Uuid {
+    const BASE_UUID_NUM: u128 = 0x0000000000001000800000805f9b34fbu128;
+    const BASE_UUID_MASK: u128 = !(0xffffffffu128 << 96);
+
     /// Creates a Uuid from little endian slice of bytes
     pub fn try_from_little_endian(value: &[u8]) -> std::result::Result<Uuid, &'static str> {
         Uuid::try_from(value.iter().rev().cloned().collect::<Vec<u8>>())
     }
 
-    /// Formats this UUID to a human-readable representation.
-    pub fn format(uuid: &Uuid128Bit, f: &mut Formatter) -> Result {
-        write!(f, "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            uuid[0], uuid[1], uuid[2], uuid[3],
-            uuid[4], uuid[5],
-            uuid[6], uuid[7],
-            uuid[8], uuid[9],
-            uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15])
+    pub fn empty() -> Uuid {
+        unsafe { bindings::bluetooth::Uuid_kEmpty }
+    }
+
+    pub fn from_string<S: Into<String>>(raw: S) -> Option<Self> {
+        let raw: String = raw.into();
+
+        let raw = raw.chars().filter(|c| c.is_digit(16)).collect::<String>();
+        let s = raw.as_str();
+        if s.len() != 32 {
+            return None;
+        }
+
+        let mut uu = [0; 16];
+        for i in 0..16 {
+            uu[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+        }
+
+        Some(uu.into())
+    }
+
+    /// Parses an 128-bit UUID into a byte array of shortest representation.
+    pub fn get_shortest_slice(&self) -> &[u8] {
+        if self.in_16bit_uuid_range() {
+            &self.uu[2..4]
+        } else if self.in_32bit_uuid_range() {
+            &self.uu[0..4]
+        } else {
+            &self.uu[..]
+        }
+    }
+
+    /// Checks whether the UUID value is in the 16-bit Bluetooth UUID range.
+    fn in_16bit_uuid_range(&self) -> bool {
+        if !self.in_32bit_uuid_range() {
+            return false;
+        }
+        self.uu[0] == 0 && self.uu[1] == 0
+    }
+
+    /// Checks whether the UUID value is in the 32-bit Bluetooth UUID range.
+    fn in_32bit_uuid_range(&self) -> bool {
+        let num = u128::from_be_bytes(self.uu);
+        (num & Self::BASE_UUID_MASK) == Self::BASE_UUID_NUM
     }
 }
 
+/// Formats this UUID to a human-readable representation.
 impl Display for Uuid {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        Uuid::format(&self.uu, f)
+        write!(
+            f,
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            self.uu[0], self.uu[1], self.uu[2], self.uu[3],
+            self.uu[4], self.uu[5],
+            self.uu[6], self.uu[7],
+            self.uu[8], self.uu[9],
+            self.uu[10], self.uu[11], self.uu[12], self.uu[13], self.uu[14], self.uu[15]
+        )
+    }
+}
+
+/// UUID that is safe to display in logs.
+pub struct DisplayUuid<'a>(pub &'a Uuid);
+impl<'a> Display for DisplayUuid<'a> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(
+            f,
+            "{:02x}{:02x}{:02x}{:02x}-xxxx-xxxx-xxxx-xxxx{:02x}{:02x}{:02x}{:02x}",
+            self.0.uu[0],
+            self.0.uu[1],
+            self.0.uu[2],
+            self.0.uu[3],
+            self.0.uu[12],
+            self.0.uu[13],
+            self.0.uu[14],
+            self.0.uu[15]
+        )
     }
 }
 
@@ -483,7 +596,6 @@ pub enum BluetoothProperty {
     ClassOfDevice(u32),
     TypeOfDevice(BtDeviceType),
     ServiceRecord(BtServiceRecord),
-    AdapterScanMode(BtScanMode),
     AdapterBondedDevices(Vec<RawAddress>),
     AdapterDiscoverableTimeout(u32),
     RemoteFriendlyName(String),
@@ -522,7 +634,6 @@ impl BluetoothProperty {
             BluetoothProperty::ClassOfDevice(_) => BtPropertyType::ClassOfDevice,
             BluetoothProperty::TypeOfDevice(_) => BtPropertyType::TypeOfDevice,
             BluetoothProperty::ServiceRecord(_) => BtPropertyType::ServiceRecord,
-            BluetoothProperty::AdapterScanMode(_) => BtPropertyType::AdapterScanMode,
             BluetoothProperty::AdapterBondedDevices(_) => BtPropertyType::AdapterBondedDevices,
             BluetoothProperty::AdapterDiscoverableTimeout(_) => {
                 BtPropertyType::AdapterDiscoverableTimeout
@@ -555,7 +666,6 @@ impl BluetoothProperty {
             BluetoothProperty::ServiceRecord(rec) => {
                 mem::size_of::<BtServiceRecord>() + cmp::min(PROPERTY_NAME_MAX, rec.name.len() + 1)
             }
-            BluetoothProperty::AdapterScanMode(_) => mem::size_of::<BtScanMode>(),
             BluetoothProperty::AdapterBondedDevices(devlist) => {
                 devlist.len() * mem::size_of::<RawAddress>()
             }
@@ -622,9 +732,6 @@ impl BluetoothProperty {
                         [0..name_len],
                 );
                 record.name[name_len] = 0;
-            }
-            BluetoothProperty::AdapterScanMode(sm) => {
-                data.copy_from_slice(&BtScanMode::to_u32(sm).unwrap_or_default().to_ne_bytes());
             }
             BluetoothProperty::AdapterBondedDevices(devlist) => {
                 for (idx, &dev) in devlist.iter().enumerate() {
@@ -698,9 +805,12 @@ impl BluetoothProperty {
 // TODO(abps) - Check that sizes are correct when given a BtProperty
 impl From<bindings::bt_property_t> for BluetoothProperty {
     fn from(prop: bindings::bt_property_t) -> Self {
-        let slice: &[u8] =
-            unsafe { std::slice::from_raw_parts(prop.val as *mut u8, prop.len as usize) };
+        // Property values may be null, which isn't valid to pass for `slice::from_raw_parts`.
+        // Choose a dangling pointer in that case.
+        let prop_val_ptr =
+            NonNull::new(prop.val as *mut u8).unwrap_or(NonNull::dangling()).as_ptr();
         let len = prop.len as usize;
+        let slice: &[u8] = unsafe { std::slice::from_raw_parts(prop_val_ptr, len) };
 
         match BtPropertyType::from(prop.type_) {
             BtPropertyType::BdName => BluetoothProperty::BdName(ascii_to_string(slice, len)),
@@ -722,9 +832,6 @@ impl From<bindings::bt_property_t> for BluetoothProperty {
                     unsafe { (prop.val as *const bindings::bt_service_record_t).read_unaligned() };
                 BluetoothProperty::ServiceRecord(BtServiceRecord::from(v))
             }
-            BtPropertyType::AdapterScanMode => BluetoothProperty::AdapterScanMode(
-                BtScanMode::from_u32(u32_from_bytes(slice)).unwrap_or(BtScanMode::None_),
-            ),
             BtPropertyType::AdapterBondedDevices => {
                 let count = len / mem::size_of::<RawAddress>();
                 BluetoothProperty::AdapterBondedDevices(ptr_to_vec(
@@ -795,6 +902,9 @@ pub enum SupportedProfiles {
     Socket,
     HfClient,
     AvrcpCtrl,
+    LeAudio,
+    VolumeControl,
+    CoordinatedSet,
 }
 
 impl From<SupportedProfiles> for Vec<u8> {
@@ -808,6 +918,9 @@ impl From<SupportedProfiles> for Vec<u8> {
             SupportedProfiles::Socket => "socket",
             SupportedProfiles::HfClient => "handsfree_client",
             SupportedProfiles::AvrcpCtrl => "avrcp_ctrl",
+            SupportedProfiles::LeAudio => "le_audio",
+            SupportedProfiles::VolumeControl => "volume_control",
+            SupportedProfiles::CoordinatedSet => "csis_client",
         }
         .bytes()
         .chain("\0".bytes())
@@ -815,41 +928,30 @@ impl From<SupportedProfiles> for Vec<u8> {
     }
 }
 
-#[cxx::bridge(namespace = bluetooth::topshim::rust)]
-mod ffi {
-    unsafe extern "C++" {
-        include!("btif/btif_shim.h");
-
-        // For converting init flags from Vec<String> to const char **
-        type InitFlags;
-
-        // Convert flgas into an InitFlags object
-        fn ConvertFlags(flags: Vec<String>) -> UniquePtr<InitFlags>;
-        fn GetFlagsPtr(self: &InitFlags) -> *mut *const c_char;
-    }
-}
-
-/// The RawAddress directly exported from the bindings.
+/// Generate impl cxx::ExternType for RawAddress and Uuid.
 ///
-/// To make use of RawAddress in cxx::bridge C++ blocks,
+/// To make use of RawAddress and Uuid in cxx::bridge C++ blocks,
 /// include the following snippet in the ffi module.
 /// ```ignore
 /// #[cxx::bridge(namespace = bluetooth::topshim::rust)]
 /// mod ffi {
 ///     unsafe extern "C++" {
-///         include!("gd/rust/topshim/common/type_alias.h");
+///         include!("types/raw_address.h");
+///         include!("types/bluetooth/uuid.h");
+///
+///         #[namespace = ""]
 ///         type RawAddress = crate::btif::RawAddress;
+///
+///         #[namespace = "bluetooth"]
+///         type Uuid = crate::btif::Uuid;
 ///     }
 ///     // Place you shared stuff here.
 /// }
 /// ```
+#[gen_cxx_extern_trivial]
 pub type RawAddress = bindings::RawAddress;
-pub type OobData = bindings::bt_oob_data_s;
-
-unsafe impl ExternType for RawAddress {
-    type Id = type_id!("bluetooth::topshim::rust::RawAddress");
-    type Kind = cxx::kind::Trivial;
-}
+#[gen_cxx_extern_trivial]
+pub type Uuid = bindings::bluetooth::Uuid;
 
 impl Hash for RawAddress {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -857,10 +959,9 @@ impl Hash for RawAddress {
     }
 }
 
-// TODO (b/264603574): Handling address hiding in rust logging statements
 impl ToString for RawAddress {
     fn to_string(&self) -> String {
-        String::from(format!(
+        format!(
             "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
             self.address[0],
             self.address[1],
@@ -868,7 +969,7 @@ impl ToString for RawAddress {
             self.address[3],
             self.address[4],
             self.address[5]
-        ))
+        )
     }
 }
 
@@ -917,9 +1018,17 @@ impl RawAddress {
 pub struct DisplayAddress<'a>(pub &'a RawAddress);
 impl<'a> Display for DisplayAddress<'a> {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "xx:xx:xx:xx:{:02X}:{:02X}", &self.0.address[4], &self.0.address[5])
+        if self.0.address.iter().all(|&x| x == 0x00) {
+            write!(f, "00:00:00:00:00:00")
+        } else if self.0.address.iter().all(|&x| x == 0xff) {
+            write!(f, "ff:ff:ff:ff:ff:ff")
+        } else {
+            write!(f, "xx:xx:xx:xx:{:02x}:{:02x}", &self.0.address[4], &self.0.address[5])
+        }
     }
 }
+
+pub type OobData = bindings::bt_oob_data_s;
 
 /// An enum representing `bt_callbacks_t` from btif.
 #[derive(Clone, Debug)]
@@ -930,10 +1039,10 @@ pub enum BaseCallbacks {
     DeviceFound(i32, Vec<BluetoothProperty>),
     DiscoveryState(BtDiscoveryState),
     PinRequest(RawAddress, String, u32, bool),
-    SspRequest(RawAddress, String, u32, BtSspVariant, u32),
+    SspRequest(RawAddress, BtSspVariant, u32),
     BondState(BtStatus, RawAddress, BtBondState, i32),
     AddressConsolidate(RawAddress, RawAddress),
-    LeAddressAssociate(RawAddress, RawAddress),
+    LeAddressAssociate(RawAddress, RawAddress, u8),
     AclState(
         BtStatus,
         RawAddress,
@@ -951,8 +1060,10 @@ pub enum BaseCallbacks {
     // link_quality_report_cb
     // switch_buffer_size_cb
     // switch_codec_cb
-    GenerateLocalOobData(u8, OobData),
+    GenerateLocalOobData(u8, Box<OobData>), // Box OobData as its size is much bigger than others
     LeRandCallback(u64),
+    // key_missing_cb
+    // encryption_change_cb
 }
 
 pub struct BaseCallbacksDispatcher {
@@ -983,9 +1094,8 @@ cb_variant!(BaseCb, pin_request_cb -> BaseCallbacks::PinRequest,
     let _1 = String::from(unsafe{*_1});
 });
 cb_variant!(BaseCb, ssp_request_cb -> BaseCallbacks::SspRequest,
-*mut RawAddress, *mut bindings::bt_bdname_t, u32, bindings::bt_ssp_variant_t -> BtSspVariant, u32, {
+*mut RawAddress, bindings::bt_ssp_variant_t -> BtSspVariant, u32, {
     let _0 = unsafe { *(_0 as *const RawAddress) };
-    let _1 = String::from(unsafe{*_1});
 });
 cb_variant!(BaseCb, bond_state_cb -> BaseCallbacks::BondState,
 u32 -> BtStatus, *mut RawAddress, bindings::bt_bond_state_t -> BtBondState, i32, {
@@ -999,7 +1109,7 @@ cb_variant!(BaseCb, address_consolidate_cb -> BaseCallbacks::AddressConsolidate,
 });
 
 cb_variant!(BaseCb, le_address_associate_cb -> BaseCallbacks::LeAddressAssociate,
-*mut RawAddress, *mut RawAddress, {
+*mut RawAddress, *mut RawAddress, u8, {
     let _0 = unsafe { *(_0 as *const RawAddress) };
     let _1 = unsafe { *(_1 as *const RawAddress) };
 });
@@ -1011,7 +1121,7 @@ u32 -> BtStatus, *mut RawAddress, bindings::bt_acl_state_t -> BtAclState, i32 ->
     let _1 = unsafe { *(_1 as *const RawAddress) };
 });
 
-cb_variant!(BaseCb, generate_local_oob_data_cb -> BaseCallbacks::GenerateLocalOobData, u8, OobData);
+cb_variant!(BaseCb, generate_local_oob_data_cb -> BaseCallbacks::GenerateLocalOobData, u8, OobData -> Box::<OobData>);
 
 cb_variant!(BaseCb, le_rand_cb -> BaseCallbacks::LeRandCallback, u64);
 
@@ -1105,16 +1215,8 @@ impl BluetoothInterface {
     /// # Arguments
     ///
     /// * `callbacks` - Dispatcher struct that accepts [`BaseCallbacks`]
-    /// * `init_flags` - List of flags sent to libbluetooth for init.
-    pub fn initialize(
-        &mut self,
-        callbacks: BaseCallbacksDispatcher,
-        init_flags: Vec<String>,
-    ) -> bool {
-        // Init flags need to be converted from string to null terminated bytes
-        let converted: cxx::UniquePtr<ffi::InitFlags> = ffi::ConvertFlags(init_flags);
-        let flags = (*converted).GetFlagsPtr();
-
+    /// * `hci_index` - Index of the hci adapter in use
+    pub fn initialize(&mut self, callbacks: BaseCallbacksDispatcher, hci_index: i32) -> bool {
         if get_dispatchers().lock().unwrap().set::<BaseCb>(Arc::new(Mutex::new(callbacks))) {
             panic!("Tried to set dispatcher for BaseCallbacks but it already existed");
         }
@@ -1143,6 +1245,8 @@ impl BluetoothInterface {
             switch_buffer_size_cb: None,
             switch_codec_cb: None,
             le_rand_cb: Some(le_rand_cb),
+            key_missing_cb: None,
+            encryption_change_cb: None,
         });
 
         let cb_ptr = LTCheckedPtrMut::from(&mut callbacks);
@@ -1150,6 +1254,7 @@ impl BluetoothInterface {
         let (guest_mode, is_common_criteria_mode, config_compare_result, is_atv) =
             (false, false, 0, false);
 
+        ccall!(self, set_adapter_index, hci_index);
         let init = ccall!(
             self,
             init,
@@ -1157,9 +1262,7 @@ impl BluetoothInterface {
             guest_mode,
             is_common_criteria_mode,
             config_compare_result,
-            flags,
-            is_atv,
-            std::ptr::null()
+            is_atv
         );
 
         self.is_init = init == 0;
@@ -1209,6 +1312,10 @@ impl BluetoothInterface {
         ccall!(self, set_adapter_property, prop_ptr.into())
     }
 
+    pub fn set_scan_mode(&self, mode: BtScanMode) {
+        ccall!(self, set_scan_mode, mode.into())
+    }
+
     pub fn get_remote_device_properties(&self, addr: &mut RawAddress) -> i32 {
         let addr_ptr = LTCheckedPtrMut::from_ref(addr);
         ccall!(self, get_remote_device_properties, addr_ptr.into())
@@ -1246,6 +1353,10 @@ impl BluetoothInterface {
 
     pub fn cancel_discovery(&self) -> i32 {
         ccall!(self, cancel_discovery)
+    }
+
+    pub fn pairing_is_busy(&self) -> bool {
+        ccall!(self, pairing_is_busy)
     }
 
     pub fn create_bond(&self, addr: &RawAddress, transport: BtTransport) -> i32 {
@@ -1321,6 +1432,10 @@ impl BluetoothInterface {
         ccall!(self, get_swb_supported)
     }
 
+    pub fn is_coding_format_supported(&self, coding_format: u8) -> bool {
+        ccall!(self, is_coding_format_supported, coding_format)
+    }
+
     pub fn le_rand(&self) -> i32 {
         ccall!(self, le_rand)
     }
@@ -1357,6 +1472,10 @@ impl BluetoothInterface {
     pub(crate) fn as_raw_ptr(&self) -> *const u8 {
         self.internal.raw as *const u8
     }
+
+    pub fn dump(&self, fd: RawFd) {
+        ccall!(self, dump, fd, std::ptr::null_mut())
+    }
 }
 
 pub trait ToggleableProfile {
@@ -1365,22 +1484,19 @@ pub trait ToggleableProfile {
     fn disable(&mut self) -> bool;
 }
 
-pub fn get_btinterface() -> Option<BluetoothInterface> {
-    let mut ret: Option<BluetoothInterface> = None;
+pub fn get_btinterface() -> BluetoothInterface {
     let mut ifptr: *const bindings::bt_interface_t = std::ptr::null();
 
-    unsafe {
-        if bindings::hal_util_load_bt_library(&mut ifptr) == 0 {
-            ret = Some(BluetoothInterface {
-                internal: RawInterfaceWrapper { raw: ifptr },
-                is_init: false,
-                callbacks: None,
-                os_callouts: None,
-            });
+    if unsafe { bindings::hal_util_load_bt_library(&mut ifptr) } == 0 {
+        BluetoothInterface {
+            internal: RawInterfaceWrapper { raw: ifptr },
+            is_init: false,
+            callbacks: None,
+            os_callouts: None,
         }
+    } else {
+        panic!("Failed to get BluetoothInterface");
     }
-
-    ret
 }
 
 // Turns C-array T[] to Vec<U>.
@@ -1476,19 +1592,41 @@ mod tests {
     fn test_display_address() {
         assert_eq!(
             format!("{}", DisplayAddress(&RawAddress::from_string("00:00:00:00:00:00").unwrap())),
-            String::from("xx:xx:xx:xx:00:00")
+            String::from("00:00:00:00:00:00")
+        );
+        assert_eq!(
+            format!("{}", DisplayAddress(&RawAddress::from_string("ff:ff:ff:ff:ff:ff").unwrap())),
+            String::from("ff:ff:ff:ff:ff:ff")
         );
         assert_eq!(
             format!("{}", DisplayAddress(&RawAddress::from_string("1a:2b:1a:2b:1a:2b").unwrap())),
-            String::from("xx:xx:xx:xx:1A:2B")
+            String::from("xx:xx:xx:xx:1a:2b")
         );
         assert_eq!(
             format!("{}", DisplayAddress(&RawAddress::from_string("3C:4D:3C:4D:3C:4D").unwrap())),
-            String::from("xx:xx:xx:xx:3C:4D")
+            String::from("xx:xx:xx:xx:3c:4d")
         );
         assert_eq!(
             format!("{}", DisplayAddress(&RawAddress::from_string("11:35:11:35:11:35").unwrap())),
             String::from("xx:xx:xx:xx:11:35")
+        );
+    }
+
+    #[test]
+    fn test_get_shortest_slice() {
+        let uuid_16 = Uuid::from_string("0000fef3-0000-1000-8000-00805f9b34fb").unwrap();
+        assert_eq!(uuid_16.get_shortest_slice(), [0xfe, 0xf3]);
+
+        let uuid_32 = Uuid::from_string("00112233-0000-1000-8000-00805f9b34fb").unwrap();
+        assert_eq!(uuid_32.get_shortest_slice(), [0x00, 0x11, 0x22, 0x33]);
+
+        let uuid_128 = Uuid::from_string("00112233-4455-6677-8899-aabbccddeeff").unwrap();
+        assert_eq!(
+            uuid_128.get_shortest_slice(),
+            [
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff
+            ]
         );
     }
 }

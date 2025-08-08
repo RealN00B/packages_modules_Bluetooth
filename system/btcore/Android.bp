@@ -55,7 +55,9 @@ cc_library_static {
             cflags: ["-D_GNU_SOURCE"],
         },
     },
-    static_libs: ["libbt_shim_bridge"],
+    static_libs: [
+        "libbluetooth_log",
+    ],
 }
 
 cc_library_static {
@@ -66,7 +68,9 @@ cc_library_static {
     ],
     defaults: ["libbtcore_defaults"],
     min_sdk_version: "Tiramisu",
-    static_libs: ["libbt_shim_bridge"],
+    static_libs: [
+        "libbluetooth_log",
+    ],
 }
 
 cc_library_headers {
@@ -98,12 +102,15 @@ cc_test {
         "test/property_test.cc",
     ],
     shared_libs: [
+        "libbase",
         "liblog",
     ],
     static_libs: [
         "libbluetooth-types",
+        "libbluetooth_log",
         "libbtcore",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libosi",
     ],
     host_supported: true,

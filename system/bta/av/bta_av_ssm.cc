@@ -22,12 +22,17 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"  // Must be first to define build configuration
+#define LOG_TAG "bluetooth-a2dp"
 
-#define LOG_TAG "bt_bta_av"
+#include <bluetooth/log.h>
+
+#include <cstddef>
+#include <cstdint>
 
 #include "bta/av/bta_av_int.h"
-#include "osi/include/log.h"
+#include "bta_av_api.h"
+
+using namespace bluetooth;
 
 /*****************************************************************************
  * Constants and types
@@ -43,12 +48,27 @@ enum {
   BTA_AV_CLOSING_SST
 };
 
-static void bta_av_better_stream_state_machine(tBTA_AV_SCB* p_scb,
-                                               uint16_t event,
-                                               tBTA_AV_DATA* p_data) {
+/*******************************************************************************
+ *
+ * Function         bta_av_ssm_execute
+ *
+ * Description      Stream state machine event handling function for AV
+ *
+ *
+ * Returns          void
+ *
+ ******************************************************************************/
+void bta_av_ssm_execute(tBTA_AV_SCB* p_scb, uint16_t event, tBTA_AV_DATA* p_data) {
+  if (p_scb == NULL) {
+    /* this stream is not registered */
+    log::error("AV channel not registered");
+    return;
+  }
+
   uint8_t previous_state = p_scb->state;
   tBTA_AV_ACT event_handler1 = nullptr;
   tBTA_AV_ACT event_handler2 = nullptr;
+
   switch (p_scb->state) {
     case BTA_AV_INIT_SST:
       switch (event) {
@@ -419,17 +439,15 @@ static void bta_av_better_stream_state_machine(tBTA_AV_SCB* p_scb,
   }
 
   if (previous_state != p_scb->state) {
-    LOG_INFO("peer %s p_scb=%#x(%p) AV event=0x%x(%s) state=%d(%s) -> %d(%s)",
-             ADDRESS_TO_LOGGABLE_CSTR(p_scb->PeerAddress()), p_scb->hndl, p_scb,
-             event, bta_av_evt_code(event), previous_state,
-             bta_av_sst_code(previous_state), p_scb->state,
-             bta_av_sst_code(p_scb->state));
+    log::info("peer {} p_scb={:#x}({}) AV event=0x{:x}({}) state={}({}) -> {}({})",
+              p_scb->PeerAddress(), p_scb->hndl, std::format_ptr(p_scb), event,
+              bta_av_evt_code(event), previous_state, bta_av_sst_code(previous_state), p_scb->state,
+              bta_av_sst_code(p_scb->state));
 
   } else {
-    LOG_VERBOSE("peer %s p_scb=%#x(%p) AV event=0x%x(%s) state=%d(%s)",
-                ADDRESS_TO_LOGGABLE_CSTR(p_scb->PeerAddress()), p_scb->hndl,
-                p_scb, event, bta_av_evt_code(event), p_scb->state,
-                bta_av_sst_code(p_scb->state));
+    log::verbose("peer {} p_scb={:#x}({}) AV event=0x{:x}({}) state={}({})", p_scb->PeerAddress(),
+                 p_scb->hndl, std::format_ptr(p_scb), event, bta_av_evt_code(event), p_scb->state,
+                 bta_av_sst_code(p_scb->state));
   }
 
   if (event_handler1 != nullptr) {
@@ -438,27 +456,6 @@ static void bta_av_better_stream_state_machine(tBTA_AV_SCB* p_scb,
   if (event_handler2 != nullptr) {
     event_handler2(p_scb, p_data);
   }
-}
-
-/*******************************************************************************
- *
- * Function         bta_av_ssm_execute
- *
- * Description      Stream state machine event handling function for AV
- *
- *
- * Returns          void
- *
- ******************************************************************************/
-void bta_av_ssm_execute(tBTA_AV_SCB* p_scb, uint16_t event,
-                        tBTA_AV_DATA* p_data) {
-  if (p_scb == NULL) {
-    /* this stream is not registered */
-    LOG_VERBOSE("%s: AV channel not registered", __func__);
-    return;
-  }
-
-  bta_av_better_stream_state_machine(p_scb, event, p_data);
 }
 
 /*******************************************************************************
@@ -475,7 +472,9 @@ bool bta_av_is_scb_opening(tBTA_AV_SCB* p_scb) {
   bool is_opening = false;
 
   if (p_scb) {
-    if (p_scb->state == BTA_AV_OPENING_SST) is_opening = true;
+    if (p_scb->state == BTA_AV_OPENING_SST) {
+      is_opening = true;
+    }
   }
 
   return is_opening;
@@ -495,7 +494,9 @@ bool bta_av_is_scb_incoming(tBTA_AV_SCB* p_scb) {
   bool is_incoming = false;
 
   if (p_scb) {
-    if (p_scb->state == BTA_AV_INCOMING_SST) is_incoming = true;
+    if (p_scb->state == BTA_AV_INCOMING_SST) {
+      is_incoming = true;
+    }
   }
 
   return is_incoming;
@@ -518,49 +519,11 @@ void bta_av_set_scb_sst_init(tBTA_AV_SCB* p_scb) {
 
   uint8_t next_state = BTA_AV_INIT_SST;
 
-  LOG_VERBOSE(
-      "%s: peer %s AV (hndl=0x%x) state=%d(%s) next state=%d(%s) p_scb=%p",
-      __func__, ADDRESS_TO_LOGGABLE_CSTR(p_scb->PeerAddress()), p_scb->hndl,
-      p_scb->state, bta_av_sst_code(p_scb->state), next_state,
-      bta_av_sst_code(next_state), p_scb);
+  log::verbose("peer {} AV (hndl=0x{:x}) state={}({}) next state={}({}) p_scb={}",
+               p_scb->PeerAddress(), p_scb->hndl, p_scb->state, bta_av_sst_code(p_scb->state),
+               next_state, bta_av_sst_code(next_state), std::format_ptr(p_scb));
 
   p_scb->state = next_state;
-}
-
-/*******************************************************************************
- *
- * Function         bta_av_is_scb_init
- *
- * Description      Returns true is scb is in init state.
- *
- *
- * Returns          true if scb is in incoming state.
- *
- ******************************************************************************/
-bool bta_av_is_scb_init(tBTA_AV_SCB* p_scb) {
-  bool is_init = false;
-
-  if (p_scb) {
-    if (p_scb->state == BTA_AV_INIT_SST) is_init = true;
-  }
-
-  return is_init;
-}
-
-/*******************************************************************************
- *
- * Function         bta_av_set_scb_sst_incoming
- *
- * Description      Set SST state to incoming.
- *                  Use this function to change SST outside of state machine.
- *
- * Returns          None
- *
- ******************************************************************************/
-void bta_av_set_scb_sst_incoming(tBTA_AV_SCB* p_scb) {
-  if (p_scb) {
-    p_scb->state = BTA_AV_INCOMING_SST;
-  }
 }
 
 /*****************************************************************************

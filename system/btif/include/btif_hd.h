@@ -20,6 +20,7 @@
 #ifndef BTIF_HD_H
 #define BTIF_HD_H
 
+#include <bluetooth/log.h>
 #include <hardware/bluetooth.h>
 #include <hardware/bt_hd.h>
 #include <stdint.h>
@@ -27,11 +28,7 @@
 #include "bta/include/bta_hd_api.h"
 #include "types/raw_address.h"
 
-typedef enum {
-  BTIF_HD_DISABLED = 0,
-  BTIF_HD_ENABLED,
-  BTIF_HD_DISABLING
-} BTIF_HD_STATUS;
+typedef enum { BTIF_HD_DISABLED = 0, BTIF_HD_ENABLED, BTIF_HD_DISABLING } BTIF_HD_STATUS;
 
 /* BTIF-HD control block */
 typedef struct {
@@ -43,7 +40,14 @@ typedef struct {
 
 extern btif_hd_cb_t btif_hd_cb;
 
+const bthd_interface_t* btif_hd_get_interface();
+bt_status_t btif_hd_execute_service(bool b_enable);
 void btif_hd_remove_device(RawAddress bd_addr);
 void btif_hd_service_registration();
+
+namespace std {
+template <>
+struct formatter<BTIF_HD_STATUS> : enum_formatter<BTIF_HD_STATUS> {};
+}  // namespace std
 
 #endif

@@ -24,7 +24,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 class HandleMap {
-    private static final boolean DBG = GattServiceConfig.DBG;
     private static final String TAG = GattServiceConfig.TAG_PREFIX + "HandleMap";
 
     public static final int TYPE_UNDEFINED = 0;
@@ -32,7 +31,7 @@ class HandleMap {
     public static final int TYPE_CHARACTERISTIC = 2;
     public static final int TYPE_DESCRIPTOR = 3;
 
-    class Entry {
+    static class Entry {
         public int serverIf = 0;
         public int type = TYPE_UNDEFINED;
         public int handle = 0;
@@ -53,7 +52,12 @@ class HandleMap {
             this.serviceType = serviceType;
         }
 
-        Entry(int serverIf, int handle, UUID uuid, int serviceType, int instance,
+        Entry(
+                int serverIf,
+                int handle,
+                UUID uuid,
+                int serviceType,
+                int instance,
                 boolean advertisePreferred) {
             this.serverIf = serverIf;
             this.type = TYPE_SERVICE;
@@ -82,13 +86,23 @@ class HandleMap {
         }
     }
 
+    static class RequestData {
+        int mConnId;
+        int mHandle;
+
+        RequestData(int connId, int handle) {
+            mConnId = connId;
+            mHandle = handle;
+        }
+    }
+
     List<Entry> mEntries = null;
-    Map<Integer, Integer> mRequestMap = null;
+    Map<Integer, RequestData> mRequestMap = null;
     int mLastCharacteristic = 0;
 
     HandleMap() {
         mEntries = new CopyOnWriteArrayList<Entry>();
-        mRequestMap = new ConcurrentHashMap<Integer, Integer>();
+        mRequestMap = new ConcurrentHashMap<Integer, RequestData>();
     }
 
     void clear() {
@@ -96,7 +110,12 @@ class HandleMap {
         mRequestMap.clear();
     }
 
-    void addService(int serverIf, int handle, UUID uuid, int serviceType, int instance,
+    void addService(
+            int serverIf,
+            int handle,
+            UUID uuid,
+            int serviceType,
+            int instance,
             boolean advertisePreferred) {
         mEntries.add(new Entry(serverIf, handle, uuid, serviceType, instance, advertisePreferred));
     }
@@ -107,13 +126,20 @@ class HandleMap {
     }
 
     void addDescriptor(int serverIf, int handle, UUID uuid, int serviceHandle) {
-        mEntries.add(new Entry(serverIf, TYPE_DESCRIPTOR, handle, uuid, serviceHandle,
-                mLastCharacteristic));
+        mEntries.add(
+                new Entry(
+                        serverIf,
+                        TYPE_DESCRIPTOR,
+                        handle,
+                        uuid,
+                        serviceHandle,
+                        mLastCharacteristic));
     }
 
     void setStarted(int serverIf, int handle, boolean started) {
         for (Entry entry : mEntries) {
-            if (entry.type != TYPE_SERVICE || entry.serverIf != serverIf
+            if (entry.type != TYPE_SERVICE
+                    || entry.serverIf != serverIf
                     || entry.handle != handle) {
                 continue;
             }
@@ -143,16 +169,19 @@ class HandleMap {
     }
 
     void deleteService(int serverIf, int serviceHandle) {
-        mEntries.removeIf(entry -> ((entry.serverIf == serverIf)
-                && (entry.handle == serviceHandle || entry.serviceHandle == serviceHandle)));
+        mEntries.removeIf(
+                entry ->
+                        ((entry.serverIf == serverIf)
+                                && (entry.handle == serviceHandle
+                                        || entry.serviceHandle == serviceHandle)));
     }
 
     List<Entry> getEntries() {
         return mEntries;
     }
 
-    void addRequest(int requestId, int handle) {
-        mRequestMap.put(requestId, handle);
+    void addRequest(int connId, int requestId, int handle) {
+        mRequestMap.put(requestId, new RequestData(connId, handle));
     }
 
     void deleteRequest(int requestId) {
@@ -160,7 +189,12 @@ class HandleMap {
     }
 
     Entry getByRequestId(int requestId) {
-        Integer handle = mRequestMap.get(requestId);
+        Integer handle = null;
+        RequestData data = mRequestMap.get(requestId);
+        if (data != null) {
+            handle = data.mHandle;
+        }
+
         if (handle == null) {
             Log.e(TAG, "getByRequestId() - Request ID " + requestId + " not found!");
             return null;
@@ -168,28 +202,39 @@ class HandleMap {
         return getByHandle(handle);
     }
 
+    RequestData getRequestDataByRequestId(int requestId) {
+        RequestData data = mRequestMap.get(requestId);
+        if (data == null) {
+            Log.e(TAG, "getRequestDataByRequestId() - Request ID " + requestId + " not found!");
+        } else {
+            Log.d(
+                    TAG,
+                    ("getRequestDataByRequestId(), requestId=" + requestId)
+                            + (", connId=" + data.mConnId + ",handle=" + data.mHandle));
+        }
 
-    /**
-     * Logs debug information.
-     */
+        return data;
+    }
+
+    /** Logs debug information. */
     void dump(StringBuilder sb) {
-        sb.append("  Entries: " + mEntries.size() + "\n");
-        sb.append("  Requests: " + mRequestMap.size() + "\n");
+        sb.append("  Entries: ").append(mEntries.size()).append("\n");
+        sb.append("  Requests: ").append(mRequestMap.size()).append("\n");
 
         for (Entry entry : mEntries) {
-            sb.append("  " + entry.serverIf + ": [" + entry.handle + "] ");
+            sb.append("  ").append(entry.serverIf).append(": [").append(entry.handle).append("] ");
             switch (entry.type) {
                 case TYPE_SERVICE:
-                    sb.append("Service " + entry.uuid);
-                    sb.append(", started " + entry.started);
+                    sb.append("Service ").append(entry.uuid);
+                    sb.append(", started ").append(entry.started);
                     break;
 
                 case TYPE_CHARACTERISTIC:
-                    sb.append("  Characteristic " + entry.uuid);
+                    sb.append("  Characteristic ").append(entry.uuid);
                     break;
 
                 case TYPE_DESCRIPTOR:
-                    sb.append("    Descriptor " + entry.uuid);
+                    sb.append("    Descriptor ").append(entry.uuid);
                     break;
             }
 

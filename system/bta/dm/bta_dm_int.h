@@ -25,53 +25,41 @@
 #define BTA_DM_INT_H
 
 #include <base/strings/stringprintf.h>
+#include <bluetooth/log.h>
+#include <com_android_bluetooth_flags.h>
 
+#include <list>
 #include <string>
+#include <vector>
 
-#include "bt_target.h"  // Must be first to define build configuration
 #include "bta/include/bta_api.h"
 #include "bta/include/bta_sec_api.h"
 #include "bta/sys/bta_sys.h"
-#include "stack/btm/neighbor_inquiry.h"
-#include "stack/include/sdp_status.h"
-#include "stack/sdp/sdp_discovery_db.h"
+#include "hci/le_rand_callback.h"
+#include "internal_include/bt_target.h"
+#include "internal_include/bt_trace.h"
+#include "macros.h"
 #include "types/raw_address.h"
-
-#ifndef CASE_RETURN_TEXT
-#define CASE_RETURN_TEXT(code) \
-  case code:                   \
-    return #code
-#endif
 
 /*****************************************************************************
  *  Constants and data types
  ****************************************************************************/
 
-#define BTA_COPY_DEVICE_CLASS(coddst, codsrc)          \
-  {                                                    \
-    ((uint8_t*)(coddst))[0] = ((uint8_t*)(codsrc))[0]; \
-    ((uint8_t*)(coddst))[1] = ((uint8_t*)(codsrc))[1]; \
-    ((uint8_t*)(coddst))[2] = ((uint8_t*)(codsrc))[2]; \
-  }
-
-#define BTA_DM_MSG_LEN 50
-
 #define BTA_DM_NUM_PEER_DEVICE 7
 
-typedef enum : uint8_t {
-  BTA_DM_NOT_CONNECTED = 0,
-  BTA_DM_CONNECTED = 1,
-  BTA_DM_UNPAIRING = 2,
-} tBTA_DM_CONN_STATE;
+// TODO: Remove when flag wait_for_disconnect_before_unbond is shipped
+enum class tBTA_DM_CONN_STATE : uint8_t {
+  BTA_DM_CONNECTED = 0,
+  BTA_DM_UNPAIRING = 1,
+};
 
+// TODO: Remove when flag wait_for_disconnect_before_unbond is shipped
 inline std::string bta_conn_state_text(tBTA_DM_CONN_STATE state) {
   switch (state) {
-    CASE_RETURN_TEXT(BTA_DM_NOT_CONNECTED);
-    CASE_RETURN_TEXT(BTA_DM_CONNECTED);
-    CASE_RETURN_TEXT(BTA_DM_UNPAIRING);
-    default:
-      return std::string("UNKNOWN");
+    CASE_RETURN_STRING(tBTA_DM_CONN_STATE::BTA_DM_CONNECTED);
+    CASE_RETURN_STRING(tBTA_DM_CONN_STATE::BTA_DM_UNPAIRING);
   }
+  RETURN_UNKNOWN_TYPE_STRING(tBTA_DM_CONN_STATE, state);
 }
 
 typedef enum : uint8_t {
@@ -81,22 +69,24 @@ typedef enum : uint8_t {
                                  enter sniff mode */
   BTA_DM_DI_ACP_SNIFF = 0x04, /* set this bit if peer init sniff */
   BTA_DM_DI_UNUSED = 0x08,
-  BTA_DM_DI_USE_SSR = 0x10, /* set this bit if ssr is supported for this link */
+  BTA_DM_DI_USE_SSR = 0x10,   /* set this bit if ssr is supported for this link */
   BTA_DM_DI_AV_ACTIVE = 0x20, /* set this bit if AV is active for this link */
 } tBTA_DM_DEV_INFO_BITMASK;
 typedef uint8_t tBTA_DM_DEV_INFO;
 
 inline std::string device_info_text(tBTA_DM_DEV_INFO info) {
   const char* const device_info_text[] = {
-      ":set_sniff", ":int_sniff", ":acp_sniff",
-      ":unused",    ":use_ssr",   ":av_active",
+          ":set_sniff", ":int_sniff", ":acp_sniff", ":unused", ":use_ssr", ":av_active",
   };
 
   std::string s = base::StringPrintf("0x%02x", info);
-  if (info == BTA_DM_DI_NONE) return s + std::string(":none");
-  for (size_t i = 0; i < sizeof(device_info_text) / sizeof(device_info_text[0]);
-       i++) {
-    if (info & (1u << i)) s += std::string(device_info_text[i]);
+  if (info == BTA_DM_DI_NONE) {
+    return s + std::string(":none");
+  }
+  for (size_t i = 0; i < sizeof(device_info_text) / sizeof(device_info_text[0]); i++) {
+    if (info & (1u << i)) {
+      s += std::string(device_info_text[i]);
+    }
   }
   return s;
 }
@@ -107,17 +97,29 @@ inline std::string device_info_text(tBTA_DM_DEV_INFO info) {
 #define BTA_DM_PM_EXECUTE 3
 typedef uint8_t tBTA_DM_PM_REQ;
 
+struct tBTA_DM_REMOVE_PENDNIG {
+  RawAddress pseudo_addr;
+  RawAddress identity_addr;
+  bool le_connected;
+  bool bredr_connected;
+};
+
+bool bta_dm_removal_pending(const RawAddress& bd_addr);
+
 struct tBTA_DM_PEER_DEVICE {
   RawAddress peer_bdaddr;
-  tBTA_DM_CONN_STATE conn_state;
+
+  // TODO: Remove when flag wait_for_disconnect_before_unbond is shipped
+  tBTA_DM_CONN_STATE conn_state{tBTA_DM_CONN_STATE::BTA_DM_CONNECTED};
+
   tBTA_PREF_ROLES pref_role;
   bool in_use;
 
- private:
+private:
   // Dynamic pieces of operational device information
   tBTA_DM_DEV_INFO info{BTA_DM_DI_NONE};
 
- public:
+public:
   std::string info_text() const { return device_info_text(info); }
 
   void reset_device_info() { info = BTA_DM_DI_NONE; }
@@ -146,6 +148,15 @@ struct tBTA_DM_PEER_DEVICE {
   void reset_ssr_active() { info &= ~BTA_DM_DI_USE_SSR; }
   bool is_ssr_active() const { return info & BTA_DM_DI_USE_SSR; }
 
+  bool is_connected() const {
+    // Devices getting removed should be treated as disconnected
+    if (com::android::bluetooth::flags::wait_for_disconnect_before_unbond() &&
+        bta_dm_removal_pending(peer_bdaddr)) {
+      return false;
+    }
+    return (conn_state == tBTA_DM_CONN_STATE::BTA_DM_CONNECTED);
+  }
+
   tBTA_DM_ENCRYPT_CBACK* p_encrypt_cback;
   tBTM_PM_STATUS prev_low; /* previous low power mode used */
   tBTA_DM_PM_ACTION pm_mode_attempted;
@@ -170,12 +181,11 @@ typedef struct {
   bool new_request;
 
   std::string ToString() const {
-    return base::StringPrintf(
-        "peer:%s sys_name:%s app_id:%hhu state:%s new:request:%s",
-        ADDRESS_TO_LOGGABLE_CSTR(peer_bdaddr), BtaIdSysText(id).c_str(), app_id,
-        bta_sys_conn_status_text(state).c_str(), logbool(new_request).c_str());
+    return base::StringPrintf("peer:%s sys_name:%s app_id:%hhu state:%s new_request:%s",
+                              ADDRESS_TO_LOGGABLE_CSTR(peer_bdaddr), BtaIdSysText(id).c_str(),
+                              app_id, bta_sys_conn_status_text(state).c_str(),
+                              new_request ? "true" : "false");
   }
-
 } tBTA_DM_SRVCS;
 
 #ifndef BTA_DM_NUM_CONN_SRVS
@@ -185,7 +195,6 @@ typedef struct {
 typedef struct {
   uint8_t count;
   tBTA_DM_SRVCS conn_srvc[BTA_DM_NUM_CONN_SRVS];
-
 } tBTA_DM_CONNECTED_SRVCS;
 
 typedef struct {
@@ -223,21 +232,17 @@ typedef struct {
   alarm_t* disable_timer;
   uint8_t pm_id;
   tBTA_PM_TIMER pm_timer[BTA_DM_NUM_PM_TIMER];
-  uint8_t cur_av_count;   /* current AV connecions */
+  uint8_t cur_av_count; /* current AV connections */
 
-#if (BTA_EIR_CANNED_UUID_LIST != TRUE)
   /* store UUID list for EIR */
   uint32_t eir_uuid[BTM_EIR_SERVICE_ARRAY_SIZE];
 #if (BTA_EIR_SERVER_NUM_CUSTOM_UUID > 0)
   tBTA_CUSTOM_UUID bta_custom_uuid[BTA_EIR_SERVER_NUM_CUSTOM_UUID];
 #endif
-
-#endif
-
   alarm_t* switch_delay_timer;
-} tBTA_DM_CB;
 
-#undef CASE_RETURN_TEXT
+  std::list<tBTA_DM_REMOVE_PENDNIG> pending_removals;
+} tBTA_DM_CB;
 
 /* DI control block */
 typedef struct {
@@ -248,9 +253,8 @@ typedef struct {
 
 typedef struct {
   uint16_t page_timeout; /* timeout for page in slots */
-  bool avoid_scatter; /* true to avoid scatternet when av is streaming (be the
-                         central) */
-
+  bool avoid_scatter;    /* true to avoid scatternet when av is streaming (be the
+                            central) */
 } tBTA_DM_CFG;
 
 extern const uint32_t bta_service_id_to_btm_srv_id_lkup_tbl[];
@@ -259,7 +263,6 @@ typedef struct {
   uint8_t id;
   uint8_t app_id;
   uint8_t cfg;
-
 } tBTA_DM_RM;
 
 extern const tBTA_DM_CFG* p_bta_dm_cfg;
@@ -269,20 +272,17 @@ typedef struct {
   uint8_t id;
   uint8_t app_id;
   uint8_t spec_idx; /* index of spec table to use */
-
 } tBTA_DM_PM_CFG;
 
 typedef struct {
   tBTA_DM_PM_ACTION power_mode;
   uint16_t timeout;
-
 } tBTA_DM_PM_ACTN;
 
 typedef struct {
   uint8_t allow_mask; /* mask of sniff/hold/park modes to allow */
-  uint8_t ssr; /* set SSR on conn open/unpark */
+  uint8_t ssr;        /* set SSR on conn open/unpark */
   tBTA_DM_PM_ACTN actn_tbl[BTA_DM_PM_NUM_EVTS][2];
-
 } tBTA_DM_PM_SPEC;
 
 typedef struct {
@@ -329,16 +329,10 @@ extern tBTA_DM_DI_CB bta_dm_di_cb;
 void bta_dm_enable(tBTA_DM_SEC_CBACK*, tBTA_DM_ACL_CBACK*);
 void bta_dm_disable();
 void bta_dm_set_dev_name(const std::vector<uint8_t>&);
-void bta_dm_close_acl(const RawAddress&, bool, tBT_TRANSPORT);
 
-void bta_dm_pm_btm_status(const RawAddress&, tBTM_PM_STATUS, uint16_t,
-                          tHCI_STATUS);
-void bta_dm_pm_timer(const RawAddress&, tBTA_DM_PM_ACTION);
-
-void bta_dm_ble_set_conn_params(const RawAddress&, uint16_t, uint16_t, uint16_t,
-                                uint16_t);
-void bta_dm_ble_update_conn_params(const RawAddress&, uint16_t, uint16_t,
-                                   uint16_t, uint16_t, uint16_t, uint16_t);
+void bta_dm_ble_set_conn_params(const RawAddress&, uint16_t, uint16_t, uint16_t, uint16_t);
+void bta_dm_ble_update_conn_params(const RawAddress&, uint16_t, uint16_t, uint16_t, uint16_t,
+                                   uint16_t, uint16_t);
 
 void bta_dm_ble_set_data_length(const RawAddress& bd_addr);
 
@@ -354,23 +348,26 @@ void bta_dm_clear_event_filter(void);
 void bta_dm_clear_event_mask(void);
 void bta_dm_clear_filter_accept_list(void);
 void bta_dm_disconnect_all_acls(void);
-void bta_dm_le_rand(LeRandCallback cb);
+void bta_dm_le_rand(bluetooth::hci::LeRandCallback cb);
 void bta_dm_set_event_filter_connection_setup_all_devices();
-void bta_dm_allow_wake_by_hid(
-    std::vector<RawAddress> classic_hid_devices,
-    std::vector<std::pair<RawAddress, uint8_t>> le_hid_devices);
-void bta_dm_restore_filter_accept_list(
-    std::vector<std::pair<RawAddress, uint8_t>> le_devices);
+void bta_dm_allow_wake_by_hid(std::vector<RawAddress> classic_hid_devices,
+                              std::vector<std::pair<RawAddress, uint8_t>> le_hid_devices);
+void bta_dm_restore_filter_accept_list(std::vector<std::pair<RawAddress, uint8_t>> le_devices);
 void bta_dm_set_default_event_mask_except(uint64_t mask, uint64_t le_mask);
 void bta_dm_set_event_filter_inquiry_result_all_devices();
 
 void bta_dm_ble_reset_id(void);
 
 void bta_dm_eir_update_uuid(uint16_t uuid16, bool adding);
-void bta_dm_eir_update_cust_uuid(const tBTA_CUSTOM_UUID &curr, bool adding);
+void bta_dm_eir_update_cust_uuid(const tBTA_CUSTOM_UUID& curr, bool adding);
 
 void bta_dm_ble_subrate_request(const RawAddress& bd_addr, uint16_t subrate_min,
-                                uint16_t subrate_max, uint16_t max_latency,
-                                uint16_t cont_num, uint16_t timeout);
+                                uint16_t subrate_max, uint16_t max_latency, uint16_t cont_num,
+                                uint16_t timeout);
+
+namespace std {
+template <>
+struct formatter<tBTA_DM_CONN_STATE> : enum_formatter<tBTA_DM_CONN_STATE> {};
+}  // namespace std
 
 #endif /* BTA_DM_INT_H */

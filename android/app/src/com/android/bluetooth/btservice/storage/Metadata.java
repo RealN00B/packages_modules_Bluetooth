@@ -28,29 +28,19 @@ import androidx.room.Embedded;
 import androidx.room.Entity;
 import androidx.room.PrimaryKey;
 
-import com.android.internal.annotations.VisibleForTesting;
-
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * @hide
- */
 @Entity(tableName = "metadata")
-@VisibleForTesting
+
 public class Metadata {
-    @PrimaryKey
-    @NonNull
-    private String address;
+    @PrimaryKey @NonNull private String address;
 
     public boolean migrated;
 
-    @Embedded
-    public ProfilePrioritiesEntity profileConnectionPolicies;
+    @Embedded public ProfilePrioritiesEntity profileConnectionPolicies;
 
-    @Embedded
-    @NonNull
-    public CustomizedMetadataEntity publicMetadata;
+    @Embedded @NonNull public CustomizedMetadataEntity publicMetadata;
 
     public @OptionalCodecsSupportStatus int a2dpSupportsOptionalCodecs;
     public @OptionalCodecsPreferenceStatus int a2dpOptionalCodecsEnabled;
@@ -60,8 +50,7 @@ public class Metadata {
 
     public boolean isActiveHfpDevice;
 
-    @Embedded
-    public AudioPolicyEntity audioPolicyMetadata;
+    @Embedded public AudioPolicyEntity audioPolicyMetadata;
 
     /**
      * The preferred profile to be used for {@link BluetoothDevice#AUDIO_MODE_OUTPUT_ONLY}. This can
@@ -72,12 +61,18 @@ public class Metadata {
     public int preferred_output_only_profile;
 
     /**
-     * The preferred profile to be used for {@link BluetoothDevice#AUDIO_MODE_DUPLEX}. This can
-     * be either {@link BluetoothProfile#HEADSET} or {@link BluetoothProfile#LE_AUDIO}. This value
-     * is only used if the remote device supports both HFP and LE Audio and both transports are
+     * The preferred profile to be used for {@link BluetoothDevice#AUDIO_MODE_DUPLEX}. This can be
+     * either {@link BluetoothProfile#HEADSET} or {@link BluetoothProfile#LE_AUDIO}. This value is
+     * only used if the remote device supports both HFP and LE Audio and both transports are
      * connected and active.
      */
     public int preferred_duplex_profile;
+
+    /** This is used to indicate whether device's active audio policy */
+    public int active_audio_device_policy;
+
+    /** This is used to indicate whether device's microphone prefer to use during calls */
+    public boolean is_preferred_microphone_for_calls;
 
     Metadata(String address) {
         this(address, false, false);
@@ -96,6 +91,8 @@ public class Metadata {
         audioPolicyMetadata = new AudioPolicyEntity();
         preferred_output_only_profile = 0;
         preferred_duplex_profile = 0;
+        active_audio_device_policy = BluetoothDevice.ACTIVE_AUDIO_DEVICE_POLICY_DEFAULT;
+        is_preferred_microphone_for_calls = true;
     }
 
     static final class Builder {
@@ -122,10 +119,6 @@ public class Metadata {
         }
     }
 
-    /**
-     * @hide
-     */
-    @VisibleForTesting
     public String getAddress() {
         return address;
     }
@@ -133,7 +126,8 @@ public class Metadata {
     /**
      * Returns the anonymized hardware address. The first three octets will be suppressed for
      * anonymization.
-     * <p> For example, "XX:XX:XX:AA:BB:CC".
+     *
+     * <p>For example, "XX:XX:XX:AA:BB:CC".
      *
      * @return Anonymized bluetooth hardware address as string
      */
@@ -212,10 +206,6 @@ public class Metadata {
         }
     }
 
-    /**
-     * @hide
-     */
-    @VisibleForTesting
     public int getProfileConnectionPolicy(int profile) {
         switch (profile) {
             case BluetoothProfile.A2DP:
@@ -349,13 +339,12 @@ public class Metadata {
             case BluetoothDevice.METADATA_GTBS_CCCD:
                 publicMetadata.gtbs_cccd = value;
                 break;
+            case BluetoothDevice.METADATA_EXCLUSIVE_MANAGER:
+                publicMetadata.exclusive_manager = value;
+                break;
         }
     }
 
-    /**
-     * @hide
-     */
-    @VisibleForTesting
     public byte[] getCustomizedMeta(int key) {
         byte[] value = null;
         switch (key) {
@@ -446,6 +435,9 @@ public class Metadata {
             case BluetoothDevice.METADATA_GTBS_CCCD:
                 value = publicMetadata.gtbs_cccd;
                 break;
+            case BluetoothDevice.METADATA_EXCLUSIVE_MANAGER:
+                value = publicMetadata.exclusive_manager;
+                break;
         }
         return value;
     }
@@ -463,7 +455,8 @@ public class Metadata {
     public String toString() {
         StringBuilder builder = new StringBuilder();
         builder.append(getAnonymizedAddress())
-                .append(" last_active_time=" + last_active_time)
+                .append(" last_active_time=")
+                .append(last_active_time)
                 .append(" {profile connection policy(")
                 .append(profileConnectionPolicies)
                 .append("), optional codec(support=")
@@ -476,6 +469,8 @@ public class Metadata {
                 .append(publicMetadata)
                 .append("), hfp client audio policy(")
                 .append(audioPolicyMetadata)
+                .append("), is_preferred_microphone_for_calls(")
+                .append(is_preferred_microphone_for_calls)
                 .append(")}");
 
         return builder.toString();

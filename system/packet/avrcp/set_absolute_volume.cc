@@ -16,23 +16,22 @@
 
 #include "set_absolute_volume.h"
 
+#include "internal_include/bt_trace.h"
+
 namespace bluetooth {
 namespace avrcp {
 
-std::unique_ptr<SetAbsoluteVolumeRequestBuilder>
-SetAbsoluteVolumeRequestBuilder::MakeBuilder(uint8_t volume) {
+std::unique_ptr<SetAbsoluteVolumeRequestBuilder> SetAbsoluteVolumeRequestBuilder::MakeBuilder(
+        uint8_t volume) {
   std::unique_ptr<SetAbsoluteVolumeRequestBuilder> builder(
-      new SetAbsoluteVolumeRequestBuilder(volume & 0x7F));
+          new SetAbsoluteVolumeRequestBuilder(volume & 0x7F));
 
   return builder;
 }
 
-size_t SetAbsoluteVolumeRequestBuilder::size() const {
-  return VendorPacket::kMinSize() + 1;
-}
+size_t SetAbsoluteVolumeRequestBuilder::size() const { return VendorPacket::kMinSize() + 1; }
 
-bool SetAbsoluteVolumeRequestBuilder::Serialize(
-    const std::shared_ptr<::bluetooth::Packet>& pkt) {
+bool SetAbsoluteVolumeRequestBuilder::Serialize(const std::shared_ptr<::bluetooth::Packet>& pkt) {
   ReserveSpace(pkt, size());
 
   PacketBuilder::PushHeader(pkt);
@@ -50,8 +49,12 @@ uint8_t SetAbsoluteVolumeResponse::GetVolume() const {
 }
 
 bool SetAbsoluteVolumeResponse::IsValid() const {
-  if (!VendorPacket::IsValid()) return false;
-  if (GetCType() != CType::ACCEPTED) return false;
+  if (!VendorPacket::IsValid()) {
+    return false;
+  }
+  if (GetCType() != CType::ACCEPTED) {
+    return false;
+  }
   return size() == kMinSize();
 }
 

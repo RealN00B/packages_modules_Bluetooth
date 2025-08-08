@@ -15,26 +15,15 @@
 //! The core event loop for Rust modules. Here Rust modules are started in
 //! dependency order.
 
-use bt_common::init_flags::rust_event_loop_is_enabled;
-use connection::le_manager::InactiveLeAclManager;
 use gatt::{channel::AttTransport, GattCallbacks};
 use log::{info, warn};
 use tokio::task::LocalSet;
 
-use self::core::shared_box::SharedBox;
 use std::{rc::Rc, sync::Mutex};
 use tokio::runtime::Builder;
 
 use tokio::sync::mpsc;
 
-#[cfg(feature = "via_android_bp")]
-mod do_not_use {
-    // DO NOT USE
-    #[allow(unused)]
-    use bt_shim::*;
-}
-
-pub mod connection;
 pub mod core;
 pub mod gatt;
 pub mod packets;
@@ -55,8 +44,6 @@ pub struct ModuleViews<'a> {
     pub gatt_incoming_callbacks: Rc<gatt::callbacks::CallbackTransactionManager>,
     /// Proxies calls into GATT server
     pub gatt_module: &'a mut gatt::server::GattModule,
-    /// Proxies calls into connection manager
-    pub connection_manager: SharedBox<connection::ConnectionManager>,
 }
 
 static GLOBAL_MODULE_REGISTRY: Mutex<Option<GlobalModuleRegistry>> = Mutex::new(None);
@@ -69,7 +56,6 @@ impl GlobalModuleRegistry {
     pub fn start(
         gatt_callbacks: Rc<dyn GattCallbacks>,
         att_transport: Rc<dyn AttTransport>,
-        le_acl_manager: impl InactiveLeAclManager,
         on_started: impl FnOnce(),
     ) {
         info!("starting Rust modules");
@@ -87,7 +73,6 @@ impl GlobalModuleRegistry {
 
         // First, setup FFI and C++ modules
         let arbiter = gatt::arbiter::initialize_arbiter();
-        connection::register_callbacks();
 
         // Now enter the runtime
         local.block_on(&rt, async move {
@@ -96,15 +81,12 @@ impl GlobalModuleRegistry {
                 Rc::new(gatt::callbacks::CallbackTransactionManager::new(gatt_callbacks.clone()));
             let gatt_module = &mut gatt::server::GattModule::new(att_transport.clone(), arbiter);
 
-            let connection_manager = connection::ConnectionManager::new(le_acl_manager);
-
             // All modules that are visible from incoming JNI / top-level interfaces should
             // be exposed here
             let mut modules = ModuleViews {
                 gatt_outgoing_callbacks: gatt_callbacks,
                 gatt_incoming_callbacks,
                 gatt_module,
-                connection_manager,
             };
 
             // notify upper layer that we are ready to receive messages
@@ -160,10 +142,6 @@ pub fn do_in_rust_thread<F>(f: F)
 where
     F: for<'a> FnOnce(&'a mut ModuleViews) + Send + 'static,
 {
-    if !rust_event_loop_is_enabled() {
-        warn!("ignoring do_in_rust_thread() invocation since Rust loop is inactive");
-        return;
-    }
     let ret = MAIN_THREAD_TX.with(|tx| tx.send(MainThreadTxMessage::Callback(Box::new(f))));
     if ret.is_err() {
         panic!("Rust call failed");

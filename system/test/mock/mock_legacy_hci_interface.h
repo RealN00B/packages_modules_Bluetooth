@@ -20,24 +20,16 @@
 
 #include "stack/include/hcimsgs.h"
 
-namespace bluetooth::legacy::hci {
+namespace bluetooth::legacy::hci::testing {
 class MockInterface : public Interface {
- public:
-  MOCK_METHOD(void, StartInquiry,
-              (const LAP inq_lap, uint8_t duration, uint8_t response_cnt),
-              (const));
-  MOCK_METHOD(void, InquiryCancel, (), (const));
+public:
   MOCK_METHOD(void, Disconnect, (uint16_t handle, uint8_t reason), (const));
-  MOCK_METHOD(void, ChangeConnectionPacketType,
-              (uint16_t handle, uint16_t packet_types), (const));
-  MOCK_METHOD(void, StartRoleSwitch, (const RawAddress& bd_addr, uint8_t role),
-              (const));
+  MOCK_METHOD(void, ChangeConnectionPacketType, (uint16_t handle, uint16_t packet_types), (const));
+  MOCK_METHOD(void, StartRoleSwitch, (const RawAddress& bd_addr, uint8_t role), (const));
   MOCK_METHOD(void, ConfigureDataPath,
               (hci_data_direction_t data_path_direction, uint8_t data_path_id,
                std::vector<uint8_t> vendor_config),
               (const));
 };
-namespace testing {
-bluetooth::legacy::hci::MockInterface& GetMock();
-}
-}  // namespace bluetooth::legacy::hci
+void SetMock(const MockInterface& interface);
+}  // namespace bluetooth::legacy::hci::testing

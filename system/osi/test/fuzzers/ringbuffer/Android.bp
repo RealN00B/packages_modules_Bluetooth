@@ -15,7 +15,10 @@ cc_fuzz {
         "fuzz_ringbuffer.cc",
     ],
     static_libs: [
+        "libbase",
+        "libbluetooth_log",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "liblog",
         "libosi",
     ],

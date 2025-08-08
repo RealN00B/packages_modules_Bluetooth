@@ -19,7 +19,13 @@
 #pragma once
 
 #include <features.h>
+#include <stddef.h>
 #include <sys/types.h>
+
+/// Supplied by bionic and glibc>=2.38
+/// This declaration is added simplify clang-tidy
+/// misc-include-cleaner check.
+size_t osi_strlcpy(char* dst, const char* src, size_t size);
 
 #if __GLIBC__
 
@@ -28,10 +34,4 @@
 /* Get thread identification. */
 pid_t gettid(void) throw();
 
-/* Copy src to string dst of size siz. */
-size_t strlcpy(char* dst, const char* src, size_t siz);
-
-/* Appends src to string dst of size siz. */
-size_t strlcat(char* dst, const char* src, size_t siz);
-
-#endif
+#endif  // __GLIBC__

@@ -31,7 +31,6 @@
 #include <cstdint>
 #include <memory>
 
-#include "btm_api.h"
 #include "btm_ble_api_types.h"
 #include "stack/btm/neighbor_inquiry.h"
 #include "types/bt_transport.h"
@@ -43,14 +42,6 @@ void btm_ble_free();
 /*****************************************************************************
  *  EXTERNAL FUNCTION DECLARATIONS
  ****************************************************************************/
-
-/**
- * This function is called to set scan parameters. |cb| is called with operation
- * status
- **/
-void BTM_BleSetScanParams(uint32_t scan_interval, uint32_t scan_window,
-                          tBLE_SCAN_MODE scan_type,
-                          base::Callback<void(uint8_t)> cb);
 
 /*******************************************************************************
  *
@@ -76,51 +67,7 @@ void BTM_BleGetVendorCapabilities(tBTM_BLE_VSC_CB* p_cmn_vsc_cb);
  * Returns          void
  *
  ******************************************************************************/
-void BTM_BleGetDynamicAudioBuffer(
-    tBTM_BT_DYNAMIC_AUDIO_BUFFER_CB* p_dynamic_audio_buffer_cb);
-
-/*******************************************************************************
- *
- * Function         BTM_BleSetStorageConfig
- *
- * Description      This function is called to setup storage configuration and
- *                  setup callbacks.
- *
- * Parameters       uint8_t batch_scan_full_max -Batch scan full maximum
-                    uint8_t batch_scan_trunc_max - Batch scan truncated value
- maximum
-                    uint8_t batch_scan_notify_threshold - Threshold value
-                    cb - Setup callback
-                    tBTM_BLE_SCAN_THRESHOLD_CBACK *p_thres_cback -Threshold
- callback
-                    void *p_ref - Reference value
- *
- *
- ******************************************************************************/
-void BTM_BleSetStorageConfig(uint8_t batch_scan_full_max,
-                             uint8_t batch_scan_trunc_max,
-                             uint8_t batch_scan_notify_threshold,
-                             base::Callback<void(uint8_t /* status */)> cb,
-                             tBTM_BLE_SCAN_THRESHOLD_CBACK* p_thres_cback,
-                             tBTM_BLE_REF_VALUE ref_value);
-
-/* This function is called to enable batch scan */
-void BTM_BleEnableBatchScan(tBTM_BLE_BATCH_SCAN_MODE scan_mode,
-                            uint32_t scan_interval, uint32_t scan_window,
-                            tBTM_BLE_DISCARD_RULE discard_rule,
-                            tBLE_ADDR_TYPE addr_type,
-                            base::Callback<void(uint8_t /* status */)> cb);
-
-/* This function is called to disable batch scanning */
-void BTM_BleDisableBatchScan(base::Callback<void(uint8_t /* status */)> cb);
-
-/* This function is called to read batch scan reports */
-void BTM_BleReadScanReports(tBLE_SCAN_MODE scan_mode,
-                            tBTM_BLE_SCAN_REP_CBACK cb);
-
-/* This function is called to setup the callback for tracking */
-void BTM_BleTrackAdvertiser(tBTM_BLE_TRACK_ADV_CBACK* p_track_cback,
-                            tBTM_BLE_REF_VALUE ref_value);
+void BTM_BleGetDynamicAudioBuffer(tBTM_BT_DYNAMIC_AUDIO_BUFFER_CB* p_dynamic_audio_buffer_cb);
 
 /*******************************************************************************
  *
@@ -133,16 +80,12 @@ void BTM_BleTrackAdvertiser(tBTM_BLE_TRACK_ADV_CBACK* p_track_cback,
  *                  duration: how long the scan should last, in seconds. 0 means
  *                  scan without timeout. Starting the scan second time without
  *                  timeout will disable the timer.
- *                  low_latency_scan: whether this is a low latency scan,
- *                                    default is false.
  *
  * Returns          void
  *
  ******************************************************************************/
-tBTM_STATUS BTM_BleObserve(bool start, uint8_t duration,
-                           tBTM_INQ_RESULTS_CB* p_results_cb,
-                           tBTM_CMPL_CB* p_cmpl_cb,
-                           bool low_latency_scan = false);
+tBTM_STATUS BTM_BleObserve(bool start, uint8_t duration, tBTM_INQ_RESULTS_CB* p_results_cb,
+                           tBTM_CMPL_CB* p_cmpl_cb);
 
 /*******************************************************************************
  *
@@ -161,8 +104,7 @@ tBTM_STATUS BTM_BleObserve(bool start, uint8_t duration,
  * Returns          void
  *
  ******************************************************************************/
-void BTM_BleOpportunisticObserve(bool enable,
-                                 tBTM_INQ_RESULTS_CB* p_results_cb);
+void BTM_BleOpportunisticObserve(bool enable, tBTM_INQ_RESULTS_CB* p_results_cb);
 
 /*******************************************************************************
  *
@@ -178,8 +120,7 @@ void BTM_BleOpportunisticObserve(bool enable,
  * Returns          void
  *
  ******************************************************************************/
-void BTM_BleTargetAnnouncementObserve(bool enable,
-                                      tBTM_INQ_RESULTS_CB* p_results_cb);
+void BTM_BleTargetAnnouncementObserve(bool enable, tBTM_INQ_RESULTS_CB* p_results_cb);
 
 /*******************************************************************************
  *
@@ -202,13 +143,8 @@ bool BTM_IsBleConnection(uint16_t conn_handle);
  * Returns          void
  *
  ******************************************************************************/
-bool BTM_ReadRemoteConnectionAddr(const RawAddress& pseudo_addr,
-                                  RawAddress& conn_addr,
-                                  tBLE_ADDR_TYPE* p_addr_type,
-                                  bool ota_address);
-
-
-#include "stack/btm/btm_ble_bgconn.h"
+bool BTM_ReadRemoteConnectionAddr(const RawAddress& pseudo_addr, RawAddress& conn_addr,
+                                  tBLE_ADDR_TYPE* p_addr_type, bool ota_address);
 
 /********************************************************
  *
@@ -229,8 +165,7 @@ bool BTM_ReadRemoteConnectionAddr(const RawAddress& pseudo_addr,
  *
  ******************************************************************************/
 void BTM_BleSetPrefConnParams(const RawAddress& bd_addr, uint16_t min_conn_int,
-                              uint16_t max_conn_int,
-                              uint16_t peripheral_latency,
+                              uint16_t max_conn_int, uint16_t peripheral_latency,
                               uint16_t supervision_tout);
 
 /******************************************************************************
@@ -246,31 +181,6 @@ void BTM_BleSetPrefConnParams(const RawAddress& bd_addr, uint16_t min_conn_int,
  *
  ******************************************************************************/
 void BTM_BleReadControllerFeatures(tBTM_BLE_CTRL_FEATURES_CBACK* p_vsc_cback);
-
-/*******************************************************************************
- *
- * Function         BTM__BLEReadDiscoverability
- *
- * Description      This function is called to read the current LE
- *                  discoverability mode of the device.
- *
- * Returns          BTM_BLE_NON_DISCOVERABLE ,BTM_BLE_LIMITED_DISCOVERABLE or
- *                     BTM_BLE_GENRAL_DISCOVERABLE
- *
- ******************************************************************************/
-uint16_t BTM_BleReadDiscoverability();
-
-/*******************************************************************************
- *
- * Function         BTM__BLEReadConnectability
- *
- * Description      This function is called to read the current LE
- *                  connectibility mode of the device.
- *
- * Returns          BTM_BLE_NON_CONNECTABLE or BTM_BLE_CONNECTABLE
- *
- ******************************************************************************/
-uint16_t BTM_BleReadConnectability();
 
 /*******************************************************************************
  *
@@ -313,20 +223,7 @@ bool BTM_GetRemoteDeviceName(const RawAddress& bda, BD_NAME bd_name);
  * Return           true if an active link is identified; false otherwise
  *
  ******************************************************************************/
-bool BTM_ReadConnectedTransportAddress(RawAddress* remote_bda,
-                                       tBT_TRANSPORT transport);
-
-/*******************************************************************************
- *
- * Function          BTM_BleMaxMultiAdvInstanceCount
- *
- * Description      Returns the maximum number of multi adv instances supported
- *                  by the controller.
- *
- * Returns          Max multi adv instance count
- *
- ******************************************************************************/
-uint8_t BTM_BleMaxMultiAdvInstanceCount();
+bool BTM_ReadConnectedTransportAddress(RawAddress* remote_bda, tBT_TRANSPORT transport);
 
 /*******************************************************************************
  *
@@ -353,8 +250,7 @@ void BTM_BleReceiverTest(uint8_t rx_freq, tBTM_CMPL_CB* p_cmd_cmpl_cback);
  *                       p_cmd_cmpl_cback - Command Complete callback
  *
  ******************************************************************************/
-void BTM_BleTransmitterTest(uint8_t tx_freq, uint8_t test_data_len,
-                            uint8_t packet_payload,
+void BTM_BleTransmitterTest(uint8_t tx_freq, uint8_t test_data_len, uint8_t packet_payload,
                             tBTM_CMPL_CB* p_cmd_cmpl_cback);
 
 /*******************************************************************************
@@ -387,10 +283,9 @@ bool BTM_UseLeLink(const RawAddress& bd_addr);
  *                  condition.
  *
  ******************************************************************************/
-void BTM_BleAdvFilterParamSetup(
-    tBTM_BLE_SCAN_COND_OP action, tBTM_BLE_PF_FILT_INDEX filt_index,
-    std::unique_ptr<btgatt_filt_param_setup_t> p_filt_params,
-    tBTM_BLE_PF_PARAM_CB cb);
+void BTM_BleAdvFilterParamSetup(tBTM_BLE_SCAN_COND_OP action, tBTM_BLE_PF_FILT_INDEX filt_index,
+                                std::unique_ptr<btgatt_filt_param_setup_t> p_filt_params,
+                                tBTM_BLE_PF_PARAM_CB cb);
 
 /*******************************************************************************
  *
@@ -411,11 +306,10 @@ tBTM_STATUS BTM_BleGetEnergyInfo(tBTM_BLE_ENERGY_INFO_CBACK* p_ener_cback);
  *
  * Description      Set the maximum BLE transmission packet size
  *
- * Returns          BTM_SUCCESS if success; otherwise failed.
+ * Returns          tBTM_STATUS::BTM_SUCCESS if success; otherwise failed.
  *
  ******************************************************************************/
-tBTM_STATUS BTM_SetBleDataLength(const RawAddress& bd_addr,
-                                 uint16_t tx_pdu_length);
+tBTM_STATUS BTM_SetBleDataLength(const RawAddress& bd_addr, uint16_t tx_pdu_length);
 
 /*******************************************************************************
  *
@@ -424,12 +318,11 @@ tBTM_STATUS BTM_SetBleDataLength(const RawAddress& bd_addr,
  * Description      To read the current PHYs for specified LE connection
  *
  *
- * Returns          BTM_SUCCESS if success; otherwise failed.
+ * Returns          tBTM_STATUS::BTM_SUCCESS if success; otherwise failed.
  *
  ******************************************************************************/
-void BTM_BleReadPhy(
-    const RawAddress& bd_addr,
-    base::Callback<void(uint8_t tx_phy, uint8_t rx_phy, uint8_t status)> cb);
+void BTM_BleReadPhy(const RawAddress& bd_addr,
+                    base::Callback<void(uint8_t tx_phy, uint8_t rx_phy, uint8_t status)> cb);
 
 /*******************************************************************************
  *
@@ -438,7 +331,7 @@ void BTM_BleReadPhy(
  * Description      To set PHY preferences for specified LE connection
  *
  *
- * Returns          BTM_SUCCESS if success; otherwise failed.
+ * Returns          tBTM_STATUS::BTM_SUCCESS if success; otherwise failed.
  *
  ******************************************************************************/
 void BTM_BleSetPhy(const RawAddress& bd_addr, uint8_t tx_phys, uint8_t rx_phys,
@@ -458,128 +351,22 @@ bool btm_ble_get_acl_remote_addr(uint16_t hci_handle, RawAddress& conn_addr,
                                  tBLE_ADDR_TYPE* p_addr_type);
 
 using StartSyncCb = base::Callback<void(
-    uint8_t /*status*/, uint16_t /*sync_handle*/, uint8_t /*advertising_sid*/,
-    uint8_t /*address_type*/, RawAddress /*address*/, uint8_t /*phy*/,
-    uint16_t /*interval*/)>;
-using SyncReportCb = base::Callback<void(
-    uint16_t /*sync_handle*/, int8_t /*tx_power*/, int8_t /*rssi*/,
-    uint8_t /*status*/, std::vector<uint8_t> /*data*/)>;
+        uint8_t /*status*/, uint16_t /*sync_handle*/, uint8_t /*advertising_sid*/,
+        uint8_t /*address_type*/, RawAddress /*address*/, uint8_t /*phy*/, uint16_t /*interval*/)>;
+using SyncReportCb =
+        base::Callback<void(uint16_t /*sync_handle*/, int8_t /*tx_power*/, int8_t /*rssi*/,
+                            uint8_t /*status*/, std::vector<uint8_t> /*data*/)>;
 using SyncLostCb = base::Callback<void(uint16_t /*sync_handle*/)>;
 using BigInfoReportCb = base::Callback<void(uint16_t /*sync_handle*/, bool /*encrypted*/)>;
 
-void btm_ble_periodic_adv_sync_established(uint8_t status, uint16_t sync_handle,
-                                           uint8_t adv_sid,
-                                           uint8_t address_type,
-                                           const RawAddress& addr, uint8_t phy,
-                                           uint16_t interval,
+void btm_ble_periodic_adv_sync_established(uint8_t status, uint16_t sync_handle, uint8_t adv_sid,
+                                           uint8_t address_type, const RawAddress& addr,
+                                           uint8_t phy, uint16_t interval,
                                            uint8_t adv_clock_accuracy);
-void btm_ble_periodic_adv_report(uint16_t sync_handle, uint8_t tx_power,
-                                 int8_t rssi, uint8_t cte_type,
-                                 uint8_t data_status, uint8_t data_len,
+void btm_ble_periodic_adv_report(uint16_t sync_handle, uint8_t tx_power, int8_t rssi,
+                                 uint8_t cte_type, uint8_t data_status, uint8_t data_len,
                                  const uint8_t* periodic_data);
 void btm_ble_periodic_adv_sync_lost(uint16_t sync_handle);
-
-void btm_ble_biginfo_adv_report_rcvd(uint8_t* param, uint16_t param_len);
-void btm_ble_periodic_adv_sync_tx_rcvd(uint8_t* param, uint16_t param_len);
-/*******************************************************************************
- *
- * Function         BTM_BleStartPeriodicSync
- *
- * Description      This function is called to invoke HCI Command
- *                  HCI_LE_PERIODIC_ADVERTISING_CREATE_SYNC to synchronize to
- *                  PA train specified in input parameters.
- *
- * Parameters       PA train info corresponding to particualr PA train and
- *                  callbacks to sync established, pa report and sync lost
- *events
- *
- * Returns          void
- *
- ******************************************************************************/
-void BTM_BleStartPeriodicSync(uint8_t adv_sid, RawAddress address,
-                              uint16_t skip, uint16_t timeout,
-                              StartSyncCb syncCb, SyncReportCb reportCb,
-                              SyncLostCb lostCb,
-                              BigInfoReportCb biginfo_reportCb);
-/*******************************************************************************
- *
- * Function         BTM_BleStopPeriodicSync
- *
- * Description      This function is called to invoke HCI Command
- *                  HCI_LE_PERIODIC_ADVERTISING_TERMINATE_SYNC to stop
- *synchronising to PA train.
- *
- * Parameters       sync handle
- *
- * Returns          void
- *
- ******************************************************************************/
-void BTM_BleStopPeriodicSync(uint16_t handle);
-/*******************************************************************************
- *
- * Function         BTM_BleCancelPeriodicSync
- *
- * Description      This function is called to invoke HCI Command
- *                  HCI_LE_PERIODIC_ADVERTISING_CREATE_SYNC_CANCEL to
- *                  cancel pending sync to PA train.
- *
- * Parameters       adv sid, address corrosponds to PA train
- *
- * Returns          void
- *
- ******************************************************************************/
-void BTM_BleCancelPeriodicSync(uint8_t adv_sid, RawAddress address);
-
-using SyncTransferCb = base::Callback<void(uint8_t /*status*/, RawAddress)>;
-
-/*******************************************************************************
- *
- * Function         BTM_BlePeriodicSyncTransfer
- *
- * Description      This function is called to invoke HCI Command
- *                  HCI_LE_SET_PERIODIC_ADVERTISING_SYNC_TRANSFER to transfer
- *                  sync info of remote advertiser to connected remote device
- *
- * Parameters       PAST specific parameters
- *
- * Returns          void
- *
- ******************************************************************************/
-void BTM_BlePeriodicSyncTransfer(RawAddress addr, uint16_t service_data,
-                                 uint16_t sync_handle, SyncTransferCb cb);
-/*******************************************************************************
- *
- * Function         BTM_BlePeriodicSyncSetInfo
- *
- * Description      This function is called to invoke HCI Command
- *                  HCI_LE_SET_PERIODIC_ADVERTISING_SET_INFO_TRANSFER to
- *transfer colocated advertiser sync info to connected remote device
- *
- * Parameters       PAST specific parameters
- *
- * Returns          void
- *
- ******************************************************************************/
-void BTM_BlePeriodicSyncSetInfo(RawAddress addr, uint16_t service_data,
-                                uint8_t adv_handle, SyncTransferCb cb);
-/*******************************************************************************
- *
- * Function         BTM_BlePeriodicSyncTxParameters
- *
- * Description      This function is called to invoke HCI Command
- *                  HCI_LE_SET_PERIODIC_ADVERTISING_SYNC_TRANSFER_PARAMETERS,
- *                  this command is used to specify how BT SoC will process PA
- *                  sync information received from the remote device identified
- *                  by the addr.
- *
- * Parameters       HCI command  specific parameters
- *
- * Returns          void
- *
- ******************************************************************************/
-void BTM_BlePeriodicSyncTxParameters(RawAddress addr, uint8_t mode,
-                                     uint16_t skip, uint16_t timeout,
-                                     StartSyncCb syncCb);
 
 /*******************************************************************************
  *

@@ -16,14 +16,15 @@
 
 #pragma once
 
+#include <bluetooth/log.h>
 #include <unistd.h>
 
 #include <unordered_map>
 
-#include "base/logging.h"  // LOG() stdout and android log
 #include "include/hardware/bluetooth.h"
+#include "test/headless/bt_stack_info.h"
 #include "test/headless/get_options.h"
-#include "test/headless/messenger.h"
+#include "test/headless/log.h"
 
 extern bt_interface_t bluetoothInterface;
 
@@ -35,46 +36,38 @@ template <typename T>
 using ExecutionUnit = std::function<T()>;
 
 constexpr char kHeadlessInitialSentinel[] =
-    " INITIAL HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS "
-    "HEADLESS";
+        " INITIAL HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS";
 constexpr char kHeadlessStartSentinel[] =
-    " START HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS "
-    "HEADLESS";
+        " START HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS";
 constexpr char kHeadlessStopSentinel[] =
-    " STOP HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS "
-    "HEADLESS";
+        " STOP HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS";
 constexpr char kHeadlessFinalSentinel[] =
-    " FINAL HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS "
-    "HEADLESS";
+        " FINAL HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS HEADLESS";
 
 class HeadlessStack {
- protected:
-  HeadlessStack(const char** stack_init_flags)
-      : stack_init_flags_(stack_init_flags) {}
+protected:
+  HeadlessStack() {}
   virtual ~HeadlessStack() = default;
 
   void SetUp();
   void TearDown();
 
-  const char** StackInitFlags() const { return stack_init_flags_; }
-
- private:
-  const char** stack_init_flags_;
+private:
+  std::unique_ptr<BtStackInfo> bt_stack_info_;
 };
 
 class HeadlessRun : public HeadlessStack {
- protected:
+protected:
   const bluetooth::test::headless::GetOpt& options_;
-  unsigned long loop_{0};
+  uint64_t loop_{0};
 
-  HeadlessRun(const bluetooth::test::headless::GetOpt& options)
-      : HeadlessStack(options.StackInitFlags()), options_(options) {}
+  HeadlessRun(const bluetooth::test::headless::GetOpt& options) : options_(options) {}
 
   template <typename T>
   T RunOnHeadlessStack(ExecutionUnit<T> func) {
-    LOG(INFO) << kHeadlessInitialSentinel;
+    log::info("{}", kHeadlessInitialSentinel);
     SetUp();
-    LOG(INFO) << kHeadlessStartSentinel;
+    log::info("{}", kHeadlessStartSentinel);
 
     T rc;
     for (loop_ = 0; loop_ < options_.loop_; loop_++) {
@@ -89,16 +82,14 @@ class HeadlessRun : public HeadlessStack {
       LOG_CONSOLE("Loop completed: %lu", loop_);
     }
     if (rc) {
-      LOG(ERROR) << "FAIL:" << rc << " loop/loops:" << loop_ << "/"
-                 << options_.loop_;
+      log::error("FAIL:{} loop/loops:{}/{}", rc, loop_, options_.loop_);
     } else {
-      LOG(INFO) << "PASS:" << rc << " loop/loops:" << loop_ << "/"
-                << options_.loop_;
+      log::info("PASS:{} loop/loops:{}/{}", rc, loop_, options_.loop_);
     }
 
-    LOG(INFO) << kHeadlessStopSentinel;
+    log::info("{}", kHeadlessStopSentinel);
     TearDown();
-    LOG(INFO) << kHeadlessFinalSentinel;
+    log::info("{}", kHeadlessFinalSentinel);
     return rc;
   }
   virtual ~HeadlessRun() = default;
@@ -106,7 +97,7 @@ class HeadlessRun : public HeadlessStack {
 
 template <typename T>
 class HeadlessTest : public HeadlessRun {
- public:
+public:
   virtual T Run() {
     if (options_.non_options_.size() == 0) {
       fprintf(stdout, "Must supply at least one subtest name\n");
@@ -123,9 +114,8 @@ class HeadlessTest : public HeadlessRun {
 
   virtual ~HeadlessTest() = default;
 
- protected:
-  HeadlessTest(const bluetooth::test::headless::GetOpt& options)
-      : HeadlessRun(options) {}
+protected:
+  HeadlessTest(const bluetooth::test::headless::GetOpt& options) : HeadlessRun(options) {}
 
   std::unordered_map<std::string, std::unique_ptr<HeadlessTest<T>>> test_nodes_;
 };

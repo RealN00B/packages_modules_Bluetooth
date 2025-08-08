@@ -22,18 +22,29 @@ import androidx.test.core.app.ApplicationProvider;
 
 import com.google.protobuf.Empty;
 
+import io.grpc.Context;
 import io.grpc.ManagedChannel;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.okhttp.OkHttpChannelBuilder;
 
 import org.junit.rules.ExternalResource;
 
-import java.util.concurrent.TimeUnit;
-
+import pandora.BumbleConfigGrpc;
 import pandora.DckGrpc;
 import pandora.GATTGrpc;
+import pandora.HIDGrpc;
 import pandora.HostGrpc;
 import pandora.HostProto;
+import pandora.HostProto.AdvertiseRequest;
+import pandora.HostProto.OwnAddressType;
+import pandora.OOBGrpc;
+import pandora.RFCOMMGrpc;
 import pandora.SecurityGrpc;
+import pandora.l2cap.L2CAPGrpc;
+
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 public final class PandoraDevice extends ExternalResource {
     private static final String TAG = PandoraDevice.class.getSimpleName();
@@ -59,7 +70,16 @@ public final class PandoraDevice extends ExternalResource {
         ManagedChannel channel =
                 OkHttpChannelBuilder.forAddress(mNetworkAddress, mPort).usePlaintext().build();
         HostGrpc.HostBlockingStub stub = HostGrpc.newBlockingStub(channel);
-        stub.factoryReset(Empty.getDefaultInstance());
+        try {
+            stub.factoryReset(Empty.getDefaultInstance());
+        } catch (StatusRuntimeException e) {
+            if (e.getStatus().getCode() == Status.Code.UNAVAILABLE) {
+                // Server is shutting down, the call might be canceled with an UNAVAILABLE status
+                // because the stream is closed.
+            } else {
+                throw e;
+            }
+        }
         try {
             // terminate the channel
             channel.shutdown().awaitTermination(1, TimeUnit.SECONDS);
@@ -96,6 +116,55 @@ public final class PandoraDevice extends ExternalResource {
                 .getRemoteDevice(mPublicBluetoothAddress);
     }
 
+    /**
+     * Start advertising with Random address type
+     *
+     * @return Context.CancellableContext
+     */
+    public Context.CancellableContext advertise() {
+        return advertise(OwnAddressType.RANDOM, null, true, true);
+    }
+
+    /**
+     * Start advertising.
+     *
+     * @return a Context.CancellableContext to cancel the advertising
+     */
+    public Context.CancellableContext advertise(OwnAddressType ownAddressType) {
+        return advertise(ownAddressType, null, true, true);
+    }
+
+    /**
+     * Start advertising.
+     *
+     * @return a Context.CancellableContext to cancel the advertising
+     */
+    public Context.CancellableContext advertise(
+            OwnAddressType ownAddressType, UUID serviceUuid, boolean legacy, boolean connectable) {
+        AdvertiseRequest.Builder requestBuilder =
+                AdvertiseRequest.newBuilder()
+                        .setLegacy(legacy)
+                        .setConnectable(connectable)
+                        .setOwnAddressType(ownAddressType);
+
+        if (serviceUuid != null) {
+            requestBuilder.setData(
+                    HostProto.DataTypes.newBuilder()
+                            .addCompleteServiceClassUuids128(serviceUuid.toString())
+                            .build());
+        }
+
+        Context.CancellableContext cancellableContext = Context.current().withCancellation();
+        cancellableContext.run(
+                new Runnable() {
+                    public void run() {
+                        hostBlocking().advertise(requestBuilder.build());
+                    }
+                });
+
+        return cancellableContext;
+    }
+
     /** Get Pandora Host service */
     public HostGrpc.HostStub host() {
         return HostGrpc.newStub(mChannel);
@@ -104,6 +173,26 @@ public final class PandoraDevice extends ExternalResource {
     /** Get Pandora Host service */
     public HostGrpc.HostBlockingStub hostBlocking() {
         return HostGrpc.newBlockingStub(mChannel);
+    }
+
+    /** Get Pandora BumbleConfig service */
+    public BumbleConfigGrpc.BumbleConfigStub bumbleConfig() {
+        return BumbleConfigGrpc.newStub(mChannel);
+    }
+
+    /** Get Pandora BumbleConfig service */
+    public BumbleConfigGrpc.BumbleConfigBlockingStub bumbleConfigBlocking() {
+        return BumbleConfigGrpc.newBlockingStub(mChannel);
+    }
+
+    /** Get Pandora HID service */
+    public HIDGrpc.HIDStub hid() {
+        return HIDGrpc.newStub(mChannel);
+    }
+
+    /** Get Pandora HID blocking service */
+    public HIDGrpc.HIDBlockingStub hidBlocking() {
+        return HIDGrpc.newBlockingStub(mChannel);
     }
 
     /** Get Pandora Dck service */
@@ -121,6 +210,11 @@ public final class PandoraDevice extends ExternalResource {
         return SecurityGrpc.newStub(mChannel);
     }
 
+    /** Get Pandora OOB blocking service */
+    public OOBGrpc.OOBBlockingStub oobBlocking() {
+        return OOBGrpc.newBlockingStub(mChannel);
+    }
+
     /** Get Pandora GATT service */
     public GATTGrpc.GATTStub gatt() {
         return GATTGrpc.newStub(mChannel);
@@ -129,5 +223,25 @@ public final class PandoraDevice extends ExternalResource {
     /** Get Pandora GATT blocking service */
     public GATTGrpc.GATTBlockingStub gattBlocking() {
         return GATTGrpc.newBlockingStub(mChannel);
+    }
+
+    /** Get Pandora RFCOMM service */
+    public RFCOMMGrpc.RFCOMMStub rfcomm() {
+        return RFCOMMGrpc.newStub(mChannel);
+    }
+
+    /** Get Pandora RFCOMM blocking service */
+    public RFCOMMGrpc.RFCOMMBlockingStub rfcommBlocking() {
+        return RFCOMMGrpc.newBlockingStub(mChannel);
+    }
+
+    /** Get Pandora L2CAP service */
+    public L2CAPGrpc.L2CAPStub l2cap() {
+        return L2CAPGrpc.newStub(mChannel);
+    }
+
+    /** Get Pandora L2CAP blocking service */
+    public L2CAPGrpc.L2CAPBlockingStub l2capBlocking() {
+        return L2CAPGrpc.newBlockingStub(mChannel);
     }
 }

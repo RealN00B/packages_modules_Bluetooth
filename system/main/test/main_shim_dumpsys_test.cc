@@ -20,32 +20,20 @@
 
 #include <future>
 
-#include "common/init_flags.h"
 #include "module.h"
 #include "os/handler.h"
 #include "os/system_properties.h"
 #include "os/thread.h"
 #include "shim/dumpsys.h"
 #include "stack_manager.h"
-#include "storage/storage_module.h"
 
 using namespace bluetooth;
 using namespace testing;
 
-namespace {
-
-constexpr char kTrue[] = "1";
-constexpr char kFalse[] = "0";
-constexpr char kReadOnlyDebuggableProperty[] = "ro.debuggable";
-
-}  // namespace
-
 class MainShimDumpsysTest : public testing::Test {
- public:
- protected:
+public:
+protected:
   void SetUp() override {
-    bluetooth::common::InitFlags::SetAllForTesting();
-
     ModuleList modules;
     modules.add<shim::Dumpsys>();
 
@@ -59,22 +47,9 @@ class MainShimDumpsysTest : public testing::Test {
   os::Handler* handler_{nullptr};
 };
 
-TEST_F(MainShimDumpsysTest, dumpsys_developer) {
-  ASSERT_TRUE(os::SetSystemProperty(kReadOnlyDebuggableProperty, kTrue));
-
+TEST_F(MainShimDumpsysTest, dumpsys) {
   std::promise<void> promise;
   auto future = promise.get_future();
-  stack_manager_.GetInstance<shim::Dumpsys>()->Dump(STDOUT_FILENO, nullptr,
-                                                    std::move(promise));
-  future.get();
-}
-
-TEST_F(MainShimDumpsysTest, dumpsys_user) {
-  ASSERT_TRUE(os::SetSystemProperty(kReadOnlyDebuggableProperty, kFalse));
-
-  std::promise<void> promise;
-  auto future = promise.get_future();
-  stack_manager_.GetInstance<shim::Dumpsys>()->Dump(STDOUT_FILENO, nullptr,
-                                                    std::move(promise));
+  stack_manager_.GetInstance<shim::Dumpsys>()->Dump(STDOUT_FILENO, nullptr, std::move(promise));
   future.get();
 }

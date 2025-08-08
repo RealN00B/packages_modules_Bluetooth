@@ -15,11 +15,14 @@ cc_fuzz {
         "fuzz_future.cc",
     ],
     shared_libs: [
+        "libbase",
         "libcutils",
         "liblog",
     ],
     static_libs: [
+        "libbluetooth_log",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libosi",
     ],
 }

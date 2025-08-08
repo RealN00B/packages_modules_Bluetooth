@@ -22,6 +22,7 @@
 #include <cstdio>
 
 #include "hci/enum_helper.h"
+#include "storage/config_keys.h"
 #include "storage/device.h"
 
 namespace testing {
@@ -61,42 +62,42 @@ TEST(ConfigCacheTest, empty_values_test) {
 TEST(ConfigCacheTest, insert_boundary_device_with_linkkey_test) {
   ConfigCache config(2, Device::kLinkKeyProperties);
   config.SetProperty("A", "B", "C");
-  config.SetProperty("CC:DD:EE:FF:00:10", "Name", "Hello");
-  config.SetProperty("CC:DD:EE:FF:00:09", "Name", "Hello 2");
-  config.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
-  ASSERT_TRUE(config.GetProperty("CC:DD:EE:FF:00:10", "Name"));
+  config.SetProperty("CC:DD:EE:FF:00:10", BTIF_STORAGE_KEY_NAME, "Hello");
+  config.SetProperty("CC:DD:EE:FF:00:09", BTIF_STORAGE_KEY_NAME, "Hello 2");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
+  ASSERT_TRUE(config.GetProperty("CC:DD:EE:FF:00:10", BTIF_STORAGE_KEY_NAME));
 }
 
 TEST(ConfigCacheTest, comparison_test) {
   ConfigCache config_1(2, Device::kLinkKeyProperties);
   config_1.SetProperty("A", "B", "C");
-  config_1.SetProperty("CC:DD:EE:FF:00:10", "Name", "Hello");
-  config_1.SetProperty("CC:DD:EE:FF:00:09", "Name", "Hello 2");
-  config_1.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
+  config_1.SetProperty("CC:DD:EE:FF:00:10", BTIF_STORAGE_KEY_NAME, "Hello");
+  config_1.SetProperty("CC:DD:EE:FF:00:09", BTIF_STORAGE_KEY_NAME, "Hello 2");
+  config_1.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
   ConfigCache config_2(2, Device::kLinkKeyProperties);
   config_2.SetProperty("A", "B", "C");
-  config_2.SetProperty("CC:DD:EE:FF:00:10", "Name", "Hello");
-  config_2.SetProperty("CC:DD:EE:FF:00:09", "Name", "Hello 2");
-  config_2.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
+  config_2.SetProperty("CC:DD:EE:FF:00:10", BTIF_STORAGE_KEY_NAME, "Hello");
+  config_2.SetProperty("CC:DD:EE:FF:00:09", BTIF_STORAGE_KEY_NAME, "Hello 2");
+  config_2.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
   ASSERT_EQ(config_1, config_2);
   // Config with different temp device order should not be equal
-  ASSERT_TRUE(config_2.GetProperty("CC:DD:EE:FF:00:10", "Name"));
+  ASSERT_TRUE(config_2.GetProperty("CC:DD:EE:FF:00:10", BTIF_STORAGE_KEY_NAME));
   ASSERT_NE(config_1, config_2);
-  ASSERT_TRUE(config_1.GetProperty("CC:DD:EE:FF:00:10", "Name"));
+  ASSERT_TRUE(config_1.GetProperty("CC:DD:EE:FF:00:10", BTIF_STORAGE_KEY_NAME));
   ASSERT_EQ(config_1, config_2);
   // Config with different persistent device order should not be equal
-  config_1.SetProperty("CC:DD:EE:FF:00:12", "LinkKey", "AABBAABBCCDDEE");
+  config_1.SetProperty("CC:DD:EE:FF:00:12", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
   config_2.RemoveSection("CC:DD:EE:FF:00:11");
-  config_2.SetProperty("CC:DD:EE:FF:00:12", "LinkKey", "AABBAABBCCDDEE");
-  config_2.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
+  config_2.SetProperty("CC:DD:EE:FF:00:12", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
+  config_2.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
   ASSERT_NE(config_1, config_2);
   // Config with different capacity should not be equal
   ConfigCache config_3(3, Device::kLinkKeyProperties);
   config_3.SetProperty("A", "B", "C");
-  config_3.SetProperty("CC:DD:EE:FF:00:10", "Name", "Hello");
-  config_3.SetProperty("CC:DD:EE:FF:00:09", "Name", "Hello 2");
-  config_3.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
-  config_3.SetProperty("CC:DD:EE:FF:00:12", "LinkKey", "AABBAABBCCDDEE");
+  config_3.SetProperty("CC:DD:EE:FF:00:10", BTIF_STORAGE_KEY_NAME, "Hello");
+  config_3.SetProperty("CC:DD:EE:FF:00:09", BTIF_STORAGE_KEY_NAME, "Hello 2");
+  config_3.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
+  config_3.SetProperty("CC:DD:EE:FF:00:12", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
   ASSERT_NE(config_1, config_3);
   // Empty config should not be equal to non-empty ones
   ConfigCache config_4(2, Device::kLinkKeyProperties);
@@ -208,38 +209,41 @@ TEST(ConfigCacheTest, get_persistent_devices_test) {
   config.SetProperty("A", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "C", "D");
-  config.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
-  ASSERT_TRUE(config.HasProperty("CC:DD:EE:FF:00:11", "LinkKey"));
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
+  ASSERT_TRUE(config.HasProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY));
   ASSERT_THAT(config.GetPersistentSections(), ElementsAre("CC:DD:EE:FF:00:11"));
-  config.SetProperty("AA:BB:CC:DD:EE:FF", "LinkKey", "DEERDEERDEER");
-  ASSERT_THAT(config.GetPersistentSections(), ElementsAre("CC:DD:EE:FF:00:11", "AA:BB:CC:DD:EE:FF"));
-  ASSERT_TRUE(config.RemoveProperty("CC:DD:EE:FF:00:11", "LinkKey"));
+  config.SetProperty("AA:BB:CC:DD:EE:FF", BTIF_STORAGE_KEY_LINK_KEY, "DEERDEERDEER");
+  ASSERT_THAT(config.GetPersistentSections(),
+              ElementsAre("CC:DD:EE:FF:00:11", "AA:BB:CC:DD:EE:FF"));
+  ASSERT_TRUE(config.RemoveProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY));
   ASSERT_THAT(config.GetPersistentSections(), ElementsAre("AA:BB:CC:DD:EE:FF"));
 }
 
 TEST(ConfigCacheTest, appoaching_temporary_config_limit_test) {
   ConfigCache config(2, Device::kLinkKeyProperties);
   for (int i = 0; i < 10; ++i) {
-    config.SetProperty(GetTestAddress(i), "Name", "Hello" + std::to_string(i));
+    config.SetProperty(GetTestAddress(i), BTIF_STORAGE_KEY_NAME, "Hello" + std::to_string(i));
     if (i % 2 == 0) {
-      config.SetProperty(GetTestAddress(i), "LinkKey", "Key" + std::to_string(i));
+      config.SetProperty(GetTestAddress(i), BTIF_STORAGE_KEY_LINK_KEY, "Key" + std::to_string(i));
     }
   }
   for (int i = 0; i < 10; ++i) {
     if (i % 2 == 0) {
       ASSERT_TRUE(config.HasSection(GetTestAddress(i)));
-      ASSERT_TRUE(config.HasProperty(GetTestAddress(i), "LinkKey"));
-      ASSERT_THAT(config.GetProperty(GetTestAddress(i), "Name"), Optional(StrEq("Hello" + std::to_string(i))));
+      ASSERT_TRUE(config.HasProperty(GetTestAddress(i), BTIF_STORAGE_KEY_LINK_KEY));
+      ASSERT_THAT(config.GetProperty(GetTestAddress(i), BTIF_STORAGE_KEY_NAME),
+                  Optional(StrEq("Hello" + std::to_string(i))));
     } else if (i >= 7) {
       ASSERT_TRUE(config.HasSection(GetTestAddress(i)));
-      ASSERT_THAT(config.GetProperty(GetTestAddress(i), "Name"), Optional(StrEq("Hello" + std::to_string(i))));
+      ASSERT_THAT(config.GetProperty(GetTestAddress(i), BTIF_STORAGE_KEY_NAME),
+                  Optional(StrEq("Hello" + std::to_string(i))));
     } else {
       ASSERT_FALSE(config.HasSection(GetTestAddress(i)));
     }
   }
-  ASSERT_THAT(
-      config.GetPersistentSections(),
-      ElementsAre(GetTestAddress(0), GetTestAddress(2), GetTestAddress(4), GetTestAddress(6), GetTestAddress(8)));
+  ASSERT_THAT(config.GetPersistentSections(),
+              ElementsAre(GetTestAddress(0), GetTestAddress(2), GetTestAddress(4),
+                          GetTestAddress(6), GetTestAddress(8)));
 }
 
 TEST(ConfigCacheTest, remove_section_with_property_test) {
@@ -248,7 +252,7 @@ TEST(ConfigCacheTest, remove_section_with_property_test) {
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "C", "D");
   config.SetProperty("CC:DD:EE:FF:00:11", "B", "AABBAABBCCDDEE");
-  config.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
   config.RemoveSectionWithProperty("B");
   ASSERT_FALSE(config.HasSection("A"));
   ASSERT_FALSE(config.HasSection("AA:BB:CC:DD:EE:FF"));
@@ -267,9 +271,9 @@ TEST(ConfigCacheTest, persistent_config_changed_callback_test) {
   ASSERT_EQ(num_change, 1);
   config.SetProperty("CC:DD:EE:FF:00:11", "B", "AABBAABBCCDDEE");
   ASSERT_EQ(num_change, 1);
-  config.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
   ASSERT_EQ(num_change, 2);
-  config.RemoveProperty("CC:DD:EE:FF:00:11", "LinkKey");
+  config.RemoveProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY);
   ASSERT_EQ(num_change, 3);
   config.RemoveSectionWithProperty("B");
   ASSERT_EQ(num_change, 4);
@@ -284,9 +288,8 @@ TEST(ConfigCacheTest, fix_device_type_inconsistency_missing_devtype_no_keys_test
   auto hadInconsistencies = config.FixDeviceTypeInconsistencies();
 
   ASSERT_TRUE(hadInconsistencies);
-  ASSERT_THAT(
-      config.GetProperty("AA:BB:CC:DD:EE:FF", "DevType"),
-      Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::BR_EDR))));
+  ASSERT_THAT(config.GetProperty("AA:BB:CC:DD:EE:FF", BTIF_STORAGE_KEY_DEV_TYPE),
+              Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::BR_EDR))));
 }
 
 TEST(ConfigCacheTest, fix_device_type_inconsistency_consistent_devtype_test) {
@@ -295,20 +298,21 @@ TEST(ConfigCacheTest, fix_device_type_inconsistency_consistent_devtype_test) {
   config.SetProperty("A", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "C", "D");
-  config.SetProperty("AA:BB:CC:DD:EE:FF", "DevType", std::to_string(bluetooth::hci::DeviceType::BR_EDR));
+  config.SetProperty("AA:BB:CC:DD:EE:FF", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::BR_EDR));
 
   config.SetProperty("CC:DD:EE:FF:00:11", "B", "AABBAABBCCDDEE");
-  config.SetProperty("CC:DD:EE:FF:00:11", "DevType", std::to_string(bluetooth::hci::DeviceType::BR_EDR));
-  config.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::BR_EDR));
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
 
   // act
   auto hadInconsistencies = config.FixDeviceTypeInconsistencies();
 
   // assert
   ASSERT_FALSE(hadInconsistencies);
-  ASSERT_THAT(
-      config.GetProperty("CC:DD:EE:FF:00:11", "DevType"),
-      Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::BR_EDR))));
+  ASSERT_THAT(config.GetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE),
+              Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::BR_EDR))));
 }
 
 TEST(ConfigCacheTest, fix_device_type_inconsistency_devtype_should_be_dual_test) {
@@ -317,21 +321,22 @@ TEST(ConfigCacheTest, fix_device_type_inconsistency_devtype_should_be_dual_test)
   config.SetProperty("A", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "C", "D");
-  config.SetProperty("AA:BB:CC:DD:EE:FF", "DevType", std::to_string(bluetooth::hci::DeviceType::BR_EDR));
+  config.SetProperty("AA:BB:CC:DD:EE:FF", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::BR_EDR));
 
   config.SetProperty("CC:DD:EE:FF:00:11", "B", "AABBAABBCCDDEE");
-  config.SetProperty("CC:DD:EE:FF:00:11", "DevType", std::to_string(bluetooth::hci::DeviceType::BR_EDR));
-  config.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
-  config.SetProperty("CC:DD:EE:FF:00:11", "LE_KEY_PENC", "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::BR_EDR));
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LE_KEY_PENC, "AABBAABBCCDDEE");
 
   // act
   auto hadInconsistencies = config.FixDeviceTypeInconsistencies();
 
   // assert
   ASSERT_TRUE(hadInconsistencies);
-  ASSERT_THAT(
-      config.GetProperty("CC:DD:EE:FF:00:11", "DevType"),
-      Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::DUAL))));
+  ASSERT_THAT(config.GetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE),
+              Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::DUAL))));
 }
 
 TEST(ConfigCacheTest, fix_device_type_inconsistency_devtype_should_be_le_not_classic_test) {
@@ -340,20 +345,21 @@ TEST(ConfigCacheTest, fix_device_type_inconsistency_devtype_should_be_le_not_cla
   config.SetProperty("A", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "C", "D");
-  config.SetProperty("AA:BB:CC:DD:EE:FF", "DevType", std::to_string(bluetooth::hci::DeviceType::BR_EDR));
+  config.SetProperty("AA:BB:CC:DD:EE:FF", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::BR_EDR));
 
   config.SetProperty("CC:DD:EE:FF:00:11", "B", "AABBAABBCCDDEE");
-  config.SetProperty("CC:DD:EE:FF:00:11", "DevType", std::to_string(bluetooth::hci::DeviceType::BR_EDR));
-  config.SetProperty("CC:DD:EE:FF:00:11", "LE_KEY_PENC", "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::BR_EDR));
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LE_KEY_PENC, "AABBAABBCCDDEE");
 
   // act
   auto hadInconsistencies = config.FixDeviceTypeInconsistencies();
 
   // assert
   ASSERT_TRUE(hadInconsistencies);
-  ASSERT_THAT(
-      config.GetProperty("CC:DD:EE:FF:00:11", "DevType"),
-      Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::LE))));
+  ASSERT_THAT(config.GetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE),
+              Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::LE))));
 }
 
 TEST(ConfigCacheTest, fix_device_type_inconsistency_devtype_dont_override_dual_test) {
@@ -362,21 +368,22 @@ TEST(ConfigCacheTest, fix_device_type_inconsistency_devtype_dont_override_dual_t
   config.SetProperty("A", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "C", "D");
-  config.SetProperty("AA:BB:CC:DD:EE:FF", "DevType", std::to_string(bluetooth::hci::DeviceType::BR_EDR));
+  config.SetProperty("AA:BB:CC:DD:EE:FF", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::BR_EDR));
 
   config.SetProperty("CC:DD:EE:FF:00:11", "B", "AABBAABBCCDDEE");
-  config.SetProperty("CC:DD:EE:FF:00:11", "DevType", std::to_string(bluetooth::hci::DeviceType::DUAL));
-  config.SetProperty("CC:DD:EE:FF:00:11", "LinkKey", "AABBAABBCCDDEE");
-  config.SetProperty("CC:DD:EE:FF:00:11", "LE_KEY_PENC", "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE,
+                     std::to_string(bluetooth::hci::DeviceType::DUAL));
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LINK_KEY, "AABBAABBCCDDEE");
+  config.SetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_LE_KEY_PENC, "AABBAABBCCDDEE");
 
   // act
   auto hadInconsistencies = config.FixDeviceTypeInconsistencies();
 
   // assert
   ASSERT_FALSE(hadInconsistencies);
-  ASSERT_THAT(
-      config.GetProperty("CC:DD:EE:FF:00:11", "DevType"),
-      Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::DUAL))));
+  ASSERT_THAT(config.GetProperty("CC:DD:EE:FF:00:11", BTIF_STORAGE_KEY_DEV_TYPE),
+              Optional(StrEq(std::to_string(bluetooth::hci::DeviceType::DUAL))));
 }
 
 TEST(ConfigCacheTest, test_get_section_with_property) {
@@ -385,10 +392,9 @@ TEST(ConfigCacheTest, test_get_section_with_property) {
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:EF", "C", "D");
   ASSERT_THAT(
-      config.GetSectionNamesWithProperty("B"),
-      ElementsAre(
-          SectionAndPropertyValue{.section = "A", .property = "C"},
-          SectionAndPropertyValue{.section = "AA:BB:CC:DD:EE:FF", .property = "C"}));
+          config.GetSectionNamesWithProperty("B"),
+          ElementsAre(SectionAndPropertyValue{.section = "A", .property = "C"},
+                      SectionAndPropertyValue{.section = "AA:BB:CC:DD:EE:FF", .property = "C"}));
 }
 
 TEST(ConfigCacheTest, test_get_sections_matching_at_least_one_property) {
@@ -396,7 +402,8 @@ TEST(ConfigCacheTest, test_get_sections_matching_at_least_one_property) {
   config.SetProperty("A", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:EF", "C", "D");
-  ASSERT_TRUE(config.HasAtLeastOneMatchingPropertiesInSection("AA:BB:CC:DD:EE:FF", {"B", "C", "D"}));
+  ASSERT_TRUE(
+          config.HasAtLeastOneMatchingPropertiesInSection("AA:BB:CC:DD:EE:FF", {"B", "C", "D"}));
   ASSERT_TRUE(config.HasAtLeastOneMatchingPropertiesInSection("A", {"B", "C", "D"}));
   ASSERT_FALSE(config.HasAtLeastOneMatchingPropertiesInSection("AA:BB:CC:DD:EE:FF", {"BC", "D"}));
 }
@@ -406,11 +413,24 @@ TEST(ConfigCacheTest, test_empty_persistent_properties) {
   config.SetProperty("A", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "C");
   config.SetProperty("AA:BB:CC:DD:EE:EF", "C", "D");
-  config.SetProperty("AA:BB:CC:DD:EE:EF", "LinkKey", "D");
-  ASSERT_TRUE(config.HasAtLeastOneMatchingPropertiesInSection("AA:BB:CC:DD:EE:FF", {"B", "C", "D"}));
+  config.SetProperty("AA:BB:CC:DD:EE:EF", BTIF_STORAGE_KEY_LINK_KEY, "D");
+  ASSERT_TRUE(
+          config.HasAtLeastOneMatchingPropertiesInSection("AA:BB:CC:DD:EE:FF", {"B", "C", "D"}));
   ASSERT_TRUE(config.HasAtLeastOneMatchingPropertiesInSection("A", {"B", "C", "D"}));
   ASSERT_FALSE(config.HasAtLeastOneMatchingPropertiesInSection("AA:BB:CC:DD:EE:FF", {"BC", "D"}));
   ASSERT_THAT(config.GetPersistentSections(), ElementsAre());
+}
+
+TEST(ConfigCacheTest, test_get_section_property_names) {
+  ConfigCache config(100, Device::kLinkKeyProperties);
+  config.SetProperty("A", "A", "A");
+  config.SetProperty("AA:BB:CC:DD:EE:FF", "B", "B");
+  config.SetProperty("AA:BB:CC:DD:EE:EF", BTIF_STORAGE_KEY_LINK_KEY, "C");
+
+  ASSERT_THAT(config.GetPropertyNames("A"), ElementsAre("A"));
+  ASSERT_THAT(config.GetPropertyNames("AA:BB:CC:DD:EE:FF"), ElementsAre("B"));
+  ASSERT_THAT(config.GetPropertyNames("AA:BB:CC:DD:EE:EF"), ElementsAre(BTIF_STORAGE_KEY_LINK_KEY));
+  ASSERT_THAT(config.GetPropertyNames("D"), ElementsAre());
 }
 
 }  // namespace testing

@@ -16,12 +16,8 @@
 
 package com.android.bluetooth.hfp;
 
-/*
- * @hide
- */
-
 public final class HeadsetHalConstants {
-    // Do not modify without upating the HAL bt_hf.h files.
+    // Do not modify without updating the HAL bt_hf.h files.
 
     // match up with bthf_connection_state_t enum of bt_hf.h
     static final int CONNECTION_STATE_DISCONNECTED = 0;
@@ -83,4 +79,21 @@ public final class HeadsetHalConstants {
     static final int BTHF_SWB_NONE = 0;
     static final int BTHF_SWB_NO = 1;
     static final int BTHF_SWB_YES = 2;
+
+    static String getConnectionStateName(int state) {
+        switch (state) {
+            case CONNECTION_STATE_DISCONNECTED:
+                return "CONNECTION_STATE_DISCONNECTED";
+            case CONNECTION_STATE_CONNECTING:
+                return "CONNECTION_STATE_CONNECTING";
+            case CONNECTION_STATE_CONNECTED:
+                return "CONNECTION_STATE_CONNECTED";
+            case CONNECTION_STATE_SLC_CONNECTED:
+                return "CONNECTION_STATE_SLC_CONNECTED";
+            case CONNECTION_STATE_DISCONNECTING:
+                return "CONNECTION_STATE_DISCONNECTING";
+            default:
+                return "UNKNOWN STATE!!!";
+        }
+    }
 }

@@ -22,8 +22,6 @@
 #include <mutex>
 #include <string>
 
-#include "os/log.h"
-
 namespace bluetooth {
 namespace os {
 
@@ -96,17 +94,14 @@ bluetooth_keystore::BluetoothKeystoreInterface* ParameterProvider::GetBtKeystore
   return nullptr;
 }
 
-void ParameterProvider::SetBtKeystoreInterface(bluetooth_keystore::BluetoothKeystoreInterface* bt_keystore) {}
+void ParameterProvider::SetBtKeystoreInterface(
+        bluetooth_keystore::BluetoothKeystoreInterface* bt_keystore) {}
 
-bool ParameterProvider::IsCommonCriteriaMode() {
-  return false;
-}
+bool ParameterProvider::IsCommonCriteriaMode() { return false; }
 
 void ParameterProvider::SetCommonCriteriaMode(bool enable) {}
 
-int ParameterProvider::GetCommonCriteriaConfigCompareResult() {
-  return 0b11;
-}
+int ParameterProvider::GetCommonCriteriaConfigCompareResult() { return 0b11; }
 
 void ParameterProvider::SetCommonCriteriaConfigCompareResult(int result) {}
 

@@ -15,7 +15,11 @@
  */
 #pragma once
 
+#include <bluetooth/log.h>
+
 #include "address.h"
+#include "hal/ranging_hal.h"
+#include "hci/hci_packets.h"
 #include "module.h"
 
 namespace bluetooth {
@@ -46,39 +50,62 @@ struct DistanceMeasurementResult {
 };
 
 class DistanceMeasurementCallbacks {
- public:
+public:
   virtual ~DistanceMeasurementCallbacks() = default;
   virtual void OnDistanceMeasurementStarted(Address address, DistanceMeasurementMethod method) = 0;
-  virtual void OnDistanceMeasurementStartFail(
-      Address address, DistanceMeasurementErrorCode reason, DistanceMeasurementMethod method) = 0;
-  virtual void OnDistanceMeasurementStopped(
-      Address address, DistanceMeasurementErrorCode reason, DistanceMeasurementMethod method) = 0;
-  virtual void OnDistanceMeasurementResult(
-      Address address,
-      uint32_t centimeter,
-      uint32_t error_centimeter,
-      int azimuth_angle,
-      int error_azimuth_angle,
-      int altitude_angle,
-      int error_altitude_angle,
-      DistanceMeasurementMethod method) = 0;
+  virtual void OnDistanceMeasurementStopped(Address address, DistanceMeasurementErrorCode reason,
+                                            DistanceMeasurementMethod method) = 0;
+  virtual void OnDistanceMeasurementResult(Address address, uint32_t centimeter,
+                                           uint32_t error_centimeter, int azimuth_angle,
+                                           int error_azimuth_angle, int altitude_angle,
+                                           int error_altitude_angle, uint64_t elapsedRealtimeNanos,
+                                           int8_t confidence_level,
+                                           DistanceMeasurementMethod method) = 0;
+  virtual void OnRasFragmentReady(Address address, uint16_t procedure_counter, bool is_last,
+                                  std::vector<uint8_t> raw_data) = 0;
+  virtual void OnVendorSpecificCharacteristics(
+          std::vector<hal::VendorSpecificCharacteristic> vendor_specific_characteristics) = 0;
+  virtual void OnVendorSpecificReply(Address address,
+                                     std::vector<bluetooth::hal::VendorSpecificCharacteristic>
+                                             vendor_specific_characteristics) = 0;
+  virtual void OnHandleVendorSpecificReplyComplete(Address address, bool success) = 0;
 };
 
 class DistanceMeasurementManager : public bluetooth::Module {
- public:
+public:
   DistanceMeasurementManager();
   ~DistanceMeasurementManager();
   DistanceMeasurementManager(const DistanceMeasurementManager&) = delete;
   DistanceMeasurementManager& operator=(const DistanceMeasurementManager&) = delete;
 
   void RegisterDistanceMeasurementCallbacks(DistanceMeasurementCallbacks* callbacks);
-  void StartDistanceMeasurement(
-      const Address&, uint16_t frequency, DistanceMeasurementMethod method);
-  void StopDistanceMeasurement(const Address& address, DistanceMeasurementMethod method);
+  void StartDistanceMeasurement(const Address&, uint16_t connection_handle,
+                                hci::Role local_hci_role, uint16_t interval,
+                                DistanceMeasurementMethod method);
+  void StopDistanceMeasurement(const Address& address, uint16_t connection_handle,
+                               DistanceMeasurementMethod method);
+  void HandleRasClientConnectedEvent(
+          const Address& address, uint16_t connection_handle, uint16_t att_handle,
+          const std::vector<hal::VendorSpecificCharacteristic>& vendor_specific_data,
+          uint16_t conn_interval);
+  void HandleRasClientDisconnectedEvent(const Address& address);
+  void HandleVendorSpecificReply(
+          const Address& address, uint16_t connection_handle,
+          const std::vector<hal::VendorSpecificCharacteristic>& vendor_specific_reply);
+  void HandleRasServerConnected(const Address& identity_address, uint16_t connection_handle,
+                                hci::Role local_hci_role);
+  void HandleRasServerDisconnected(const Address& identity_address, uint16_t connection_handle);
+  void HandleVendorSpecificReplyComplete(const Address& address, uint16_t connection_handle,
+                                         bool success);
+  void HandleRemoteData(const Address& address, uint16_t connection_handle,
+                        const std::vector<uint8_t>& raw_data);
+  void HandleRemoteDataTimeout(const Address& address, uint16_t connection_handle);
+  void HandleConnIntervalUpdated(const Address& address, uint16_t connection_handle,
+                                 uint16_t conn_interval);
 
   static const ModuleFactory Factory;
 
- protected:
+protected:
   void ListDependencies(ModuleList* list) const override;
 
   void Start() override;
@@ -87,10 +114,16 @@ class DistanceMeasurementManager : public bluetooth::Module {
 
   std::string ToString() const override;
 
- private:
+private:
   struct impl;
   std::unique_ptr<impl> pimpl_;
 };
 
 }  // namespace hci
 }  // namespace bluetooth
+
+namespace std {
+template <>
+struct formatter<bluetooth::hci::DistanceMeasurementMethod>
+    : enum_formatter<bluetooth::hci::DistanceMeasurementMethod> {};
+}  // namespace std

@@ -22,6 +22,7 @@
  ****************************************************************************/
 
 #include <cstdint>
+
 #include "osi/include/alarm.h"
 
 /* ASCII character string of arguments to the AT command */
@@ -46,8 +47,7 @@ typedef struct queued_at_cmd tBTA_HF_CLIENT_AT_QCMD;
 
 /* AT command parsing control block */
 typedef struct {
-  char buf[BTA_HF_CLIENT_AT_PARSER_MAX_LEN +
-           1]; /* extra byte to always have \0 at the end */
+  char buf[BTA_HF_CLIENT_AT_PARSER_MAX_LEN + 1]; /* extra byte to always have \0 at the end */
   unsigned int offset;
   tBTA_HF_CLIENT_AT_CMD current_cmd;
   tBTA_HF_CLIENT_AT_QCMD* queued_cmd;
@@ -59,5 +59,4 @@ typedef struct {
      so when their values come later, we know which value in sequence match
      certain indicator */
   int indicator_lookup[BTA_HF_CLIENT_AT_INDICATOR_COUNT];
-
 } tBTA_HF_CLIENT_AT_CB;

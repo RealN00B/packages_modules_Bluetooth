@@ -33,7 +33,7 @@ public class BrowseTreeTest {
     private static final String TEST_HANDLE = "test_handle";
     private static final String TEST_NODE_ID = "test_node_id";
 
-    private final byte[] mTestAddress = new byte[]{01, 01, 01, 01, 01, 01};
+    private final byte[] mTestAddress = new byte[] {01, 01, 01, 01, 01, 01};
     private BluetoothAdapter mAdapter;
     private BluetoothDevice mTestDevice = null;
 
@@ -69,13 +69,18 @@ public class BrowseTreeTest {
     @Test
     public void getTrackFromNowPlayingList() {
         BrowseTree browseTree = new BrowseTree(mTestDevice);
-        BrowseNode trackInNowPlayingList = browseTree.new BrowseNode(new AvrcpItem.Builder()
-                .setUuid(ILLEGAL_ID).setTitle(ILLEGAL_ID).setBrowsable(true).build());
+        BrowseNode trackInNowPlayingList =
+                browseTree
+                .new BrowseNode(
+                        new AvrcpItem.Builder()
+                                .setUuid(ILLEGAL_ID)
+                                .setTitle(ILLEGAL_ID)
+                                .setBrowsable(true)
+                                .build());
 
         browseTree.mNowPlayingNode.addChild(trackInNowPlayingList);
 
-        assertThat(browseTree.getTrackFromNowPlayingList(0)).isEqualTo(
-                trackInNowPlayingList);
+        assertThat(browseTree.getTrackFromNowPlayingList(0)).isEqualTo(trackInNowPlayingList);
     }
 
     @Test
@@ -90,16 +95,20 @@ public class BrowseTreeTest {
     }
 
     @Test
-    public void findBrowseNodeByIDForRoot() {
-        BrowseTree browseTree = new BrowseTree(null);
-        assertThat(browseTree.findBrowseNodeByID(BrowseTree.ROOT)).isEqualTo(browseTree.mRootNode);
+    public void sameDeviceDifferentBrowseTrees_uniqueMediaIds() {
+        BrowseTree browseTree1 = new BrowseTree(mTestDevice);
+        BrowseTree browseTree2 = new BrowseTree(mTestDevice);
+
+        String mediaId1 = browseTree1.mRootNode.getID();
+        String mediaId2 = browseTree2.mRootNode.getID();
+
+        assertThat(mediaId1).isNotEqualTo(mediaId2);
     }
 
     @Test
-    public void findBrowseNodeByIDForDevice() {
-        BrowseTree browseTree = new BrowseTree(mTestDevice);
-        final String deviceId = BrowseTree.ROOT + mTestDevice.getAddress().toString();
-        assertThat(browseTree.findBrowseNodeByID(deviceId)).isEqualTo(browseTree.mRootNode);
+    public void findBrowseNodeByIDForRoot() {
+        BrowseTree browseTree = new BrowseTree(null);
+        assertThat(browseTree.findBrowseNodeByID(BrowseTree.ROOT)).isEqualTo(browseTree.mRootNode);
     }
 
     @Test
@@ -118,12 +127,19 @@ public class BrowseTreeTest {
     }
 
     @Test
+    public void findBrowseNodeByIDForDevice_nodeIsFound() {
+        BrowseTree browseTree = new BrowseTree(mTestDevice);
+        final String deviceId = browseTree.mRootNode.getID();
+        assertThat(browseTree.findBrowseNodeByID(deviceId)).isEqualTo(browseTree.mRootNode);
+    }
+
+    @Test
     public void setAndGetCurrentBrowsedPlayer() {
         BrowseTree browseTree = new BrowseTree(mTestDevice);
 
         assertThat(browseTree.setCurrentBrowsedPlayer(ILLEGAL_ID, 0, 0)).isFalse();
-        assertThat(
-                browseTree.setCurrentBrowsedPlayer(BrowseTree.NOW_PLAYING_PREFIX, 2, 1)).isTrue();
+        assertThat(browseTree.setCurrentBrowsedPlayer(BrowseTree.NOW_PLAYING_PREFIX, 2, 1))
+                .isTrue();
         assertThat(browseTree.getCurrentBrowsedPlayer()).isEqualTo(browseTree.mNowPlayingNode);
     }
 
@@ -154,11 +170,9 @@ public class BrowseTreeTest {
     @Test
     public void notifyImageDownload() {
         BrowseTree browseTree = new BrowseTree(null);
-        String testDeviceId = BrowseTree.PLAYER_PREFIX + mTestDevice.getAddress();
 
         browseTree.onConnected(mTestDevice);
-        browseTree.indicateCoverArtUsed(TEST_NODE_ID, TEST_HANDLE);
-        browseTree.indicateCoverArtUsed(testDeviceId, TEST_HANDLE);
+        browseTree.indicateCoverArtUsed(browseTree.mRootNode.getChild(0).getID(), TEST_HANDLE);
         Set<BrowseTree.BrowseNode> parents = browseTree.notifyImageDownload(TEST_HANDLE, null);
 
         assertThat(parents.contains(browseTree.mRootNode)).isTrue();
@@ -170,8 +184,8 @@ public class BrowseTreeTest {
 
         browseTree.onConnected(mTestDevice);
 
-        assertThat(BrowseTree.getEldestChild(browseTree.mNowPlayingNode,
-                browseTree.mRootNode)).isNull();
+        assertThat(BrowseTree.getEldestChild(browseTree.mNowPlayingNode, browseTree.mRootNode))
+                .isNull();
     }
 
     @Test
@@ -180,34 +194,42 @@ public class BrowseTreeTest {
 
         browseTree.onConnected(mTestDevice);
 
-        assertThat(BrowseTree.getEldestChild(browseTree.mRootNode,
-                browseTree.mRootNode.getChild(0))).isEqualTo(browseTree.mRootNode.getChild(0));
+        assertThat(
+                        BrowseTree.getEldestChild(
+                                browseTree.mRootNode, browseTree.mRootNode.getChild(0)))
+                .isEqualTo(browseTree.mRootNode.getChild(0));
     }
 
     @Test
     public void getNextStepFolder() {
         BrowseTree browseTree = new BrowseTree(null);
-        BrowseNode nodeOutOfMap = browseTree.new BrowseNode(new AvrcpItem.Builder()
-                .setUuid(ILLEGAL_ID).setTitle(ILLEGAL_ID).setBrowsable(true).build());
+        BrowseNode nodeOutOfMap =
+                browseTree
+                .new BrowseNode(
+                        new AvrcpItem.Builder()
+                                .setUuid(ILLEGAL_ID)
+                                .setTitle(ILLEGAL_ID)
+                                .setBrowsable(true)
+                                .build());
 
         browseTree.onConnected(mTestDevice);
 
         assertThat(browseTree.getNextStepToFolder(null)).isNull();
-        assertThat(browseTree.getNextStepToFolder(browseTree.mRootNode)).isEqualTo(
-                browseTree.mRootNode);
-        assertThat(browseTree.getNextStepToFolder(browseTree.mRootNode.getChild(0))).isEqualTo(
-                browseTree.mRootNode.getChild(0));
+        assertThat(browseTree.getNextStepToFolder(browseTree.mRootNode))
+                .isEqualTo(browseTree.mRootNode);
+        assertThat(browseTree.getNextStepToFolder(browseTree.mRootNode.getChild(0)))
+                .isEqualTo(browseTree.mRootNode.getChild(0));
         assertThat(browseTree.getNextStepToFolder(nodeOutOfMap)).isNull();
 
         browseTree.setCurrentBrowsedPlayer(BrowseTree.NOW_PLAYING_PREFIX, 2, 1);
-        assertThat(browseTree.getNextStepToFolder(browseTree.mRootNode.getChild(0))).isEqualTo(
-                browseTree.mNavigateUpNode);
+        assertThat(browseTree.getNextStepToFolder(browseTree.mRootNode.getChild(0)))
+                .isEqualTo(browseTree.mNavigateUpNode);
     }
 
     @Test
     public void toString_returnsSizeInfo() {
         BrowseTree browseTree = new BrowseTree(mTestDevice);
-        assertThat(browseTree.toString()).isEqualTo(
-                "[BrowseTree size=" + browseTree.mBrowseMap.size() + "]");
+        assertThat(browseTree.toString())
+                .isEqualTo("[BrowseTree size=" + browseTree.mBrowseMap.size() + "]");
     }
 }

@@ -22,8 +22,8 @@ import com.android.obex.HeaderSet;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 
 /* Get a listing of messages in directory. */
 class RequestGetMessagesListing extends Request {
@@ -36,8 +36,13 @@ class RequestGetMessagesListing extends Request {
 
     private Date mServerTime = null;
 
-    RequestGetMessagesListing(String folderName, int parameters, MessagesFilter filter,
-            int subjectLength, int maxListCount, int listStartOffset) {
+    RequestGetMessagesListing(
+            String folderName,
+            int parameters,
+            MessagesFilter filter,
+            int subjectLength,
+            int maxListCount,
+            int listStartOffset) {
         if (subjectLength < 0 || subjectLength > 255) {
             throw new IllegalArgumentException("subjectLength should be [0..255]");
         }
@@ -61,8 +66,8 @@ class RequestGetMessagesListing extends Request {
         ObexAppParameters oap = new ObexAppParameters();
 
         if (filter != null) {
-            if (filter.messageType != MessagesFilter.MESSAGE_TYPE_ALL) {
-                oap.add(OAP_TAGID_FILTER_MESSAGE_TYPE, filter.messageType);
+            if (filter.excludedMessageTypes != MessagesFilter.MESSAGE_TYPE_NONE) {
+                oap.add(OAP_TAGID_FILTER_MESSAGE_TYPE, filter.excludedMessageTypes);
             }
 
             if (filter.periodBegin != null) {
@@ -130,7 +135,7 @@ class RequestGetMessagesListing extends Request {
         }
     }
 
-    public ArrayList<Message> getList() {
+    public List<Message> getList() {
         if (mResponse == null) {
             return null;
         }

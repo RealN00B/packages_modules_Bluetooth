@@ -15,14 +15,17 @@
  * limitations under the License.
  */
 
-#include <base/logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "bta_groups.h"
+#include "gd/os/rand.h"
 #include "test/common/mock_functions.h"
 #include "types/bluetooth/uuid.h"
 #include "types/raw_address.h"
+
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
 
 namespace bluetooth {
 namespace groups {
@@ -42,14 +45,13 @@ using bluetooth::groups::DeviceGroupsCallbacks;
 DeviceGroupsCallbacks* dev_callbacks;
 
 RawAddress GetTestAddress(int index) {
-  CHECK_LT(index, UINT8_MAX);
-  RawAddress result = {
-      {0xC0, 0xDE, 0xC0, 0xDE, 0x00, static_cast<uint8_t>(index)}};
+  EXPECT_LT(index, UINT8_MAX);
+  RawAddress result = {{0xC0, 0xDE, 0xC0, 0xDE, 0x00, static_cast<uint8_t>(index)}};
   return result;
 }
 
 class MockGroupsCallbacks : public DeviceGroupsCallbacks {
- public:
+public:
   MockGroupsCallbacks() = default;
   MockGroupsCallbacks(const MockGroupsCallbacks&) = delete;
   MockGroupsCallbacks& operator=(const MockGroupsCallbacks&) = delete;
@@ -57,24 +59,17 @@ class MockGroupsCallbacks : public DeviceGroupsCallbacks {
   ~MockGroupsCallbacks() override = default;
 
   MOCK_METHOD((void), OnGroupAdded,
-              (const RawAddress& address, const bluetooth::Uuid& uuid,
-               int group_id),
-              (override));
-  MOCK_METHOD((void), OnGroupMemberAdded,
-              (const RawAddress& address, int group_id), (override));
+              (const RawAddress& address, const bluetooth::Uuid& uuid, int group_id), (override));
+  MOCK_METHOD((void), OnGroupMemberAdded, (const RawAddress& address, int group_id), (override));
 
-  MOCK_METHOD((void), OnGroupRemoved,
-              (const bluetooth::Uuid& uuid, int group_id), (override));
-  MOCK_METHOD((void), OnGroupMemberRemoved,
-              (const RawAddress& address, int group_id), (override));
+  MOCK_METHOD((void), OnGroupRemoved, (const bluetooth::Uuid& uuid, int group_id), (override));
+  MOCK_METHOD((void), OnGroupMemberRemoved, (const RawAddress& address, int group_id), (override));
   MOCK_METHOD((void), OnGroupAddFromStorage,
-              (const RawAddress& address, const bluetooth::Uuid& uuid,
-               int group_id),
-              (override));
+              (const RawAddress& address, const bluetooth::Uuid& uuid, int group_id), (override));
 };
 
 class GroupsTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {
     reset_mock_function_count_map();
     callbacks.reset(new MockGroupsCallbacks());
@@ -132,10 +127,8 @@ TEST_F(GroupsTest, test_groups_remove_device) {
   DeviceGroups::Initialize(callbacks.get());
   DeviceGroups::Get()->AddDevice(GetTestAddress(2), Uuid::kEmpty, 7);
   DeviceGroups::Get()->RemoveDevice(GetTestAddress(2));
-  ASSERT_EQ(kGroupUnknown,
-            DeviceGroups::Get()->GetGroupId(GetTestAddress(2), Uuid::kEmpty));
-  ASSERT_EQ(kGroupUnknown,
-            DeviceGroups::Get()->GetGroupId(GetTestAddress(3), Uuid::kEmpty));
+  ASSERT_EQ(kGroupUnknown, DeviceGroups::Get()->GetGroupId(GetTestAddress(2), Uuid::kEmpty));
+  ASSERT_EQ(kGroupUnknown, DeviceGroups::Get()->GetGroupId(GetTestAddress(3), Uuid::kEmpty));
   DeviceGroups::CleanUp(callbacks.get());
 }
 
@@ -170,8 +163,8 @@ TEST_F(GroupsTest, test_add_multiple_groups) {
 }
 
 TEST_F(GroupsTest, test_remove_multiple_groups) {
-  Uuid uuid1 = Uuid::GetRandom();
-  Uuid uuid2 = Uuid::GetRandom();
+  Uuid uuid1 = Uuid::From128BitBE(bluetooth::os::GenerateRandom<Uuid::kNumBytes128>());
+  Uuid uuid2 = Uuid::From128BitBE(bluetooth::os::GenerateRandom<Uuid::kNumBytes128>());
   ASSERT_NE(uuid1, uuid2);
 
   EXPECT_CALL(*callbacks, OnGroupAdded(_, _, _)).Times(2);
@@ -190,8 +183,8 @@ TEST_F(GroupsTest, test_remove_multiple_groups) {
 }
 
 TEST_F(GroupsTest, test_remove_device_fo_devices) {
-  Uuid uuid1 = Uuid::GetRandom();
-  Uuid uuid2 = Uuid::GetRandom();
+  Uuid uuid1 = Uuid::From128BitBE(bluetooth::os::GenerateRandom<Uuid::kNumBytes128>());
+  Uuid uuid2 = Uuid::From128BitBE(bluetooth::os::GenerateRandom<Uuid::kNumBytes128>());
   EXPECT_CALL(*callbacks, OnGroupAdded(_, _, _)).Times(2);
   DeviceGroups::Initialize(callbacks.get());
   DeviceGroups::Get()->AddDevice(GetTestAddress(1), uuid1, 8);
@@ -214,10 +207,8 @@ TEST_F(GroupsTest, test_add_devices_different_group_id) {
   DeviceGroups::Initialize(callbacks.get());
   DeviceGroups::Get()->AddDevice(GetTestAddress(2), Uuid::kEmpty, 10);
   DeviceGroups::Get()->AddDevice(GetTestAddress(3), Uuid::kEmpty, 11);
-  auto group_id_1 =
-      DeviceGroups::Get()->GetGroupId(GetTestAddress(2), Uuid::kEmpty);
-  auto group_id_2 =
-      DeviceGroups::Get()->GetGroupId(GetTestAddress(3), Uuid::kEmpty);
+  auto group_id_1 = DeviceGroups::Get()->GetGroupId(GetTestAddress(2), Uuid::kEmpty);
+  auto group_id_2 = DeviceGroups::Get()->GetGroupId(GetTestAddress(3), Uuid::kEmpty);
   ASSERT_TRUE(group_id_1 != group_id_2);
   DeviceGroups::CleanUp(callbacks.get());
 }
@@ -228,9 +219,9 @@ TEST_F(GroupsTest, test_group_id_assign) {
 
   DeviceGroups::Initialize(callbacks.get());
   EXPECT_CALL(*callbacks, OnGroupAdded(GetTestAddress(1), _, _))
-      .WillOnce(SaveArg<2>(&captured_gid1));
+          .WillOnce(SaveArg<2>(&captured_gid1));
   EXPECT_CALL(*callbacks, OnGroupAdded(GetTestAddress(2), _, _))
-      .WillOnce(SaveArg<2>(&captured_gid2));
+          .WillOnce(SaveArg<2>(&captured_gid2));
 
   int gid1 = DeviceGroups::Get()->AddDevice(GetTestAddress(1), Uuid::kEmpty,
                                             bluetooth::groups::kGroupUnknown);
@@ -271,8 +262,8 @@ TEST_F(GroupsTest, test_storage_calls) {
 TEST_F(GroupsTest, test_storage_content) {
   int gid1 = bluetooth::groups::kGroupUnknown;
   int gid2 = bluetooth::groups::kGroupUnknown;
-  Uuid uuid1 = Uuid::GetRandom();
-  Uuid uuid2 = Uuid::GetRandom();
+  Uuid uuid1 = Uuid::From128BitBE(bluetooth::os::GenerateRandom<Uuid::kNumBytes128>());
+  Uuid uuid2 = Uuid::From128BitBE(bluetooth::os::GenerateRandom<Uuid::kNumBytes128>());
   ASSERT_NE(uuid1, uuid2);
 
   DeviceGroups::Initialize(callbacks.get());

@@ -14,24 +14,28 @@ android_test_helper_app {
     min_sdk_version: "current",
     target_sdk_version: "current",
     libs: [
-        "android.test.base",
+        "android.test.base.stubs",
         "libprotobuf-java-micro",
     ],
 
     static_libs: [
+        "TestParameterInjector",
         "androidx.core_core",
         "androidx.test.espresso.intents",
         "androidx.test.ext.junit",
         "androidx.test.ext.truth",
         "androidx.test.rules",
         "bluetooth-test-util-lib",
+        "bluetooth_flags_java_lib",
         "compatibility-device-util-axt",
+        "flag-junit",
         "grpc-java-lite",
         "grpc-java-okhttp-client-lite",
+        "mockito-kotlin2",
         "opencensus-java-contrib-grpc-metrics",
-        "pandora_experimental-grpc-java",
-        "pandora_experimental-proto-java",
-        "truth-java8-extension",
+        "pandora-grpc-java",
+        "pandora-proto-java",
+        "truth",
     ],
 
     // Include all test java and kotlin files.
@@ -50,9 +54,36 @@ java_test_host {
         "tradefed",
     ],
 
-    data: [
+    device_common_data: [
         ":BumbleBluetoothTestsApp",
         "bumble_config.json",
+    ],
+    data_native_bins: [
+        "bumble_pandora_server",
+    ],
+
+    required: ["bumble_pandora_server"],
+
+    test_suites: [
+        "general-tests",
+    ],
+}
+
+// Runs the Bumble Bluetooth tests on a USB Bluetooth dongle.
+java_test_host {
+    name: "BumbleBluetoothTestsPhy",
+
+    test_config: "AndroidPhyTest.xml",
+
+    libs: [
+        "tradefed",
+    ],
+
+    data: [
+        "bumble_config.json",
+    ],
+    device_common_data: [
+        ":BumbleBluetoothTestsApp",
     ],
     data_native_bins: [
         "bumble_pandora_server",
@@ -71,6 +102,11 @@ python_binary_host {
     srcs: [
         "src/bumble_server.py",
     ],
+    version: {
+        py3: {
+            embedded_launcher: false,
+        },
+    },
     libs: [
         "bumble-pandora",
         "bumble_services_experimental-python",

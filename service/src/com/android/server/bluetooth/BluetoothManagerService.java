@@ -16,6 +16,7 @@
 
 package com.android.server.bluetooth;
 
+import static android.Manifest.permission.BLUETOOTH_CONNECT;
 import static android.bluetooth.BluetoothAdapter.STATE_BLE_ON;
 import static android.bluetooth.BluetoothAdapter.STATE_BLE_TURNING_OFF;
 import static android.bluetooth.BluetoothAdapter.STATE_BLE_TURNING_ON;
@@ -23,27 +24,33 @@ import static android.bluetooth.BluetoothAdapter.STATE_OFF;
 import static android.bluetooth.BluetoothAdapter.STATE_ON;
 import static android.bluetooth.BluetoothAdapter.STATE_TURNING_OFF;
 import static android.bluetooth.BluetoothAdapter.STATE_TURNING_ON;
+import static android.bluetooth.BluetoothAdapter.nameForState;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_AIRPLANE_MODE;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_APPLICATION_REQUEST;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_CRASH;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_DISALLOWED;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_FACTORY_RESET;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTARTED;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTORE_USER_SETTING;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_SATELLITE_MODE;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_START_ERROR;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_SYSTEM_BOOT;
+import static android.bluetooth.BluetoothProtoEnums.ENABLE_DISABLE_REASON_USER_SWITCH;
 import static android.os.PowerExemptionManager.TEMPORARY_ALLOW_LIST_TYPE_FOREGROUND_SERVICE_ALLOWED;
 
-import static com.android.server.bluetooth.BluetoothAirplaneModeListener.APM_ENHANCEMENT;
+import static com.android.modules.utils.build.SdkLevel.isAtLeastV;
 
 import static java.util.Objects.requireNonNull;
 
 import android.annotation.NonNull;
-import android.annotation.RequiresPermission;
 import android.app.ActivityManager;
 import android.app.BroadcastOptions;
 import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothProfile;
-import android.bluetooth.BluetoothProtoEnums;
 import android.bluetooth.BluetoothStatusCodes;
 import android.bluetooth.IBluetooth;
 import android.bluetooth.IBluetoothCallback;
 import android.bluetooth.IBluetoothManager;
 import android.bluetooth.IBluetoothManagerCallback;
-import android.bluetooth.IBluetoothProfileServiceConnection;
-import android.bluetooth.IBluetoothStateChangeCallback;
-import android.content.AttributionSource;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.ContentResolver;
@@ -57,6 +64,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.ContentObserver;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -75,13 +83,17 @@ import android.provider.Settings.SettingNotFoundException;
 import android.sysprop.BluetoothProperties;
 import android.util.proto.ProtoOutputStream;
 
-import com.android.bluetooth.BluetoothStatsLog;
-import com.android.bluetooth.flags.FeatureFlags;
-import com.android.internal.annotations.GuardedBy;
+import androidx.annotation.RequiresApi;
+
+import com.android.bluetooth.flags.Flags;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.modules.expresslog.Counter;
+import com.android.modules.expresslog.Histogram;
 import com.android.server.BluetoothManagerServiceDumpProto;
 import com.android.server.bluetooth.airplane.AirplaneModeListener;
 import com.android.server.bluetooth.satellite.SatelliteModeListener;
+
+import libcore.util.SneakyThrow;
 
 import kotlin.Unit;
 import kotlin.time.TimeSource;
@@ -89,82 +101,64 @@ import kotlin.time.TimeSource;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.PrintWriter;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.NoSuchElementException;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 
 class BluetoothManagerService {
     private static final String TAG = BluetoothManagerService.class.getSimpleName();
 
-    private static final String BLUETOOTH_PRIVILEGED =
-            android.Manifest.permission.BLUETOOTH_PRIVILEGED;
-
-    private static final int ACTIVE_LOG_MAX_SIZE = 20;
     private static final int CRASH_LOG_MAX_SIZE = 100;
 
-    private static final int DEFAULT_REBIND_COUNT = 3;
+    // See android.os.Build.HW_TIMEOUT_MULTIPLIER. This should not be set on real hw
+    private static final int HW_MULTIPLIER = SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
+
     // Maximum msec to wait for a bind
-    private static final int TIMEOUT_BIND_MS =
-        3000 * SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
+    private static final int TIMEOUT_BIND_MS = 4000 * HW_MULTIPLIER;
 
     // Timeout value for synchronous binder call
-    private static final Duration SYNC_CALLS_TIMEOUT =
-        Duration.ofSeconds(3 * SystemProperties.getInt("ro.hw_timeout_multiplier", 1));
-
-    /**
-     * @return timeout value for synchronous binder call
-     */
-    private static Duration getSyncTimeout() {
-        return SYNC_CALLS_TIMEOUT;
-    }
+    private static final Duration STATE_TIMEOUT = Duration.ofSeconds(4L * HW_MULTIPLIER);
 
     // Maximum msec to wait for service restart
-    private static final int SERVICE_RESTART_TIME_MS
-        = 400 * SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
+    private static final int SERVICE_RESTART_TIME_MS = 400 * HW_MULTIPLIER;
     // Maximum msec to wait for restart due to error
-    private static final int ERROR_RESTART_TIME_MS
-        = 3000 * SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
+    private static final int ERROR_RESTART_TIME_MS = 3000 * HW_MULTIPLIER;
     // Maximum msec to delay MESSAGE_USER_SWITCHED
-    private static final int USER_SWITCHED_TIME_MS
-        = 200 * SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
+    private static final int USER_SWITCHED_TIME_MS = 200 * HW_MULTIPLIER;
     // Delay for the addProxy function in msec
-    private static final int ADD_PROXY_DELAY_MS
-        = 100 * SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
+    private static final int ADD_PROXY_DELAY_MS = 100 * HW_MULTIPLIER;
     // Delay for retrying enable and disable in msec
-    private static final int ENABLE_DISABLE_DELAY_MS
-        = 300 * SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
+    @VisibleForTesting static final int ENABLE_DISABLE_DELAY_MS = 300 * HW_MULTIPLIER;
 
     @VisibleForTesting static final int MESSAGE_ENABLE = 1;
     @VisibleForTesting static final int MESSAGE_DISABLE = 2;
     @VisibleForTesting static final int MESSAGE_HANDLE_ENABLE_DELAYED = 3;
     @VisibleForTesting static final int MESSAGE_HANDLE_DISABLE_DELAYED = 4;
-    @VisibleForTesting static final int MESSAGE_REGISTER_STATE_CHANGE_CALLBACK = 30;
-    @VisibleForTesting static final int MESSAGE_UNREGISTER_STATE_CHANGE_CALLBACK = 31;
     @VisibleForTesting static final int MESSAGE_BLUETOOTH_SERVICE_CONNECTED = 40;
     @VisibleForTesting static final int MESSAGE_BLUETOOTH_SERVICE_DISCONNECTED = 41;
     @VisibleForTesting static final int MESSAGE_RESTART_BLUETOOTH_SERVICE = 42;
     @VisibleForTesting static final int MESSAGE_BLUETOOTH_STATE_CHANGE = 60;
     @VisibleForTesting static final int MESSAGE_TIMEOUT_BIND = 100;
+    // TODO: b/368120237 delete MESSAGE_GET_NAME_AND_ADDRESS
     @VisibleForTesting static final int MESSAGE_GET_NAME_AND_ADDRESS = 200;
     @VisibleForTesting static final int MESSAGE_USER_SWITCHED = 300;
     @VisibleForTesting static final int MESSAGE_USER_UNLOCKED = 301;
-    @VisibleForTesting static final int MESSAGE_ADD_PROXY_DELAYED = 400;
-    @VisibleForTesting static final int MESSAGE_BIND_PROFILE_SERVICE = 401;
-    @VisibleForTesting static final int MESSAGE_RESTORE_USER_SETTING = 500;
-
-    private static final int RESTORE_SETTING_TO_ON = 1;
-    private static final int RESTORE_SETTING_TO_OFF = 0;
+    @VisibleForTesting static final int MESSAGE_RESTORE_USER_SETTING_OFF = 501;
+    @VisibleForTesting static final int MESSAGE_RESTORE_USER_SETTING_ON = 502;
 
     private static final int MAX_ERROR_RESTART_RETRIES = 6;
     private static final int MAX_WAIT_FOR_ENABLE_DISABLE_RETRIES = 10;
@@ -180,143 +174,32 @@ class BluetoothManagerService {
     // and Airplane mode will have higher priority.
     @VisibleForTesting static final int BLUETOOTH_ON_AIRPLANE = 2;
 
-    private static final int FLAGS_SYSTEM_APP =
-            ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+    // Map of apps registered to keep BLE scanning on.
+    private final Map<IBinder, ClientDeathRecipient> mBleApps = new ConcurrentHashMap<>();
 
-    // APM enhancement feature is enabled by default
-    // Set this value to 0 to disable the feature
-    private static final int DEFAULT_APM_ENHANCEMENT_STATE = 1;
-
-    private static final Map<Integer, String> PROFILE_TO_SERVICE_NAME =
-            Map.ofEntries(
-                    Map.entry(BluetoothProfile.HEADSET, "android.bluetooth.IBluetoothHeadset"),
-                    Map.entry(BluetoothProfile.A2DP, "android.bluetooth.IBluetoothA2dp"),
-                    Map.entry(BluetoothProfile.HID_HOST, "android.bluetooth.IBluetoothHidHost"),
-                    Map.entry(BluetoothProfile.PAN, "android.bluetooth.IBluetoothPan"),
-                    Map.entry(BluetoothProfile.PBAP, "android.bluetooth.IBluetoothPbap"),
-                    Map.entry(BluetoothProfile.MAP, "android.bluetooth.IBluetoothMap"),
-                    Map.entry(BluetoothProfile.SAP, "android.bluetooth.IBluetoothSap"),
-                    Map.entry(BluetoothProfile.A2DP_SINK, "android.bluetooth.IBluetoothA2dpSink"),
-                    Map.entry(
-                            BluetoothProfile.AVRCP_CONTROLLER,
-                            "android.bluetooth.IBluetoothAvrcpController"),
-                    Map.entry(
-                            BluetoothProfile.HEADSET_CLIENT,
-                            "android.bluetooth.IBluetoothHeadsetClient"),
-                    Map.entry(
-                            BluetoothProfile.PBAP_CLIENT, "android.bluetooth.IBluetoothPbapClient"),
-                    Map.entry(BluetoothProfile.MAP_CLIENT, "android.bluetooth.IBluetoothMapClient"),
-                    Map.entry(BluetoothProfile.HID_DEVICE, "android.bluetooth.IBluetoothHidDevice"),
-                    Map.entry(
-                            BluetoothProfile.HEARING_AID, "android.bluetooth.IBluetoothHearingAid"),
-                    Map.entry(BluetoothProfile.LE_AUDIO, "android.bluetooth.IBluetoothLeAudio"),
-                    Map.entry(
-                            BluetoothProfile.VOLUME_CONTROL,
-                            "android.bluetooth.IBluetoothVolumeControl"),
-                    Map.entry(
-                            BluetoothProfile.CSIP_SET_COORDINATOR,
-                            "android.bluetooth.IBluetoothCsipSetCoordinator"),
-                    Map.entry(
-                            BluetoothProfile.LE_AUDIO_BROADCAST,
-                            "android.bluetooth.IBluetoothLeAudio"),
-                    Map.entry(
-                            BluetoothProfile.LE_CALL_CONTROL,
-                            "android.bluetooth.IBluetoothLeCallControl"),
-                    Map.entry(BluetoothProfile.HAP_CLIENT, "android.bluetooth.IBluetoothHapClient"),
-                    Map.entry(
-                            BluetoothProfile.LE_AUDIO_BROADCAST_ASSISTANT,
-                            "android.bluetooth.IBluetoothLeBroadcastAssistant"));
-
+    private final BluetoothAdapterState mState = new BluetoothAdapterState();
+    private final List<Long> mCrashTimestamps = new ArrayList<>();
+    private final RemoteCallbackList<IBluetoothManagerCallback> mCallbacks =
+            new RemoteCallbackList<>();
+    private final BluetoothServiceBinder mBinder;
+    @VisibleForTesting final BluetoothHandler mHandler;
+    private final ContentResolver mContentResolver;
     private final Context mContext;
     private final Looper mLooper;
-
     private final UserManager mUserManager;
 
-    // -3     match with Userhandle.USER_CURRENT_OR_SELF
-    private static final UserHandle USER_HANDLE_CURRENT_OR_SELF = UserHandle.of(-3);
-    // -10000 match with Userhandle.USER_NULL
-    private static final UserHandle USER_HANDLE_NULL = UserHandle.of(-10000);
+    private final boolean mIsHearingAidProfileSupported;
 
-    // Locks are not provided for mName and mAddress.
-    // They are accessed in handler or broadcast receiver, same thread context.
-    private String mAddress = null;
-    private String mName = null;
-    private final ContentResolver mContentResolver;
-    private final RemoteCallbackList<IBluetoothManagerCallback> mCallbacks =
-            new RemoteCallbackList<IBluetoothManagerCallback>();
-    private final RemoteCallbackList<IBluetoothStateChangeCallback> mStateChangeCallbacks =
-            new RemoteCallbackList<IBluetoothStateChangeCallback>();
-    private final BluetoothServiceBinder mBinder;
-
-    private final ReentrantReadWriteLock mAdapterLock = new ReentrantReadWriteLock();
-
-    private final FeatureFlags mFeatureFlags;
-
-    @GuardedBy("mAdapterLock")
-    private AdapterBinder mAdapter = null;
-
-    private List<Integer> mSupportedProfileList = new ArrayList<>();
-
-    // TODO(b/309033118): remove BluetoothAirplaneModeListener once use_new_airplane_mode ship
-    private final BluetoothAirplaneModeListener mBluetoothAirplaneModeListener;
-
-    // TODO(b/303552318): remove BluetoothNotificationManager once airplane_ressources_in_app ship
-    private BluetoothNotificationManager mBluetoothNotificationManager;
-
-    // TODO(b/289584302): remove BluetoothSatelliteModeListener once use_new_satellite_mode ship
-    private BluetoothSatelliteModeListener mBluetoothSatelliteModeListener;
-
-    private final boolean mUseNewSatelliteMode;
-    private final boolean mUseNewAirplaneMode;
+    private String mAddress;
+    private String mName;
+    private AdapterBinder mAdapter;
+    private Context mCurrentUserContext;
 
     // used inside handler thread
     private boolean mQuietEnable = false;
     private boolean mEnable = false;
     private boolean mShutdownInProgress = false;
 
-    private Context mCurrentUserContext = null;
-
-    static String timeToLog(long timestamp) {
-        return DateTimeFormatter.ofPattern("MM-dd HH:mm:ss.SSS")
-                .withZone(ZoneId.systemDefault())
-                .format(Instant.ofEpochMilli(timestamp));
-    }
-
-    // Used for tracking apps that enabled / disabled Bluetooth.
-    private static class ActiveLog {
-        private int mReason;
-        private String mPackageName;
-        private boolean mEnable;
-        private long mTimestamp;
-
-        ActiveLog(int reason, String packageName, boolean enable, long timestamp) {
-            mReason = reason;
-            mPackageName = packageName;
-            mEnable = enable;
-            mTimestamp = timestamp;
-            Log.d(TAG, this.toString());
-        }
-
-        @Override
-        public String toString() {
-            return timeToLog(mTimestamp)
-                    + (mEnable ? "  Enabled " : " Disabled ")
-                    + " due to "
-                    + getEnableDisableReasonString(mReason)
-                    + " by "
-                    + mPackageName;
-        }
-
-        void dump(ProtoOutputStream proto) {
-            proto.write(BluetoothManagerServiceDumpProto.ActiveLog.TIMESTAMP_MS, mTimestamp);
-            proto.write(BluetoothManagerServiceDumpProto.ActiveLog.ENABLE, mEnable);
-            proto.write(BluetoothManagerServiceDumpProto.ActiveLog.PACKAGE_NAME, mPackageName);
-            proto.write(BluetoothManagerServiceDumpProto.ActiveLog.REASON, mReason);
-        }
-    }
-
-    private final LinkedList<ActiveLog> mActiveLogs = new LinkedList<>();
-    private final LinkedList<Long> mCrashTimestamps = new LinkedList<>();
     private int mCrashes = 0;
     private long mLastEnabledTime;
 
@@ -325,32 +208,73 @@ class BluetoothManagerService {
     private boolean mQuietEnableExternal = false;
     private boolean mEnableExternal = false;
 
-    // Map of apps registered to keep BLE scanning on.
-    private Map<IBinder, ClientDeathRecipient> mBleApps =
-            new ConcurrentHashMap<IBinder, ClientDeathRecipient>();
-
-    private final BluetoothAdapterState mState = new BluetoothAdapterState();
-
-    private final BluetoothHandler mHandler;
     private int mErrorRecoveryRetryCounter = 0;
 
-    private final boolean mIsHearingAidProfileSupported;
-
-    // Save a ProfileServiceConnections object for each of the bound
-    // bluetooth profile services
-    private final Map<Integer, ProfileServiceConnections> mProfileServices = new HashMap<>();
-
-    private volatile boolean mUnbindingAll = false;
-
+    // The code in mBluetoothCallback is running on Binder thread.
+    // It must be posted on the local looper to prevent concurrent access.
     private final IBluetoothCallback mBluetoothCallback =
             new IBluetoothCallback.Stub() {
                 @Override
-                public void onBluetoothStateChange(int prevState, int newState)
-                        throws RemoteException {
+                public void onBluetoothStateChange(int prevState, int newState) {
+                    Log.d(
+                            TAG,
+                            "IBluetoothCallback.onBluetoothStateChange:"
+                                    + (" prevState=" + nameForState(prevState))
+                                    + (" newState=" + nameForState(newState)));
                     mHandler.obtainMessage(MESSAGE_BLUETOOTH_STATE_CHANGE, prevState, newState)
                             .sendToTarget();
                 }
+
+                @Override
+                public void onAdapterNameChange(String name) {
+                    requireNonNull(name);
+                    if (name.isEmpty()) {
+                        throw new IllegalArgumentException("Invalid Empty name");
+                    }
+                    Log.d(TAG, "IBluetoothCallback.onAdapterNameChange: " + name);
+                    mHandler.post(() -> storeName(name));
+                }
+
+                @Override
+                public void onAdapterAddressChange(String address) {
+                    requireNonNull(address);
+                    if (!BluetoothAdapter.checkBluetoothAddress(address)) {
+                        throw new IllegalArgumentException("Invalid address");
+                    }
+                    Log.d(TAG, "IBluetoothCallback.onAdapterAddressChange: " + logAddress(address));
+                    mHandler.post(() -> storeAddress(address));
+                }
             };
+
+    private void storeName(String name) {
+        if (!Settings.Secure.putString(mContentResolver, Settings.Secure.BLUETOOTH_NAME, name)) {
+            Log.e(TAG, "storeName(" + name + "): Failed. Name is still " + mName);
+            return;
+        }
+        mName = name;
+        Log.v(TAG, "storeName(" + mName + "): Success");
+        Intent intent =
+                new Intent(BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED)
+                        .putExtra(BluetoothAdapter.EXTRA_LOCAL_NAME, name)
+                        .addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        mContext.sendBroadcastAsUser(
+                intent, UserHandle.ALL, BLUETOOTH_CONNECT, getTempAllowlistBroadcastOptions());
+    }
+
+    private void storeAddress(String address) {
+        if (!Settings.Secure.putString(
+                mContentResolver, Settings.Secure.BLUETOOTH_ADDRESS, address)) {
+            Log.e(
+                    TAG,
+                    "storeAddress("
+                            + logAddress(address)
+                            + "): Failed. Address is still "
+                            + logAddress(mAddress));
+            return;
+        }
+        mAddress = address;
+        Log.v(TAG, "storeAddress(" + logAddress(mAddress) + "): Success");
+    }
 
     public void onUserRestrictionsChanged(UserHandle userHandle) {
         final boolean newBluetoothDisallowed =
@@ -368,13 +292,11 @@ class BluetoothManagerService {
         // DISALLOW_BLUETOOTH can only be set by DO or PO on the system user.
         // Only trigger once instead of for all users
         if (UserHandle.SYSTEM.equals(userHandle) && newBluetoothDisallowed) {
-            sendDisableMsg(
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_DISALLOWED,
-                    mContext.getPackageName());
+            sendDisableMsg(ENABLE_DISABLE_REASON_DISALLOWED);
         }
     }
 
-    boolean onFactoryReset(AttributionSource source) {
+    boolean onFactoryResetFromBinder() {
         // Wait for stable state if bluetooth is temporary state.
         int state = getState();
         if (state == STATE_BLE_TURNING_ON
@@ -384,34 +306,22 @@ class BluetoothManagerService {
                 return false;
             }
         }
+        return postAndWait(() -> onFactoryReset());
+    }
 
+    @VisibleForTesting
+    boolean onFactoryReset() {
         // Clear registered LE apps to force shut-off Bluetooth
         clearBleApps();
-        state = getState();
-        mAdapterLock.readLock().lock();
-        try {
-            if (mAdapter == null) {
-                return false;
-            }
-            if (state == STATE_BLE_ON) {
-                addActiveLog(
-                        BluetoothProtoEnums.ENABLE_DISABLE_REASON_FACTORY_RESET,
-                        mContext.getPackageName(),
-                        false);
-                mAdapter.stopBle(source);
-                return true;
-            } else if (state == STATE_ON) {
-                addActiveLog(
-                        BluetoothProtoEnums.ENABLE_DISABLE_REASON_FACTORY_RESET,
-                        mContext.getPackageName(),
-                        false);
-                mAdapter.disable(source);
-                return true;
-            }
-        } catch (RemoteException | TimeoutException e) {
-            Log.e(TAG, "Unable to shutdown Bluetooth", e);
-        } finally {
-            mAdapterLock.readLock().unlock();
+        int state = getState();
+        if (state == STATE_BLE_ON) {
+            ActiveLogs.add(ENABLE_DISABLE_REASON_FACTORY_RESET, false);
+            bleOnToOff();
+            return true;
+        } else if (state == STATE_ON) {
+            ActiveLogs.add(ENABLE_DISABLE_REASON_FACTORY_RESET, false);
+            onToBleOn();
+            return true;
         }
         return false;
     }
@@ -428,8 +338,7 @@ class BluetoothManagerService {
                 || mHandler.hasMessages(MESSAGE_HANDLE_ENABLE_DELAYED)
                 || mHandler.hasMessages(MESSAGE_HANDLE_DISABLE_DELAYED)
                 || mHandler.hasMessages(MESSAGE_RESTART_BLUETOOTH_SERVICE)
-                || mHandler.hasMessages(MESSAGE_TIMEOUT_BIND)
-                || mHandler.hasMessages(MESSAGE_BIND_PROFILE_SERVICE)) {
+                || mHandler.hasMessages(MESSAGE_TIMEOUT_BIND)) {
             Log.d(
                     TAG,
                     "Busy reason:"
@@ -444,9 +353,7 @@ class BluetoothManagerService {
                             + " RESTART_BLUETOOTH_SERVICE="
                             + mHandler.hasMessages(MESSAGE_RESTART_BLUETOOTH_SERVICE)
                             + " TIMEOUT_BIND="
-                            + mHandler.hasMessages(MESSAGE_TIMEOUT_BIND)
-                            + " BIND_PROFILE_SERVICE="
-                            + mHandler.hasMessages(MESSAGE_BIND_PROFILE_SERVICE));
+                            + mHandler.hasMessages(MESSAGE_TIMEOUT_BIND));
             // Bluetooth is restarting
             return SERVICE_RESTART_TIME_MS;
         }
@@ -459,8 +366,9 @@ class BluetoothManagerService {
         Log.d(
                 TAG,
                 ("delayModeChangedIfNeeded(" + modechanged + "):")
-                        + (" state=" + BluetoothAdapter.nameForState(state))
-                        + (" isAirplaneModeOn()=" + isAirplaneModeOn())
+                        + (" state=" + nameForState(state))
+                        + (" Airplane.isOnOverrode=" + AirplaneModeListener.isOnOverrode())
+                        + (" Airplane.isOn=" + AirplaneModeListener.isOn())
                         + (" isSatelliteModeOn()=" + isSatelliteModeOn())
                         + (" delayed=" + delayMs + "ms"));
 
@@ -475,11 +383,13 @@ class BluetoothManagerService {
     }
 
     /** Send Intent to the Notification Service in the Bluetooth app */
-    Unit sendAirplaneModeNotification(String notificationState) {
-        Intent intent = new Intent("android.bluetooth.airplane.action.SEND_NOTIFICATION");
+    Unit sendToggleNotification(String notificationReason) {
+        Intent intent =
+                new Intent("android.bluetooth.notification.action.SEND_TOGGLE_NOTIFICATION");
         intent.setComponent(resolveSystemService(intent));
-        intent.putExtra("android.bluetooth.airplane.extra.NOTIFICATION_STATE", notificationState);
-        mContext.startService(intent);
+        intent.putExtra(
+                "android.bluetooth.notification.extra.NOTIFICATION_REASON", notificationReason);
+        mCurrentUserContext.startService(intent);
         return Unit.INSTANCE;
     }
 
@@ -487,111 +397,96 @@ class BluetoothManagerService {
     private static final Object ON_SATELLITE_MODE_CHANGED_TOKEN = new Object();
     private static final Object ON_SWITCH_USER_TOKEN = new Object();
 
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)
+    @VisibleForTesting
     Unit onAirplaneModeChanged(boolean isAirplaneModeOn) {
-        mHandler.postDelayed(
-                () ->
-                        delayModeChangedIfNeeded(
-                                ON_AIRPLANE_MODE_CHANGED_TOKEN,
-                                () -> handleAirplaneModeChanged(isAirplaneModeOn),
-                                "onAirplaneModeChanged"),
+        delayModeChangedIfNeeded(
                 ON_AIRPLANE_MODE_CHANGED_TOKEN,
-                0);
+                () -> handleAirplaneModeChanged(isAirplaneModeOn),
+                "onAirplaneModeChanged");
         return Unit.INSTANCE;
     }
 
-    // TODO(b/289584302): Update to private once use_new_satellite_mode is enabled
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)
-    Unit onSatelliteModeChanged(boolean isSatelliteModeOn) {
-        mHandler.postDelayed(
-                () ->
-                        delayModeChangedIfNeeded(
-                                ON_SATELLITE_MODE_CHANGED_TOKEN,
-                                () -> handleSatelliteModeChanged(isSatelliteModeOn),
-                                "onSatelliteModeChanged"),
+    private Unit onSatelliteModeChanged(boolean isSatelliteModeOn) {
+        delayModeChangedIfNeeded(
                 ON_SATELLITE_MODE_CHANGED_TOKEN,
-                0);
+                () -> handleSatelliteModeChanged(isSatelliteModeOn),
+                "onSatelliteModeChanged");
         return Unit.INSTANCE;
     }
 
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)
+    // Call is coming from the systemServer main thread and need to be post to avoid race
     void onSwitchUser(UserHandle userHandle) {
-        mHandler.postDelayed(
+        mHandler.post(
                 () ->
                         delayModeChangedIfNeeded(
                                 ON_SWITCH_USER_TOKEN,
                                 () -> handleSwitchUser(userHandle),
-                                "onSwitchUser"),
-                ON_SWITCH_USER_TOKEN,
-                0);
+                                "onSwitchUser"));
     }
 
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)
+    private void forceToOffFromModeChange(int currentState, int reason) {
+        // Clear registered LE apps to force shut-off
+        clearBleApps();
+
+        if (reason == ENABLE_DISABLE_REASON_SATELLITE_MODE
+                || !AirplaneModeListener.hasUserToggledApm(mCurrentUserContext)) {
+            // AirplaneMode can have a state where it does not impact the AutoOnFeature
+            AutoOnFeature.pause();
+        }
+
+        if (currentState == STATE_ON) {
+            mEnable = false;
+            ActiveLogs.add(reason, false);
+            onToBleOn();
+        } else if (currentState == STATE_BLE_ON) {
+            // If currentState is BLE_ON make sure we trigger stopBle
+            mEnable = false;
+            mEnableExternal = false;
+            ActiveLogs.add(reason, false);
+            bleOnToOff();
+        }
+    }
+
     private void handleAirplaneModeChanged(boolean isAirplaneModeOn) {
-        synchronized (this) {
-            if (isBluetoothPersistedStateOn()) {
-                if (isAirplaneModeOn) {
-                    persistBluetoothSetting(BLUETOOTH_ON_AIRPLANE);
-                } else {
-                    persistBluetoothSetting(BLUETOOTH_ON_BLUETOOTH);
-                }
-            }
-
-            int st = mState.get();
-
-            Log.d(
-                    TAG,
-                    "handleAirplaneModeChanged(isAirplaneModeOn="
-                            + isAirplaneModeOn
-                            + ") | current state="
-                            + BluetoothAdapter.nameForState(st));
-
+        boolean isPersistStateOn = isBluetoothPersistedStateOn();
+        if (isPersistStateOn) {
             if (isAirplaneModeOn) {
-                // Clear registered LE apps to force shut-off
-                clearBleApps();
-
-                // If state is BLE_ON make sure we trigger stopBle
-                if (st == STATE_BLE_ON) {
-                    mAdapterLock.readLock().lock();
-                    try {
-                        if (mAdapter != null) {
-                            addActiveLog(
-                                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_AIRPLANE_MODE,
-                                    mContext.getPackageName(),
-                                    false);
-                            mAdapter.stopBle(mContext.getAttributionSource());
-                            mEnable = false;
-                            mEnableExternal = false;
-                        }
-                    } catch (RemoteException | TimeoutException e) {
-                        Log.e(TAG, "Unable to call stopBle", e);
-                    } finally {
-                        mAdapterLock.readLock().unlock();
-                    }
-                } else if (st == STATE_ON) {
-                    sendDisableMsg(
-                            BluetoothProtoEnums.ENABLE_DISABLE_REASON_AIRPLANE_MODE,
-                            mContext.getPackageName());
-                }
-            } else if (mEnableExternal) {
-                sendEnableMsg(
-                        mQuietEnableExternal,
-                        BluetoothProtoEnums.ENABLE_DISABLE_REASON_AIRPLANE_MODE,
-                        mContext.getPackageName());
+                setBluetoothPersistedState(BLUETOOTH_ON_AIRPLANE);
+            } else {
+                setBluetoothPersistedState(BLUETOOTH_ON_BLUETOOTH);
             }
+        }
+
+        int currentState = mState.get();
+
+        Log.d(
+                TAG,
+                ("handleAirplaneModeChanged(" + isAirplaneModeOn + "):")
+                        + (" mEnableExternal=" + mEnableExternal)
+                        + (" isPersistStateOn=" + isPersistStateOn)
+                        + (" currentState=" + nameForState(currentState)));
+
+        if (isAirplaneModeOn) {
+            forceToOffFromModeChange(currentState, ENABLE_DISABLE_REASON_AIRPLANE_MODE);
+        } else if (mEnableExternal && currentState != STATE_ON && isPersistStateOn) {
+            // isPersistStateOn is checked to prevent race with RESTORE_USER_SETTING
+            sendEnableMsg(mQuietEnableExternal, ENABLE_DISABLE_REASON_AIRPLANE_MODE);
+        } else if (currentState != STATE_ON) {
+            autoOnSetupTimer();
         }
     }
 
     private void handleSatelliteModeChanged(boolean isSatelliteModeOn) {
-        if (shouldBluetoothBeOn(isSatelliteModeOn) && getState() != STATE_ON) {
-            sendEnableMsg(
-                    mQuietEnableExternal,
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_SATELLITE_MODE,
-                    mContext.getPackageName());
-        } else if (!shouldBluetoothBeOn(isSatelliteModeOn) && getState() != STATE_OFF) {
-            sendDisableMsg(
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_SATELLITE_MODE,
-                    mContext.getPackageName());
+        final int currentState = mState.get();
+
+        if (shouldBluetoothBeOn(isSatelliteModeOn) && currentState != STATE_ON) {
+            sendEnableMsg(mQuietEnableExternal, ENABLE_DISABLE_REASON_SATELLITE_MODE);
+        } else if (!shouldBluetoothBeOn(isSatelliteModeOn) && currentState != STATE_OFF) {
+            forceToOffFromModeChange(currentState, ENABLE_DISABLE_REASON_SATELLITE_MODE);
+        } else if (!isSatelliteModeOn
+                && !shouldBluetoothBeOn(isSatelliteModeOn)
+                && currentState != STATE_ON) {
+            autoOnSetupTimer();
         }
     }
 
@@ -606,7 +501,7 @@ class BluetoothManagerService {
             return false;
         }
 
-        if (isAirplaneModeOn() && isBluetoothPersistedStateOnAirplane()) {
+        if (AirplaneModeListener.isOnOverrode() && isBluetoothPersistedStateOnAirplane()) {
             Log.d(TAG, "shouldBluetoothBeOn: BT should be off as airplaneMode is on.");
             return false;
         }
@@ -620,17 +515,19 @@ class BluetoothManagerService {
                 @Override
                 public void onReceive(Context context, Intent intent) {
                     String action = intent.getAction();
-                    if (BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED.equals(action)) {
+                    if (!Flags.getNameAndAddressAsCallback()
+                            && BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED.equals(action)) {
                         String newName = intent.getStringExtra(BluetoothAdapter.EXTRA_LOCAL_NAME);
                         if (newName != null) {
-                            Log.d(TAG, "Bluetooth Adapter name changed to " + newName);
+                            Log.d(TAG, "Local name changed to: " + newName);
                             storeNameAndAddress(newName, null);
                         }
-                    } else if (BluetoothAdapter.ACTION_BLUETOOTH_ADDRESS_CHANGED.equals(action)) {
+                    } else if (!Flags.getNameAndAddressAsCallback()
+                            && BluetoothAdapter.ACTION_BLUETOOTH_ADDRESS_CHANGED.equals(action)) {
                         String newAddress =
                                 intent.getStringExtra(BluetoothAdapter.EXTRA_BLUETOOTH_ADDRESS);
                         if (newAddress != null) {
-                            Log.d(TAG, "Bluetooth Adapter address changed to " + newAddress);
+                            Log.d(TAG, "Local address changed to: " + logAddress(newAddress));
                             storeNameAndAddress(null, newAddress);
                         } else {
                             Log.e(TAG, "No Bluetooth Adapter address parameter found");
@@ -650,60 +547,52 @@ class BluetoothManagerService {
                                             + (" prevValue=" + prevValue)
                                             + (" newValue=" + newValue));
 
-                            if ((newValue != null)
-                                    && (prevValue != null)
-                                    && !prevValue.equals(newValue)) {
-                                mHandler.obtainMessage(
-                                                MESSAGE_RESTORE_USER_SETTING,
-                                                newValue.equals("0")
-                                                        ? RESTORE_SETTING_TO_OFF
-                                                        : RESTORE_SETTING_TO_ON,
-                                                0)
-                                        .sendToTarget();
+                            if ((newValue == null)
+                                    || (prevValue == null)
+                                    || prevValue.equals(newValue)) {
+                                return;
                             }
+                            mHandler.sendEmptyMessage(
+                                    newValue.equals("0")
+                                            ? MESSAGE_RESTORE_USER_SETTING_OFF
+                                            : MESSAGE_RESTORE_USER_SETTING_ON);
                         }
                     } else if (action.equals(Intent.ACTION_SHUTDOWN)) {
                         Log.i(TAG, "Device is shutting down.");
                         mShutdownInProgress = true;
-                        mAdapterLock.readLock().lock();
-                        try {
-                            mEnable = false;
-                            mEnableExternal = false;
-                            if (mAdapter != null && mState.oneOf(STATE_BLE_ON)) {
-                                mAdapter.stopBle(mContext.getAttributionSource());
-                            } else if (mAdapter != null && mState.oneOf(STATE_ON)) {
-                                mAdapter.disable(mContext.getAttributionSource());
-                            }
-                        } catch (RemoteException | TimeoutException e) {
-                            Log.e(TAG, "Unable to shutdown Bluetooth", e);
-                        } finally {
-                            mAdapterLock.readLock().unlock();
+                        mEnable = false;
+                        mEnableExternal = false;
+                        if (mState.oneOf(STATE_BLE_ON)) {
+                            bleOnToOff();
+                        } else if (mState.oneOf(STATE_ON)) {
+                            onToBleOn();
                         }
                     }
                 }
             };
 
-    BluetoothManagerService(
-            @NonNull Context context, @NonNull Looper looper, @NonNull FeatureFlags featureFlags) {
+    private final Histogram mShutdownLatencyHistogram =
+            new Histogram(
+                    "bluetooth.value_shutdown_latency", new Histogram.UniformOptions(50, 0, 3000));
+
+    BluetoothManagerService(@NonNull Context context, @NonNull Looper looper) {
         mContext = requireNonNull(context, "Context cannot be null");
         mContentResolver = requireNonNull(mContext.getContentResolver(), "Resolver cannot be null");
         mLooper = requireNonNull(looper, "Looper cannot be null");
-        mFeatureFlags = requireNonNull(featureFlags, "Feature Flags cannot be null");
 
         mUserManager =
                 requireNonNull(
                         mContext.getSystemService(UserManager.class),
                         "UserManager system service cannot be null");
 
-        mBinder = new BluetoothServiceBinder(this, mContext, mUserManager);
+        mBinder = new BluetoothServiceBinder(this, mLooper, mContext, mUserManager);
         mHandler = new BluetoothHandler(mLooper);
 
-
         // Observe BLE scan only mode settings change.
-        registerForBleScanModeChange();
-
-        if (!mFeatureFlags.airplaneRessourcesInApp() && !mFeatureFlags.useNewAirplaneMode()) {
-            mBluetoothNotificationManager = new BluetoothNotificationManager(mContext);
+        if (Flags.respectBleScanSetting()) {
+            BleScanSettingListener.initialize(mLooper, mContentResolver, this::onBleScanDisabled);
+        } else {
+            registerForBleScanModeChange();
         }
 
         // Disable ASHA if BLE is not supported, overriding any system property
@@ -722,12 +611,14 @@ class BluetoothManagerService {
         }
 
         IntentFilter filter = new IntentFilter();
-        filter.addAction(BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED);
-        filter.addAction(BluetoothAdapter.ACTION_BLUETOOTH_ADDRESS_CHANGED);
+        if (!Flags.getNameAndAddressAsCallback()) {
+            filter.addAction(BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED);
+            filter.addAction(BluetoothAdapter.ACTION_BLUETOOTH_ADDRESS_CHANGED);
+        }
         filter.addAction(Intent.ACTION_SETTING_RESTORED);
         filter.addAction(Intent.ACTION_SHUTDOWN);
         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
-        mContext.registerReceiver(mReceiver, filter);
+        mContext.registerReceiver(mReceiver, filter, null, mHandler);
 
         IntentFilter filterUser = new IntentFilter();
         filterUser.addAction(UserManager.ACTION_USER_RESTRICTIONS_CHANGED);
@@ -756,52 +647,59 @@ class BluetoothManagerService {
                 },
                 filterUser,
                 null,
-                null);
+                mHandler);
 
-        loadStoredNameAndAddress();
+        if (Flags.getNameAndAddressAsCallback()) {
+            mName =
+                    BluetoothServerProxy.getInstance()
+                            .settingsSecureGetString(
+                                    mContentResolver, Settings.Secure.BLUETOOTH_NAME);
+            mAddress =
+                    BluetoothServerProxy.getInstance()
+                            .settingsSecureGetString(
+                                    mContentResolver, Settings.Secure.BLUETOOTH_ADDRESS);
+
+            Log.d(TAG, "Local adapter: Name=" + mName + ", Address=" + logAddress(mAddress));
+        } else {
+            loadStoredNameAndAddress();
+        }
+
         if (isBluetoothPersistedStateOn()) {
             Log.i(TAG, "Startup: Bluetooth persisted state is ON.");
             mEnableExternal = true;
         }
 
-        // Caching is necessary to prevent caller requiring the READ_DEVICE_CONFIG permission
-        mUseNewAirplaneMode = mFeatureFlags.useNewAirplaneMode();
-        if (mUseNewAirplaneMode) {
-            mBluetoothAirplaneModeListener = null;
-        } else {
-            mBluetoothAirplaneModeListener =
-                    new BluetoothAirplaneModeListener(
-                            this, mLooper, mContext, mBluetoothNotificationManager, mFeatureFlags);
+        mDeviceConfigAllowAutoOn =
+                SystemProperties.getBoolean("bluetooth.server.automatic_turn_on", false);
+        Log.d(TAG, "AutoOnFeature property=" + mDeviceConfigAllowAutoOn);
+        if (mDeviceConfigAllowAutoOn) {
+            Counter.logIncrement("bluetooth.value_auto_on_supported");
         }
+    }
 
-        // Caching is necessary to prevent caller requiring the READ_DEVICE_CONFIG permission
-        mUseNewSatelliteMode = mFeatureFlags.useNewSatelliteMode();
-        if (!mUseNewSatelliteMode) {
-            // Only instantiate the legacy listener
-            // New implementation is instantiated during onBootPhase on correct thread
-            mBluetoothSatelliteModeListener =
-                    new BluetoothSatelliteModeListener(this, mLooper, mContext);
+    private Unit onBleScanDisabled() {
+        if (mState.oneOf(STATE_OFF, STATE_BLE_TURNING_OFF)) {
+            Log.i(TAG, "onBleScanDisabled: Nothing to do, Bluetooth is already turning off");
+            return Unit.INSTANCE;
         }
+        clearBleApps();
+
+        if (mState.oneOf(STATE_BLE_ON)) {
+            Log.i(TAG, "onBleScanDisabled: Shutting down BLE_ON mode");
+            bleOnToOff();
+        } else {
+            Log.i(TAG, "onBleScanDisabled: Bluetooth is not in BLE_ON, staying on");
+        }
+        return Unit.INSTANCE;
     }
 
     IBluetoothManager.Stub getBinder() {
         return mBinder;
     }
 
-    /** Returns true if airplane mode is currently on */
-    private boolean isAirplaneModeOn() {
-        if (mUseNewAirplaneMode) {
-            return AirplaneModeListener.isOn();
-        }
-        return mBluetoothAirplaneModeListener.isAirplaneModeOn();
-    }
-
     /** Returns true if satellite mode is turned on. */
     private boolean isSatelliteModeOn() {
-        if (mUseNewSatelliteMode) {
-            return SatelliteModeListener.isOn();
-        }
-        return mBluetoothSatelliteModeListener.isSatelliteModeOn();
+        return SatelliteModeListener.isOn();
     }
 
     /** Returns true if the Bluetooth saved state is "on" */
@@ -830,29 +728,15 @@ class BluetoothManagerService {
         return state == BLUETOOTH_ON_BLUETOOTH;
     }
 
-    /** Save the Bluetooth on/off state */
-    private void persistBluetoothSetting(int value) {
-        Log.i(TAG, "Persisting Bluetooth Setting: " + value);
-        // waive WRITE_SECURE_SETTINGS permission check
-        final long callingIdentity = Binder.clearCallingIdentity();
-        try {
-            Settings.Global.putInt(
-                    mContext.getContentResolver(), Settings.Global.BLUETOOTH_ON, value);
-        } finally {
-            Binder.restoreCallingIdentity(callingIdentity);
-        }
+    private void setBluetoothPersistedState(int state) {
+        BluetoothServerProxy.getInstance().setBluetoothPersistedState(mContentResolver, state);
     }
 
-    /**
-     * Returns true if the Bluetooth Adapter's name and address is locally cached
-     *
-     * @return
-     */
+    /** Returns true if the Bluetooth Adapter's name and address is locally cached */
     private boolean isNameAndAddressSet() {
         return mName != null && mAddress != null && mName.length() > 0 && mAddress.length() > 0;
     }
 
-    /** Retrieve the Bluetooth Adapter's name and address and save it in the local cache */
     private void loadStoredNameAndAddress() {
         if (BluetoothProperties.isAdapterAddressValidationEnabled().orElse(false)
                 && Settings.Secure.getInt(mContentResolver, Settings.Secure.BLUETOOTH_ADDR_VALID, 0)
@@ -869,22 +753,30 @@ class BluetoothManagerService {
                         .settingsSecureGetString(
                                 mContentResolver, Settings.Secure.BLUETOOTH_ADDRESS);
 
-        Log.d(TAG, "loadStoredNameAndAddress: Name=" + mName + ", Address=" + mAddress);
+        Log.d(TAG, "loadStoredNameAndAddress: Name=" + mName + ", Address=" + logAddress(mAddress));
+    }
+
+    private String logAddress(String address) {
+        if (address == null) {
+            return "[address is null]";
+        }
+        if (address.length() != 17) {
+            return "[address invalid]";
+        }
+        return "XX:XX:XX:XX:" + address.substring(address.length() - 5);
     }
 
     /**
      * Save the Bluetooth name and address in the persistent store. Only non-null values will be
      * saved.
-     *
-     * @param name
-     * @param address
      */
     private void storeNameAndAddress(String name, String address) {
+        final String logHeader = "storeNameAndAddress(" + name + ", " + logAddress(address) + "): ";
         if (name != null) {
             if (Settings.Secure.putString(mContentResolver, Settings.Secure.BLUETOOTH_NAME, name)) {
                 mName = name;
             } else {
-                Log.e(TAG, "Failed to store name=" + name + ". Name is still " + mName);
+                Log.e(TAG, logHeader + "Failed. Name is still " + mName);
             }
         }
 
@@ -893,35 +785,26 @@ class BluetoothManagerService {
                     mContentResolver, Settings.Secure.BLUETOOTH_ADDRESS, address)) {
                 mAddress = address;
             } else {
-                Log.e(TAG, "Failed to store address=" + address + ". Address is still " + mAddress);
+                Log.e(TAG, logHeader + "Failed. Address is still " + logAddress(mAddress));
             }
         }
 
         if ((mName != null) && (mAddress != null)) {
             Settings.Secure.putInt(mContentResolver, Settings.Secure.BLUETOOTH_ADDR_VALID, 1);
         }
-        Log.d(TAG, "storeNameAndAddress: Name=" + mName + ", Address=" + mAddress);
+        Log.d(TAG, logHeader + "Completed successfully");
     }
 
+    // Called from unsafe binder thread
     IBluetooth registerAdapter(IBluetoothManagerCallback callback) {
-        synchronized (mCallbacks) {
-            mCallbacks.register(callback);
-        }
-        return mAdapter != null ? mAdapter.getAdapterBinder() : null;
+        mCallbacks.register(callback);
+        // Copy to local variable to avoid race condition when checking for null
+        AdapterBinder adapter = mAdapter;
+        return adapter != null ? adapter.getAdapterBinder() : null;
     }
 
     void unregisterAdapter(IBluetoothManagerCallback callback) {
-        synchronized (mCallbacks) {
-            mCallbacks.unregister(callback);
-        }
-    }
-
-    void registerStateChangeCallback(IBluetoothStateChangeCallback callback) {
-        mHandler.obtainMessage(MESSAGE_REGISTER_STATE_CHANGE_CALLBACK, callback).sendToTarget();
-    }
-
-    void unregisterStateChangeCallback(IBluetoothStateChangeCallback callback) {
-        mHandler.obtainMessage(MESSAGE_UNREGISTER_STATE_CHANGE_CALLBACK, callback).sendToTarget();
+        mCallbacks.unregister(callback);
     }
 
     boolean isEnabled() {
@@ -935,15 +818,13 @@ class BluetoothManagerService {
      * @param userId is the foreground user id we are propagating to the Bluetooth process
      */
     private void propagateForegroundUserId(int userId) {
-        mAdapterLock.readLock().lock();
+        if (mAdapter == null) {
+            return;
+        }
         try {
-            if (mAdapter != null) {
-                mAdapter.setForegroundUserId(userId, mContext.getAttributionSource());
-            }
+            mAdapter.setForegroundUserId(userId, mContext.getAttributionSource());
         } catch (RemoteException e) {
             Log.e(TAG, "Unable to set foreground user id", e);
-        } finally {
-            mAdapterLock.readLock().unlock();
         }
     }
 
@@ -976,17 +857,24 @@ class BluetoothManagerService {
         }
     }
 
-    boolean isBleScanAlwaysAvailable() {
-        if (isAirplaneModeOn() && !mEnable) {
+    boolean isBleScanAvailable() {
+        if (AirplaneModeListener.isOn() && !mEnable) {
             return false;
+        }
+        if (Flags.respectBleScanSetting()) {
+            if (SatelliteModeListener.isOn()) {
+                return false;
+            }
+            return BleScanSettingListener.isScanAllowed();
         }
         try {
             return Settings.Global.getInt(
-                            mContentResolver, Settings.Global.BLE_SCAN_ALWAYS_AVAILABLE)
+                            mContentResolver, BleScanSettingListener.BLE_SCAN_ALWAYS_AVAILABLE)
                     != 0;
         } catch (SettingNotFoundException e) {
+            // The settings is considered as false by default.
+            return false;
         }
-        return false;
     }
 
     boolean isHearingAidProfileSupported() {
@@ -998,7 +886,7 @@ class BluetoothManagerService {
     }
 
     boolean isMediaProfileConnected() {
-        if (mAdapter == null || !mState.oneOf(STATE_ON)) {
+        if (!mState.oneOf(STATE_ON)) {
             return false;
         }
         return mAdapter.isMediaProfileConnected(mContext.getAttributionSource());
@@ -1007,50 +895,34 @@ class BluetoothManagerService {
     // Monitor change of BLE scan only mode settings.
     private void registerForBleScanModeChange() {
         ContentObserver contentObserver =
-                new ContentObserver(null) {
+                new ContentObserver(new Handler(mLooper)) {
                     @Override
                     public void onChange(boolean selfChange) {
-                        if (isBleScanAlwaysAvailable()) {
+                        if (isBleScanAvailable()) {
                             // Nothing to do
                             return;
                         }
                         // BLE scan is not available.
                         disableBleScanMode();
                         clearBleApps();
-                        mAdapterLock.readLock().lock();
-                        try {
-                            if (mAdapter != null) {
-                                addActiveLog(
-                                        BluetoothProtoEnums
-                                                .ENABLE_DISABLE_REASON_APPLICATION_REQUEST,
-                                        mContext.getPackageName(),
-                                        false);
-                                mAdapter.stopBle(mContext.getAttributionSource());
-                            }
-                        } catch (RemoteException | TimeoutException e) {
-                            Log.e(TAG, "error when disabling bluetooth", e);
-                        } finally {
-                            mAdapterLock.readLock().unlock();
+                        if (mState.oneOf(STATE_BLE_ON)) {
+                            ActiveLogs.add(ENABLE_DISABLE_REASON_APPLICATION_REQUEST, false);
+                            bleOnToOff();
                         }
                     }
                 };
 
         mContentResolver.registerContentObserver(
-                Settings.Global.getUriFor(Settings.Global.BLE_SCAN_ALWAYS_AVAILABLE),
+                Settings.Global.getUriFor(BleScanSettingListener.BLE_SCAN_ALWAYS_AVAILABLE),
                 false,
                 contentObserver);
     }
 
     // Disable ble scan only mode.
     private void disableBleScanMode() {
-        mAdapterLock.writeLock().lock();
-        try {
-            if (mAdapter != null && mState.oneOf(STATE_ON)) {
-                Log.d(TAG, "disableBleScanMode: Resetting the mEnable flag for clean disable");
-                mEnable = false;
-            }
-        } finally {
-            mAdapterLock.writeLock().unlock();
+        if (mState.oneOf(STATE_ON)) {
+            Log.d(TAG, "disableBleScanMode: Resetting the mEnable flag for clean disable");
+            mEnable = false;
         }
     }
 
@@ -1077,6 +949,11 @@ class BluetoothManagerService {
         return appCount;
     }
 
+    boolean enableBleFromBinder(String packageName, IBinder token) {
+        return postAndWait(() -> enableBle(packageName, token));
+    }
+
+    @VisibleForTesting
     boolean enableBle(String packageName, IBinder token) {
         Log.i(
                 TAG,
@@ -1085,8 +962,8 @@ class BluetoothManagerService {
                         + (" isBinding=" + isBinding())
                         + (" mState=" + mState));
 
-        if (isAirplaneModeOn()) {
-            Log.d(TAG, "enableBle: not enabling - Airplane mode is on");
+        if (AirplaneModeListener.isOn() && !mEnable) {
+            Log.d(TAG, "enableBle: not enabling - Airplane mode is ON on system");
             return false;
         }
 
@@ -1095,8 +972,11 @@ class BluetoothManagerService {
             return false;
         }
 
+        if (Flags.respectBleScanSetting() && !BleScanSettingListener.isScanAllowed()) {
+            Log.d(TAG, "enableBle: not enabling - Scan mode is not allowed.");
+            return false;
+        }
 
-        // TODO(b/262605980): enableBle/disableBle should be on handler thread
         updateBleAppCount(token, true, packageName);
 
         if (mState.oneOf(
@@ -1108,26 +988,25 @@ class BluetoothManagerService {
             Log.i(TAG, "enableBle: Bluetooth is already in state" + mState);
             return true;
         }
-        synchronized (mReceiver) {
-            // waive WRITE_SECURE_SETTINGS permission check
-            sendEnableMsg(
-                    false,
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_APPLICATION_REQUEST,
-                    packageName,
-                    true);
-        }
+        sendEnableMsg(false, ENABLE_DISABLE_REASON_APPLICATION_REQUEST, packageName, true);
         return true;
     }
 
-    boolean disableBle(AttributionSource source, String packageName, IBinder token) {
+    boolean disableBleFromBinder(String packageName, IBinder token) {
+        return postAndWait(() -> disableBle(packageName, token));
+    }
+
+    @VisibleForTesting
+    boolean disableBle(String packageName, IBinder token) {
         Log.i(
                 TAG,
-                ("disableBle(" + source + ", " + packageName + ", " + token + "):")
+                ("disableBle(" + packageName + ", " + token + "):")
                         + (" mAdapter=" + mAdapter)
                         + (" isBinding=" + isBinding())
                         + (" mState=" + mState));
 
-        if (isSatelliteModeOn()) {
+        // Remove this with flag, preventing a "disable" make no sense, even in satellite mode
+        if (!Flags.respectBleScanSetting() && isSatelliteModeOn()) {
             Log.d(TAG, "disableBle: not disabling - satellite mode is on.");
             return false;
         }
@@ -1136,7 +1015,6 @@ class BluetoothManagerService {
             Log.i(TAG, "disableBle: Already disabled");
             return false;
         }
-        // TODO(b/262605980): enableBle/disableBle should be on handler thread
         updateBleAppCount(token, false, packageName);
 
         if (mState.oneOf(STATE_BLE_ON) && !isBleAppPresent()) {
@@ -1144,11 +1022,8 @@ class BluetoothManagerService {
                 disableBleScanMode();
             }
             if (!mEnableExternal) {
-                addActiveLog(
-                        BluetoothProtoEnums.ENABLE_DISABLE_REASON_APPLICATION_REQUEST,
-                        packageName,
-                        false);
-                sendBrEdrDownCallback(source);
+                ActiveLogs.add(ENABLE_DISABLE_REASON_APPLICATION_REQUEST, false, packageName, true);
+                sendBrEdrDownCallback();
             }
         }
         return true;
@@ -1159,7 +1034,7 @@ class BluetoothManagerService {
         mBleApps.clear();
     }
 
-    boolean isBleAppPresent() {
+    private boolean isBleAppPresent() {
         Log.d(TAG, "isBleAppPresent(): Number of BLE app registered: " + mBleApps.size());
         return mBleApps.size() > 0;
     }
@@ -1168,34 +1043,26 @@ class BluetoothManagerService {
      * Will call startBrEdr() if bluetooth classic should be on and will call stopBle if bluetooth
      * BLE should be off
      */
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)
     private void continueFromBleOnState() {
-        mAdapterLock.readLock().lock();
-        try {
-            if (mAdapter == null) {
-                Log.e(TAG, "continueFromBleOnState: Adapter is null");
-                return;
-            }
-            if (!mEnableExternal && !isBleAppPresent()) {
-                // TODO(b/262605980): this code is unlikely to be trigger and will never be once
-                // enableBle & disableBle are executed on the handler
-                Log.i(TAG, "continueFromBleOnState: Disabled while enabling BLE, disable BLE now");
-                mEnable = false;
-                mAdapter.stopBle(mContext.getAttributionSource());
-                return;
-            }
-            if (isBluetoothPersistedStateOnBluetooth() || !isBleAppPresent()) {
-                Log.i(TAG, "continueFromBleOnState: Starting br edr");
-                // This triggers transition to STATE_ON
-                mAdapter.startBrEdr(mContext.getAttributionSource());
-                persistBluetoothSetting(BLUETOOTH_ON_BLUETOOTH);
-            } else {
-                Log.i(TAG, "continueFromBleOnState: Staying in BLE_ON");
-            }
-        } catch (RemoteException | TimeoutException e) {
-            Log.e(TAG, "Unable to call onServiceUp", e);
-        } finally {
-            mAdapterLock.readLock().unlock();
+        if (!mState.oneOf(STATE_BLE_ON)) {
+            Log.e(TAG, "continueFromBleOnState: Impossible transition from " + mState);
+            return;
+        }
+        if (!mEnableExternal && !isBleAppPresent()) {
+            // TODO(b/262605980): this code is unlikely to be trigger and will never be once
+            // enableBle & disableBle are executed on the handler
+            Log.i(TAG, "continueFromBleOnState: Disabled while enabling BLE, disable BLE now");
+            mEnable = false;
+            bleOnToOff();
+            return;
+        }
+        if (isBluetoothPersistedStateOnBluetooth() || !isBleAppPresent()) {
+            Log.i(TAG, "continueFromBleOnState: Starting br edr");
+            // This triggers transition to STATE_ON
+            bleOnToOn();
+            setBluetoothPersistedState(BLUETOOTH_ON_BLUETOOTH);
+        } else {
+            Log.i(TAG, "continueFromBleOnState: Staying in BLE_ON");
         }
     }
 
@@ -1203,50 +1070,60 @@ class BluetoothManagerService {
      * Inform BluetoothAdapter instances that BREDR part is down and turn off all service and stack
      * if no LE app needs it
      */
-    @RequiresPermission(
-            allOf = {
-                android.Manifest.permission.BLUETOOTH_CONNECT,
-                android.Manifest.permission.BLUETOOTH_PRIVILEGED,
-            })
-    private void sendBrEdrDownCallback(AttributionSource source) {
-        mAdapterLock.readLock().lock();
-        try {
-            if (mAdapter == null) {
-                Log.w(TAG, "sendBrEdrDownCallback: mAdapter is null");
-                return;
+    private void sendBrEdrDownCallback() {
+        if (mAdapter == null) {
+            Log.d(TAG, "sendBrEdrDownCallback: mAdapter is null");
+            return;
+        }
+        boolean scanIsAllowed =
+                !Flags.respectBleScanSetting() || BleScanSettingListener.isScanAllowed();
+        if (!AirplaneModeListener.isOn() && isBleAppPresent() && scanIsAllowed) {
+            // Need to stay at BLE ON. Disconnect all Gatt connections
+            Log.i(TAG, "sendBrEdrDownCallback: Staying in BLE_ON");
+            try {
+                mAdapter.unregAllGattClient(mContext.getAttributionSource());
+            } catch (RemoteException e) {
+                Log.e(TAG, "sendBrEdrDownCallback: failed to call unregAllGattClient()", e);
             }
-            if (isBleAppPresent()) {
-                // Need to stay at BLE ON. Disconnect all Gatt connections
-                Log.i(TAG, "sendBrEdrDownCallback: Staying in BLE_ON");
-                mAdapter.unregAllGattClient(source);
-            } else {
-                Log.i(TAG, "sendBrEdrDownCallback: Stopping ble");
-                mAdapter.stopBle(source);
-            }
-        } catch (RemoteException | TimeoutException e) {
-            Log.e(TAG, "sendBrEdrDownCallback: Call to mAdapter failed.", e);
-        } finally {
-            mAdapterLock.readLock().unlock();
+        } else {
+            Log.i(TAG, "sendBrEdrDownCallback: Stopping ble");
+            bleOnToOff();
         }
     }
 
+    private Unit enableFromAutoOn() {
+        if (isBluetoothDisallowed()) {
+            Log.d(TAG, "Bluetooth is not allowed, preventing AutoOn");
+            return Unit.INSTANCE;
+        }
+        Counter.logIncrement("bluetooth.value_auto_on_triggered");
+        sendToggleNotification("auto_on_bt_enabled_notification");
+        enable("BluetoothSystemServer/AutoOn");
+        return Unit.INSTANCE;
+    }
+
+    boolean enableNoAutoConnectFromBinder(String packageName) {
+        return postAndWait(() -> enableNoAutoConnect(packageName));
+    }
+
+    @VisibleForTesting
     boolean enableNoAutoConnect(String packageName) {
         if (isSatelliteModeOn()) {
             Log.d(TAG, "enableNoAutoConnect(" + packageName + "): Blocked by satellite mode");
             return false;
         }
 
-        synchronized (mReceiver) {
-            mQuietEnableExternal = true;
-            mEnableExternal = true;
-            sendEnableMsg(
-                    true,
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_APPLICATION_REQUEST,
-                    packageName);
-        }
+        mQuietEnableExternal = true;
+        mEnableExternal = true;
+        sendEnableMsg(true, ENABLE_DISABLE_REASON_APPLICATION_REQUEST, packageName);
         return true;
     }
 
+    boolean enableFromBinder(String packageName) {
+        return postAndWait(() -> enable(packageName));
+    }
+
+    @VisibleForTesting
     boolean enable(String packageName) {
         Log.d(
                 TAG,
@@ -1260,29 +1137,19 @@ class BluetoothManagerService {
             return false;
         }
 
-        synchronized (mReceiver) {
-            mQuietEnableExternal = false;
-            mEnableExternal = true;
-            if (!mUseNewAirplaneMode) {
-                mBluetoothAirplaneModeListener.notifyUserToggledBluetooth(true);
-            } else {
-                // TODO(b/288450479): Remove clearCallingIdentity when threading is fixed
-                final long callingIdentity = Binder.clearCallingIdentity();
-                try {
-                    AirplaneModeListener.notifyUserToggledBluetooth(
-                            mContentResolver, mCurrentUserContext, true);
-                } finally {
-                    Binder.restoreCallingIdentity(callingIdentity);
-                }
-            }
-            sendEnableMsg(
-                    false,
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_APPLICATION_REQUEST,
-                    packageName);
-        }
+        mQuietEnableExternal = false;
+        mEnableExternal = true;
+        AirplaneModeListener.notifyUserToggledBluetooth(
+                mContentResolver, mCurrentUserContext, true);
+        sendEnableMsg(false, ENABLE_DISABLE_REASON_APPLICATION_REQUEST, packageName);
         return true;
     }
 
+    boolean disableFromBinder(String packageName, boolean persist) {
+        return postAndWait(() -> disable(packageName, persist));
+    }
+
+    @VisibleForTesting
     boolean disable(String packageName, boolean persist) {
         Log.d(
                 TAG,
@@ -1291,128 +1158,77 @@ class BluetoothManagerService {
                         + (" isBinding=" + isBinding())
                         + (" mState=" + mState));
 
-        synchronized (mReceiver) {
-            if (!mUseNewAirplaneMode) {
-                mBluetoothAirplaneModeListener.notifyUserToggledBluetooth(false);
-            } else {
-                // TODO(b/288450479): Remove clearCallingIdentity when threading is fixed
-                final long callingIdentity = Binder.clearCallingIdentity();
-                try {
-                    AirplaneModeListener.notifyUserToggledBluetooth(
-                            mContentResolver, mCurrentUserContext, false);
-                } finally {
-                    Binder.restoreCallingIdentity(callingIdentity);
-                }
-            }
+        AirplaneModeListener.notifyUserToggledBluetooth(
+                mContentResolver, mCurrentUserContext, false);
 
-            if (persist) {
-                persistBluetoothSetting(BLUETOOTH_OFF);
-            }
-            mEnableExternal = false;
-            sendDisableMsg(
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_APPLICATION_REQUEST, packageName);
+        if (persist) {
+            setBluetoothPersistedState(BLUETOOTH_OFF);
         }
+        mEnableExternal = false;
+        sendDisableMsg(ENABLE_DISABLE_REASON_APPLICATION_REQUEST, packageName);
         return true;
     }
 
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_PRIVILEGED)
     void unbindAndFinish() {
         Log.d(TAG, "unbindAndFinish(): mAdapter=" + mAdapter + " isBinding=" + isBinding());
 
-        mAdapterLock.writeLock().lock();
-        try {
-            mHandler.removeMessages(MESSAGE_BLUETOOTH_STATE_CHANGE);
-            mHandler.removeMessages(MESSAGE_BIND_PROFILE_SERVICE);
-            if (mAdapter != null) {
-                // Unregister callback object
-                try {
-                    mAdapter.unregisterCallback(
-                            mBluetoothCallback, mContext.getAttributionSource());
-                } catch (RemoteException | TimeoutException e) {
-                    Log.e(TAG, "Unable to unregister BluetoothCallback", e);
-                }
-                mAdapter = null;
-                mContext.unbindService(mConnection);
-                mHandler.removeMessages(MESSAGE_TIMEOUT_BIND);
-            }
-        } finally {
-            mAdapterLock.writeLock().unlock();
-        }
-    }
-
-    boolean bindBluetoothProfileService(
-            int bluetoothProfile, IBluetoothProfileServiceConnection proxy) {
-        String header = "bindBluetoothProfileService(" + bluetoothProfile + ", " + proxy + "):";
-
-        if (!mState.oneOf(BluetoothAdapter.STATE_ON)) {
-            Log.d(TAG, header + " Invalid state, Bluetooth is disabled");
-            return false;
-        }
-        synchronized (mProfileServices) {
-            if (!mSupportedProfileList.contains(bluetoothProfile)) {
-                Log.w(TAG, header + " Profile is not supported");
-                return false;
-            }
-            ProfileServiceConnections psc = mProfileServices.get(bluetoothProfile);
-            if (psc == null) {
-                Log.d(TAG, header + " Creating new ProfileServiceConnections");
-                psc =
-                        new ProfileServiceConnections(
-                                new Intent(PROFILE_TO_SERVICE_NAME.get(bluetoothProfile)));
-                if (!psc.bindService(DEFAULT_REBIND_COUNT)) {
-                    return false;
-                }
-
-                mProfileServices.put(bluetoothProfile, psc);
-            }
-        }
-
-        // Introducing a delay to give the client app time to prepare
-        Message addProxyMsg = mHandler.obtainMessage(MESSAGE_ADD_PROXY_DELAYED);
-        addProxyMsg.arg1 = bluetoothProfile;
-        addProxyMsg.obj = proxy;
-        mHandler.sendMessageDelayed(addProxyMsg, ADD_PROXY_DELAY_MS);
-        return true;
-    }
-
-    void unbindBluetoothProfileService(
-            int bluetoothProfile, IBluetoothProfileServiceConnection proxy) {
-        if (mUnbindingAll) {
+        mHandler.removeMessages(MESSAGE_BLUETOOTH_STATE_CHANGE);
+        if (mAdapter == null) {
+            // mAdapter can be null when Bluetooth crashed and sent SERVICE_DISCONNECTED
             return;
         }
-        synchronized (mProfileServices) {
-            ProfileServiceConnections psc = mProfileServices.get(bluetoothProfile);
-            if (psc == null) {
-                return;
-            }
-            psc.removeProxy(proxy);
-            if (psc.isEmpty()) {
-                // All proxies are disconnected, unbind with the service.
-                try {
-                    mContext.unbindService(psc);
-                } catch (IllegalArgumentException e) {
-                    Log.e(TAG, "Unable to unbind service with intent: " + psc.mIntent, e);
-                }
-                mProfileServices.remove(bluetoothProfile);
-            }
-        }
-    }
+        long currentTimeMs = System.currentTimeMillis();
 
-    private void unbindAllBluetoothProfileServices() {
-        mUnbindingAll = true;
-        synchronized (mProfileServices) {
-            for (Integer i : mProfileServices.keySet()) {
-                ProfileServiceConnections psc = mProfileServices.get(i);
-                try {
-                    mContext.unbindService(psc);
-                } catch (IllegalArgumentException e) {
-                    Log.e(TAG, "Unable to unbind service with intent: " + psc.mIntent, e);
-                }
-                psc.removeAllProxies();
-            }
-            mProfileServices.clear();
+        try {
+            mAdapter.unregisterCallback(mBluetoothCallback, mContext.getAttributionSource());
+        } catch (RemoteException e) {
+            Log.e(TAG, "unbindAndFinish(): Unable to unregister BluetoothCallback", e);
         }
-        mUnbindingAll = false;
+
+        CompletableFuture<Void> binderDead = new CompletableFuture<>();
+        try {
+            mAdapter.getAdapterBinder()
+                    .asBinder()
+                    .linkToDeath(
+                            () -> {
+                                Log.i(TAG, "Successfully received Bluetooth death");
+                                binderDead.complete(null);
+                            },
+                            0);
+        } catch (RemoteException e) {
+            Log.e(TAG, "unbindAndFinish(): Failed to linkToDeath", e);
+            binderDead.complete(null);
+        }
+
+        // Unbind first to avoid receiving unwanted "onServiceDisconnected"
+        mContext.unbindService(mConnection);
+
+        try {
+            // Force kill Bluetooth to make sure its process is not reused.
+            // Note: In a perfect world, we should be able to re-init the same process.
+            // Unfortunately, this requires an heavy rework of the Bluetooth app
+            // TODO: b/339501753 - Properly stop Bluetooth without killing it
+            mAdapter.killBluetoothProcess();
+
+            binderDead.get(2_000, TimeUnit.MILLISECONDS);
+        } catch (android.os.DeadObjectException e) {
+            // Reduce exception to info and skip waiting (Bluetooth is dead as wanted)
+            Log.i(TAG, "unbindAndFinish(): Bluetooth already dead 💀");
+        } catch (RemoteException e) {
+            Log.e(TAG, "unbindAndFinish(): Unable to call killBluetoothProcess", e);
+        } catch (TimeoutException | InterruptedException | ExecutionException e) {
+            Log.e(TAG, "unbindAndFinish(): Bluetooth death not received after > 2000ms", e);
+        }
+
+        long timeSpentForShutdown = System.currentTimeMillis() - currentTimeMs;
+        mShutdownLatencyHistogram.logSample((float) timeSpentForShutdown);
+
+        // TODO: b/356931756 - Remove sleep
+        Log.d(TAG, "Force sleep 100 ms for propagating Bluetooth app death");
+        SystemClock.sleep(100); // required to let the ActivityManager be notified of BT death
+
+        mAdapter = null; // Don't call resetAdapter as we already call unbindService
+        mHandler.removeMessages(MESSAGE_TIMEOUT_BIND);
     }
 
     /**
@@ -1425,26 +1241,21 @@ class BluetoothManagerService {
 
     @VisibleForTesting
     void initialize(UserHandle userHandle) {
-        if (mUseNewAirplaneMode) {
-            mCurrentUserContext =
-                    requireNonNull(
-                            mContext.createContextAsUser(userHandle, 0),
-                            "Current User Context cannot be null");
-            AirplaneModeListener.initialize(
-                    mLooper,
-                    mContentResolver,
-                    mState,
-                    this::onAirplaneModeChanged,
-                    this::sendAirplaneModeNotification,
-                    this::isMediaProfileConnected,
-                    this::getCurrentUserContext,
-                    TimeSource.Monotonic.INSTANCE);
-        }
+        mCurrentUserContext =
+                requireNonNull(
+                        mContext.createContextAsUser(userHandle, 0),
+                        "Current User Context cannot be null");
+        AirplaneModeListener.initialize(
+                mLooper,
+                mContentResolver,
+                mState,
+                this::onAirplaneModeChanged,
+                this::sendToggleNotification,
+                this::isMediaProfileConnected,
+                this::getCurrentUserContext,
+                TimeSource.Monotonic.INSTANCE);
 
-        if (mUseNewSatelliteMode) {
-            SatelliteModeListener.initialize(
-                    mLooper, mContentResolver, this::onSatelliteModeChanged);
-        }
+        SatelliteModeListener.initialize(mLooper, mContentResolver, this::onSatelliteModeChanged);
     }
 
     private void internalHandleOnBootPhase(UserHandle userHandle) {
@@ -1459,26 +1270,13 @@ class BluetoothManagerService {
         final boolean isSafeMode = mContext.getPackageManager().isSafeMode();
         if (mEnableExternal && isBluetoothPersistedStateOnBluetooth() && !isSafeMode) {
             Log.i(TAG, "internalHandleOnBootPhase: Auto-enabling Bluetooth.");
-            sendEnableMsg(
-                    mQuietEnableExternal,
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_SYSTEM_BOOT,
-                    mContext.getPackageName());
-        } else if (!isNameAndAddressSet()) {
+            sendEnableMsg(mQuietEnableExternal, ENABLE_DISABLE_REASON_SYSTEM_BOOT);
+        } else if (!Flags.removeOneTimeGetNameAndAddress() && !isNameAndAddressSet()) {
             Log.i(TAG, "internalHandleOnBootPhase: Getting adapter name and address");
             mHandler.sendEmptyMessage(MESSAGE_GET_NAME_AND_ADDRESS);
+        } else {
+            autoOnSetupTimer();
         }
-
-        if (!mUseNewAirplaneMode) {
-            mBluetoothAirplaneModeListener.start(new BluetoothModeChangeHelper(mContext));
-            setApmEnhancementState();
-        }
-    }
-
-    /** set APM enhancement feature state */
-    @VisibleForTesting
-    void setApmEnhancementState() {
-        Settings.Global.putInt(
-                mContext.getContentResolver(), APM_ENHANCEMENT, DEFAULT_APM_ENHANCEMENT_STATE);
     }
 
     /** Called when switching to a different foreground user. */
@@ -1493,222 +1291,58 @@ class BluetoothManagerService {
         mHandler.obtainMessage(MESSAGE_USER_UNLOCKED, userHandle).sendToTarget();
     }
 
-    /**
-     * This class manages the clients connected to a given ProfileService and maintains the
-     * connection with that service.
-     */
-    private final class ProfileServiceConnections
-            implements ServiceConnection, IBinder.DeathRecipient {
-        final RemoteCallbackList<IBluetoothProfileServiceConnection> mProxies =
-                new RemoteCallbackList<IBluetoothProfileServiceConnection>();
-        IBinder mService;
-        ComponentName mClassName;
-        Intent mIntent;
+    @FunctionalInterface
+    public interface RemoteExceptionConsumer<T> {
+        void accept(T t) throws RemoteException;
+    }
 
-        ProfileServiceConnections(Intent intent) {
-            mService = null;
-            mClassName = null;
-            mIntent = intent;
-        }
-
-        private boolean bindService(int rebindCount) {
-            if (!mState.oneOf(STATE_ON)) {
-                Log.e(TAG, "bindService: Invalid state, Bluetooth is disabled");
-                return false;
-            }
-
-            if (mIntent != null
-                    && mService == null
-                    && doBind(mIntent, this, 0, USER_HANDLE_CURRENT_OR_SELF)) {
-                Message msg = mHandler.obtainMessage(MESSAGE_BIND_PROFILE_SERVICE, this);
-                msg.arg1 = rebindCount;
-                mHandler.sendMessageDelayed(msg, TIMEOUT_BIND_MS);
-                return true;
-            }
-            Log.w(TAG, "bindService: Unable to bind. intent=" + mIntent);
-            return false;
-        }
-
-        private void addProxy(IBluetoothProfileServiceConnection proxy) {
-            mProxies.register(proxy);
-            if (mService != null) {
-                try {
-                    proxy.onServiceConnected(mClassName, mService);
-                } catch (RemoteException e) {
-                    Log.e(TAG, "Unable to connect to proxy", e);
-                }
-            } else {
-                if (!mHandler.hasMessages(MESSAGE_BIND_PROFILE_SERVICE, this)) {
-                    Message msg = mHandler.obtainMessage(MESSAGE_BIND_PROFILE_SERVICE, this);
-                    msg.arg1 = DEFAULT_REBIND_COUNT;
-                    mHandler.sendMessage(msg);
-                }
-            }
-        }
-
-        private void removeProxy(IBluetoothProfileServiceConnection proxy) {
-            if (proxy == null) {
-                Log.w(TAG, "removeProxy: null proxy for " + mIntent);
-                return;
-            }
-            if (mProxies.unregister(proxy)) {
-                try {
-                    proxy.onServiceDisconnected(mClassName);
-                } catch (RemoteException e) {
-                    Log.e(TAG, "Unable to disconnect proxy", e);
-                }
-            }
-        }
-
-        private void removeAllProxies() {
-            onServiceDisconnected(mClassName);
-            mProxies.kill();
-        }
-
-        private boolean isEmpty() {
-            return mProxies.getRegisteredCallbackCount() == 0;
-        }
-
-        @Override
-        public void onServiceConnected(ComponentName className, IBinder service) {
-            // remove timeout message
-            mHandler.removeMessages(MESSAGE_BIND_PROFILE_SERVICE, this);
-            mService = service;
-            mClassName = className;
+    private void broadcastToAdapters(
+            String logAction, RemoteExceptionConsumer<IBluetoothManagerCallback> action) {
+        final int itemCount = mCallbacks.beginBroadcast();
+        Log.d(TAG, "Broadcasting " + logAction + "() to " + itemCount + " receivers.");
+        for (int i = 0; i < itemCount; i++) {
             try {
-                mService.linkToDeath(this, 0);
+                action.accept(mCallbacks.getBroadcastItem(i));
             } catch (RemoteException e) {
-                Log.e(TAG, "Unable to linkToDeath", e);
-            }
-
-            synchronized (mProxies) {
-                final int n = mProxies.beginBroadcast();
-                try {
-                    for (int i = 0; i < n; i++) {
-                        try {
-                            mProxies.getBroadcastItem(i).onServiceConnected(className, service);
-                        } catch (RemoteException e) {
-                            Log.e(TAG, "Unable to connect to proxy", e);
-                        }
-                    }
-                } finally {
-                    mProxies.finishBroadcast();
-                }
+                Log.e(TAG, "RemoteException while calling " + logAction + "()#" + i, e);
             }
         }
-
-        @Override
-        public void onServiceDisconnected(ComponentName className) {
-            if (mService == null) {
-                return;
-            }
-            try {
-                mService.unlinkToDeath(this, 0);
-            } catch (NoSuchElementException e) {
-                Log.e(TAG, "error unlinking to death", e);
-            }
-            mService = null;
-            mClassName = null;
-
-            synchronized (mProxies) {
-                final int n = mProxies.beginBroadcast();
-                try {
-                    for (int i = 0; i < n; i++) {
-                        try {
-                            mProxies.getBroadcastItem(i).onServiceDisconnected(className);
-                        } catch (RemoteException e) {
-                            Log.e(TAG, "Unable to disconnect from proxy #" + i, e);
-                        }
-                    }
-                } finally {
-                    mProxies.finishBroadcast();
-                }
-            }
-        }
-
-        @Override
-        public void binderDied() {
-            Log.w(TAG, "binderDied(): profile=" + mClassName);
-            onServiceDisconnected(mClassName);
-            // Trigger rebind
-            Message msg = mHandler.obtainMessage(MESSAGE_BIND_PROFILE_SERVICE, this);
-            mHandler.sendMessageDelayed(msg, TIMEOUT_BIND_MS);
-        }
+        mCallbacks.finishBroadcast();
     }
 
-    private void sendBluetoothStateCallback(boolean isUp) {
-        synchronized (mStateChangeCallbacks) {
-            try {
-                int n = mStateChangeCallbacks.beginBroadcast();
-                Log.d(TAG, "sendBluetoothStateCallback(" + isUp + "): to " + n + " receivers");
-                for (int i = 0; i < n; i++) {
-                    try {
-                        mStateChangeCallbacks.getBroadcastItem(i).onBluetoothStateChange(isUp);
-                    } catch (RemoteException e) {
-                        Log.e(TAG, "Unable to call onBluetoothStateChange() on callback #" + i, e);
-                    }
-                }
-            } finally {
-                mStateChangeCallbacks.finishBroadcast();
-            }
-        }
+    private void sendBluetoothOnCallback() {
+        broadcastToAdapters("sendBluetoothOnCallback", IBluetoothManagerCallback::onBluetoothOn);
     }
 
-    /** Inform BluetoothAdapter instances that Adapter service is up */
+    private void sendBluetoothOffCallback() {
+        broadcastToAdapters("sendBluetoothOffCallback", IBluetoothManagerCallback::onBluetoothOff);
+    }
+
     private void sendBluetoothServiceUpCallback() {
-        synchronized (mCallbacks) {
-            mAdapterLock.readLock().lock();
-            try {
-                int n = mCallbacks.beginBroadcast();
-                Log.d(TAG, "sendBluetoothServiceUpCallback(): to " + n + " receivers");
-                for (int i = 0; i < n; i++) {
-                    try {
-                        mCallbacks
-                                .getBroadcastItem(i)
-                                .onBluetoothServiceUp(mAdapter.getAdapterBinder());
-                    } catch (RemoteException e) {
-                        Log.e(TAG, "Unable to call onBluetoothServiceUp() on callback #" + i, e);
-                    }
-                }
-            } finally {
-                mCallbacks.finishBroadcast();
-                mAdapterLock.readLock().unlock();
-            }
-        }
+        broadcastToAdapters(
+                "sendBluetoothServiceUpCallback",
+                (item) -> item.onBluetoothServiceUp(mAdapter.getAdapterBinder().asBinder()));
     }
 
-    /** Inform BluetoothAdapter instances that Adapter service is down */
     private void sendBluetoothServiceDownCallback() {
-        synchronized (mCallbacks) {
-            try {
-                int n = mCallbacks.beginBroadcast();
-                Log.d(TAG, "sendBluetoothServiceDownCallback(): to " + n + " receivers");
-                for (int i = 0; i < n; i++) {
-                    try {
-                        mCallbacks.getBroadcastItem(i).onBluetoothServiceDown();
-                    } catch (RemoteException e) {
-                        Log.e(TAG, "Unable to call onBluetoothServiceDown() on callback #" + i, e);
-                    }
-                }
-            } finally {
-                mCallbacks.finishBroadcast();
-            }
-        }
+        broadcastToAdapters(
+                "sendBluetoothServiceDownCallback",
+                IBluetoothManagerCallback::onBluetoothServiceDown);
     }
 
-    String getAddress(AttributionSource source) {
-        mAdapterLock.readLock().lock();
-        try {
-            if (mAdapter != null) {
-                return mAdapter.getAddress(source);
+    // Called from unsafe binder thread
+    String getAddress() {
+        if (Flags.getNameAndAddressAsCallback()) {
+            return mAddress;
+        }
+        // Copy to local variable to avoid race condition when checking for null
+        AdapterBinder adapter = mAdapter;
+        if (adapter != null) {
+            try {
+                return adapter.getAddress(mContext.getAttributionSource());
+            } catch (RemoteException e) {
+                Log.e(TAG, "getAddress(): Returning cached address", e);
             }
-        } catch (RemoteException | TimeoutException e) {
-            Log.e(
-                    TAG,
-                    "getAddress(): Unable to retrieve address remotely. Returning cached address",
-                    e);
-        } finally {
-            mAdapterLock.readLock().unlock();
         }
 
         // mAddress is accessed from outside.
@@ -1717,16 +1351,19 @@ class BluetoothManagerService {
         return mAddress;
     }
 
-    String getName(AttributionSource source) {
-        mAdapterLock.readLock().lock();
-        try {
-            if (mAdapter != null) {
-                return mAdapter.getName(source);
+    // Called from unsafe binder thread
+    String getName() {
+        if (Flags.getNameAndAddressAsCallback()) {
+            return mName;
+        }
+        // Copy to local variable to avoid race condition when checking for null
+        AdapterBinder adapter = mAdapter;
+        if (adapter != null) {
+            try {
+                return adapter.getName(mContext.getAttributionSource());
+            } catch (RemoteException e) {
+                Log.e(TAG, "getName(): Returning cached name", e);
             }
-        } catch (RemoteException | TimeoutException e) {
-            Log.e(TAG, "getName(): Unable to retrieve name remotely. Returning cached name", e);
-        } finally {
-            mAdapterLock.readLock().unlock();
         }
 
         // mName is accessed from outside.
@@ -1760,12 +1397,13 @@ class BluetoothManagerService {
     }
 
     private BluetoothServiceConnection mConnection = new BluetoothServiceConnection();
+    private int mWaitForEnableRetry;
+    private int mWaitForDisableRetry;
 
     @VisibleForTesting
     class BluetoothHandler extends Handler {
+        // TODO: b/368120237 delete mGetNameAddressOnly
         boolean mGetNameAddressOnly = false;
-        private int mWaitForEnableRetry;
-        private int mWaitForDisableRetry;
 
         BluetoothHandler(Looper looper) {
             super(looper);
@@ -1775,142 +1413,49 @@ class BluetoothManagerService {
         public void handleMessage(Message msg) {
             switch (msg.what) {
                 case MESSAGE_GET_NAME_AND_ADDRESS:
+                    if (Flags.removeOneTimeGetNameAndAddress()) {
+                        Log.e(TAG, "MESSAGE_GET_NAME_AND_ADDRESS is not supported anymore");
+                        break;
+                    }
                     Log.d(TAG, "MESSAGE_GET_NAME_AND_ADDRESS");
-                    mAdapterLock.writeLock().lock();
-                    try {
-                        if (mAdapter == null && !isBinding()) {
-                            Log.d(TAG, "Binding to service to get name and address");
-                            mGetNameAddressOnly = true;
-                            mHandler.sendEmptyMessageDelayed(MESSAGE_TIMEOUT_BIND, TIMEOUT_BIND_MS);
-                            Intent i = new Intent(IBluetooth.class.getName());
-                            if (!doBind(
-                                    i,
-                                    mConnection,
-                                    Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT,
-                                    UserHandle.CURRENT)) {
-                                mHandler.removeMessages(MESSAGE_TIMEOUT_BIND);
-                            }
-                        } else if (mAdapter != null) {
+                    if (mAdapter == null && !isBinding()) {
+                        Log.d(TAG, "Binding to service to get name and address");
+                        mGetNameAddressOnly = true;
+                        bindToAdapter();
+                    } else if (mAdapter != null) {
+                        if (!Flags.getNameAndAddressAsCallback()) {
                             try {
                                 storeNameAndAddress(
                                         mAdapter.getName(mContext.getAttributionSource()),
                                         mAdapter.getAddress(mContext.getAttributionSource()));
-                            } catch (RemoteException | TimeoutException e) {
-                                Log.e(TAG, "Unable to grab names", e);
+                            } catch (RemoteException e) {
+                                Log.e(TAG, "Unable to grab name or address", e);
                             }
-                            if (mGetNameAddressOnly && !mEnable) {
-                                unbindAndFinish();
-                            }
-                            mGetNameAddressOnly = false;
                         }
-                    } finally {
-                        mAdapterLock.writeLock().unlock();
+                        if (mGetNameAddressOnly && !mEnable) {
+                            unbindAndFinish();
+                        }
+                        mGetNameAddressOnly = false;
                     }
                     break;
 
                 case MESSAGE_ENABLE:
                     int quietEnable = msg.arg1;
                     int isBle = msg.arg2;
-                    if (mShutdownInProgress) {
-                        Log.d(TAG, "Skip Bluetooth Enable in device shutdown process");
-                        break;
-                    }
 
-                    Log.d(TAG, "MESSAGE_ENABLE(" + quietEnable + "): mAdapter=" + mAdapter);
+                    Log.d(
+                            TAG,
+                            ("MESSAGE_ENABLE(quietEnable=" + quietEnable + ", isBle=" + isBle + ")")
+                                    + (": mAdapter=" + mAdapter));
 
-                    if (mHandler.hasMessages(MESSAGE_HANDLE_DISABLE_DELAYED)
-                            || mHandler.hasMessages(MESSAGE_HANDLE_ENABLE_DELAYED)) {
-                        // We are handling enable or disable right now, wait for it.
-                        mHandler.sendMessageDelayed(
-                                mHandler.obtainMessage(MESSAGE_ENABLE, quietEnable, isBle),
-                                ENABLE_DISABLE_DELAY_MS);
-                        break;
-                    }
+                    handleEnableMessage(quietEnable, isBle);
 
-                    mHandler.removeMessages(MESSAGE_RESTART_BLUETOOTH_SERVICE);
-                    mEnable = true;
-
-                    if (isBle == 0) {
-                        persistBluetoothSetting(BLUETOOTH_ON_BLUETOOTH);
-                    }
-
-                    // Use service interface to get the exact state
-                    mAdapterLock.readLock().lock();
-                    try {
-                        if (mAdapter != null) {
-                            boolean isHandled = true;
-                            switch (mState.get()) {
-                                case STATE_BLE_ON:
-                                    if (isBle == 1) {
-                                        Log.i(TAG, "Already at BLE_ON State");
-                                    } else {
-                                        Log.w(TAG, "BT Enable in BLE_ON State, going to ON");
-                                        mAdapter.startBrEdr(mContext.getAttributionSource());
-                                    }
-                                    break;
-                                case STATE_BLE_TURNING_ON:
-                                case STATE_TURNING_ON:
-                                case STATE_ON:
-                                    Log.i(TAG, "MESSAGE_ENABLE: already enabled");
-                                    break;
-                                default:
-                                    isHandled = false;
-                                    break;
-                            }
-                            if (isHandled) break;
-                        }
-                    } catch (RemoteException | TimeoutException e) {
-                        Log.e(TAG, "", e);
-                    } finally {
-                        mAdapterLock.readLock().unlock();
-                    }
-
-                    mQuietEnable = (quietEnable == 1);
-                    if (mAdapter == null) {
-                        handleEnable(mQuietEnable);
-                    } else {
-                        //
-                        // We need to wait until transitioned to STATE_OFF and
-                        // the previous Bluetooth process has exited. The
-                        // waiting period has three components:
-                        // (a) Wait until the local state is STATE_OFF. This
-                        //     is accomplished by sending delay a message
-                        //     MESSAGE_HANDLE_ENABLE_DELAYED
-                        // (b) Wait until the STATE_OFF state is updated to
-                        //     all components.
-                        // (c) Wait until the Bluetooth process exits, and
-                        //     ActivityManager detects it.
-                        // The waiting for (b) and (c) is accomplished by
-                        // delaying the MESSAGE_RESTART_BLUETOOTH_SERVICE
-                        // message. The delay time is backed off if Bluetooth
-                        // continuously failed to turn on itself.
-                        //
-                        mWaitForEnableRetry = 0;
-                        mHandler.sendEmptyMessageDelayed(
-                                MESSAGE_HANDLE_ENABLE_DELAYED, ENABLE_DISABLE_DELAY_MS);
-                    }
                     break;
 
                 case MESSAGE_DISABLE:
                     Log.d(TAG, "MESSAGE_DISABLE: mAdapter=" + mAdapter);
-                    if (mHandler.hasMessages(MESSAGE_HANDLE_DISABLE_DELAYED)
-                            || isBinding()
-                            || mHandler.hasMessages(MESSAGE_HANDLE_ENABLE_DELAYED)) {
-                        // We are handling enable or disable right now, wait for it.
-                        mHandler.sendEmptyMessageDelayed(MESSAGE_DISABLE, ENABLE_DISABLE_DELAY_MS);
-                        break;
-                    }
 
-                    mHandler.removeMessages(MESSAGE_RESTART_BLUETOOTH_SERVICE);
-
-                    if (mEnable && mAdapter != null) {
-                        mWaitForDisableRetry = 0;
-                        mHandler.sendEmptyMessageDelayed(
-                                MESSAGE_HANDLE_DISABLE_DELAYED, ENABLE_DISABLE_DELAY_MS);
-                    } else {
-                        mEnable = false;
-                        handleDisable();
-                    }
+                    handleDisableMessage();
                     break;
 
                 case MESSAGE_HANDLE_ENABLE_DELAYED:
@@ -1952,7 +1497,7 @@ class BluetoothManagerService {
                         // should move forward to the next step.
                         mWaitForDisableRetry = 0;
                         mEnable = false;
-                        handleDisable();
+                        onToBleOn();
                         // Wait for state exiting STATE_ON
                         Message disableDelayedMsg =
                                 mHandler.obtainMessage(MESSAGE_HANDLE_DISABLE_DELAYED, 1, 0);
@@ -1978,145 +1523,61 @@ class BluetoothManagerService {
                     }
                     break;
 
-                case MESSAGE_RESTORE_USER_SETTING:
-                    if ((msg.arg1 == RESTORE_SETTING_TO_OFF) && mEnable) {
-                        Log.d(TAG, "MESSAGE_RESTORE_USER_SETTING: set Bluetooth state to disabled");
-                        persistBluetoothSetting(BLUETOOTH_OFF);
-                        mEnableExternal = false;
-                        sendDisableMsg(
-                                BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTORE_USER_SETTING,
-                                mContext.getPackageName());
-                    } else if ((msg.arg1 == RESTORE_SETTING_TO_ON) && !mEnable) {
-                        Log.d(TAG, "MESSAGE_RESTORE_USER_SETTING: set Bluetooth state to enabled");
-                        mQuietEnableExternal = false;
-                        mEnableExternal = true;
-                        sendEnableMsg(
-                                false,
-                                BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTORE_USER_SETTING,
-                                mContext.getPackageName());
-                    } else {
-                        Log.w(
-                                TAG,
-                                "MESSAGE_RESTORE_USER_SETTING: Unhandled."
-                                        + (" mEnable=" + mEnable)
-                                        + (" msg.arg1=" + msg.arg1));
-                    }
-                    break;
-
-                case MESSAGE_REGISTER_STATE_CHANGE_CALLBACK:
-                    IBluetoothStateChangeCallback regCallback =
-                            (IBluetoothStateChangeCallback) msg.obj;
-                    if (mState.oneOf(STATE_ON)) {
-                        try {
-                            regCallback.onBluetoothStateChange(true);
-                        } catch (RemoteException e) {
-                            Log.e(TAG, "REGISTER_STATE_CHANGE_CALLBACK: callback failed", e);
-                            break;
-                        }
-                    }
-                    mStateChangeCallbacks.register(regCallback);
-                    break;
-
-                case MESSAGE_UNREGISTER_STATE_CHANGE_CALLBACK:
-                    IBluetoothStateChangeCallback unregCallback =
-                            (IBluetoothStateChangeCallback)msg.obj;
-                    try {
-                        // LINT.IfChange
-                        unregCallback.onBluetoothStateChange(false);
-                        // LINT.ThenChange(/framework/tests/unit/src/android/bluetooth/BluetoothProfileConnectorTest.java)
-                    } catch (RemoteException e) {
-                        Log.e(TAG, "UNREGISTER_STATE_CHANGE_CALLBACK: callback failed", e);
-                    }
-                    mStateChangeCallbacks.unregister(unregCallback);
-                    break;
-
-                case MESSAGE_ADD_PROXY_DELAYED:
-                    ProfileServiceConnections connection = mProfileServices.get(msg.arg1);
-                    if (connection == null) {
+                case MESSAGE_RESTORE_USER_SETTING_OFF:
+                    if (!mEnable) {
+                        Log.w(TAG, "RESTORE_USER_SETTING_OFF: Unhandled: already disabled");
                         break;
                     }
-                    IBluetoothProfileServiceConnection proxy =
-                            (IBluetoothProfileServiceConnection) msg.obj;
-                    connection.addProxy(proxy);
+                    Log.d(TAG, "RESTORE_USER_SETTING_OFF: set Bluetooth state to disabled");
+                    setBluetoothPersistedState(BLUETOOTH_OFF);
+                    mEnableExternal = false;
+                    sendDisableMsg(ENABLE_DISABLE_REASON_RESTORE_USER_SETTING);
                     break;
 
-                case MESSAGE_BIND_PROFILE_SERVICE:
-                    ProfileServiceConnections psc = (ProfileServiceConnections) msg.obj;
-                    removeMessages(MESSAGE_BIND_PROFILE_SERVICE, msg.obj);
-                    if (psc == null) {
+                case MESSAGE_RESTORE_USER_SETTING_ON:
+                    if (mEnable) {
+                        Log.w(TAG, "RESTORE_USER_SETTING_ON: Unhandled: already enabled");
                         break;
                     }
-                    if (msg.arg1 > 0) {
-                        try {
-                            mContext.unbindService(psc);
-                        } catch (IllegalArgumentException e) {
-                            Log.e(TAG, "Unable to unbind service with intent: " + psc.mIntent, e);
-                        }
-                        psc.bindService(msg.arg1 - 1);
-                    }
+                    Log.d(TAG, "RESTORE_USER_SETTING_ON: set Bluetooth state to enabled");
+                    mQuietEnableExternal = false;
+                    mEnableExternal = true;
+                    sendEnableMsg(false, ENABLE_DISABLE_REASON_RESTORE_USER_SETTING);
                     break;
 
                 case MESSAGE_BLUETOOTH_SERVICE_CONNECTED:
                     IBinder service = (IBinder) msg.obj;
                     Log.d(TAG, "MESSAGE_BLUETOOTH_SERVICE_CONNECTED: service=" + service);
 
-                    mAdapterLock.writeLock().lock();
-                    try {
-                        // Remove timeout
-                        mHandler.removeMessages(MESSAGE_TIMEOUT_BIND);
+                    // Remove timeout
+                    mHandler.removeMessages(MESSAGE_TIMEOUT_BIND);
 
-                        mAdapter = BluetoothServerProxy.getInstance().createAdapterBinder(service);
+                    mAdapter = BluetoothServerProxy.getInstance().createAdapterBinder(service);
 
-                        int foregroundUserId = ActivityManager.getCurrentUser();
-                        propagateForegroundUserId(foregroundUserId);
+                    propagateForegroundUserId(ActivityManager.getCurrentUser());
 
+                    if (!Flags.removeOneTimeGetNameAndAddress()) {
                         if (!isNameAndAddressSet()) {
                             mHandler.sendEmptyMessage(MESSAGE_GET_NAME_AND_ADDRESS);
                             if (mGetNameAddressOnly) {
                                 return;
                             }
                         }
-
-                        // Register callback object
-                        try {
-                            mAdapter.registerCallback(
-                                    mBluetoothCallback, mContext.getAttributionSource());
-                        } catch (RemoteException | TimeoutException e) {
-                            Log.e(TAG, "Unable to register BluetoothCallback", e);
-                        }
-                        // Inform BluetoothAdapter instances that service is up
-                        sendBluetoothServiceUpCallback();
-
-                        // Get the supported profiles list
-                        try {
-                            mSupportedProfileList =
-                                    mAdapter.getSupportedProfiles(mContext.getAttributionSource());
-                        } catch (RemoteException | TimeoutException e) {
-                            Log.e(TAG, "Unable to get the supported profiles list", e);
-                        }
-
-                        // Do enable request
-                        try {
-                            if (!mAdapter.enable(mQuietEnable, mContext.getAttributionSource())) {
-                                Log.e(TAG, "IBluetooth.enable() returned false");
-                            }
-                        } catch (RemoteException | TimeoutException e) {
-                            Log.e(TAG, "Unable to call enable()", e);
-                        }
-                    } finally {
-                        mAdapterLock.writeLock().unlock();
                     }
+
+                    try {
+                        mAdapter.registerCallback(
+                                mBluetoothCallback, mContext.getAttributionSource());
+                    } catch (RemoteException e) {
+                        Log.e(TAG, "Unable to register BluetoothCallback", e);
+                    }
+
+                    offToBleOn();
+                    sendBluetoothServiceUpCallback();
 
                     if (!mEnable) {
                         waitForState(STATE_ON);
-                        handleDisable();
-                        waitForState(
-                                STATE_OFF,
-                                STATE_TURNING_ON,
-                                STATE_TURNING_OFF,
-                                STATE_BLE_TURNING_ON,
-                                STATE_BLE_ON,
-                                STATE_BLE_TURNING_OFF);
+                        onToBleOn();
                     }
                     break;
 
@@ -2126,22 +1587,19 @@ class BluetoothManagerService {
                     Log.d(
                             TAG,
                             "MESSAGE_BLUETOOTH_STATE_CHANGE:"
-                                    + (" prevState=" + BluetoothAdapter.nameForState(prevState))
-                                    + (" newState=" + BluetoothAdapter.nameForState(newState)));
-                    mState.set(newState);
+                                    + (" prevState=" + nameForState(prevState))
+                                    + (" newState=" + nameForState(newState)));
+                    if (mAdapter == null) {
+                        Log.e(TAG, "State change received after bluetooth has crashed");
+                        break;
+                    }
                     bluetoothStateChangeHandler(prevState, newState);
                     // handle error state transition case from TURNING_ON to OFF
                     // unbind and rebind bluetooth service and enable bluetooth
-                    if ((prevState == STATE_BLE_TURNING_ON)
-                            && (newState == STATE_OFF)
-                            && (mAdapter != null)
-                            && mEnable) {
+                    if ((prevState == STATE_BLE_TURNING_ON) && (newState == STATE_OFF) && mEnable) {
                         recoverBluetoothServiceFromError(false);
                     }
-                    if ((prevState == STATE_TURNING_ON)
-                            && (newState == STATE_BLE_ON)
-                            && (mAdapter != null)
-                            && mEnable) {
+                    if ((prevState == STATE_TURNING_ON) && (newState == STATE_BLE_ON) && mEnable) {
                         recoverBluetoothServiceFromError(true);
                     }
                     // If we tried to enable BT while BT was in the process of shutting down,
@@ -2166,24 +1624,14 @@ class BluetoothManagerService {
 
                 case MESSAGE_BLUETOOTH_SERVICE_DISCONNECTED:
                     Log.e(TAG, "MESSAGE_BLUETOOTH_SERVICE_DISCONNECTED");
-                    mAdapterLock.writeLock().lock();
-                    try {
-                        // if service is unbinded already, do nothing and return
-                        if (mAdapter == null) {
-                            break;
-                        }
-                        mAdapter = null;
-                        mSupportedProfileList.clear();
-                    } finally {
-                        mAdapterLock.writeLock().unlock();
+
+                    if (!resetAdapter()) {
+                        break;
                     }
 
                     // log the unexpected crash
                     addCrashLog();
-                    addActiveLog(
-                            BluetoothProtoEnums.ENABLE_DISABLE_REASON_CRASH,
-                            mContext.getPackageName(),
-                            false);
+                    ActiveLogs.add(ENABLE_DISABLE_REASON_CRASH, false);
                     if (mEnable) {
                         mEnable = false;
                         mHandler.sendEmptyMessageDelayed(
@@ -2196,7 +1644,6 @@ class BluetoothManagerService {
                     // the BT icon correctly
                     if (mState.oneOf(STATE_TURNING_ON, STATE_ON)) {
                         bluetoothStateChangeHandler(STATE_ON, STATE_TURNING_OFF);
-                        mState.set(STATE_TURNING_OFF);
                     }
                     if (mState.oneOf(STATE_TURNING_OFF)) {
                         bluetoothStateChangeHandler(STATE_TURNING_OFF, STATE_OFF);
@@ -2217,15 +1664,10 @@ class BluetoothManagerService {
                          * it doesn't change when IBluetooth
                          * service restarts */
                         mEnable = true;
-                        addActiveLog(
-                                BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTARTED,
-                                mContext.getPackageName(),
-                                true);
-                        handleEnable(mQuietEnable);
+                        ActiveLogs.add(ENABLE_DISABLE_REASON_RESTARTED, true);
+                        handleEnable();
                     } else {
-                        mAdapterLock.writeLock().lock();
-                        mAdapter = null;
-                        mAdapterLock.writeLock().unlock();
+                        resetAdapter();
                         Log.e(TAG, "Reach maximum retry to restart Bluetooth!");
                     }
                     break;
@@ -2240,16 +1682,13 @@ class BluetoothManagerService {
                     UserHandle userTo = (UserHandle) msg.obj;
                     Log.d(TAG, "MESSAGE_USER_SWITCHED: userTo=" + userTo);
                     mHandler.removeMessages(MESSAGE_USER_SWITCHED);
-                    if (!mFeatureFlags.airplaneRessourcesInApp() && !mUseNewAirplaneMode) {
-                        mBluetoothNotificationManager.createNotificationChannels();
-                    }
 
-                    if (mUseNewAirplaneMode) {
-                        mCurrentUserContext = mContext.createContextAsUser(userTo, 0);
-                    }
+                    AutoOnFeature.pause();
+
+                    mCurrentUserContext = mContext.createContextAsUser(userTo, 0);
 
                     /* disable and enable BT when detect a user switch */
-                    if (mAdapter != null && mState.oneOf(STATE_ON)) {
+                    if (mState.oneOf(STATE_ON)) {
                         restartForNewUser(userTo);
                     } else if (isBinding() || mAdapter != null) {
                         Message userMsg = Message.obtain(msg);
@@ -2263,6 +1702,8 @@ class BluetoothManagerService {
                                         + (" number of retry attempt=" + userMsg.arg1)
                                         + (" isBinding=" + isBinding())
                                         + (" mAdapter=" + mAdapter));
+                    } else {
+                        autoOnSetupTimer();
                     }
                     break;
 
@@ -2275,40 +1716,22 @@ class BluetoothManagerService {
                         // reason; maybe the Bluetooth service wasn't encryption
                         // aware, so try binding again.
                         Log.d(TAG, "Enabled but not bound; retrying after unlock");
-                        handleEnable(mQuietEnable);
+                        handleEnable();
                     }
                     break;
             }
         }
 
-        @RequiresPermission(
-                allOf = {
-                    android.Manifest.permission.BLUETOOTH_CONNECT,
-                    android.Manifest.permission.BLUETOOTH_PRIVILEGED
-                })
-        private void restartForNewUser(UserHandle newUser) {
-            mAdapterLock.readLock().lock();
+        private void restartForNewUser(UserHandle unusedNewUser) {
             try {
-                if (mAdapter != null) {
-                    mAdapter.unregisterCallback(
-                            mBluetoothCallback, mContext.getAttributionSource());
-                }
-            } catch (RemoteException | TimeoutException e) {
+                mAdapter.unregisterCallback(mBluetoothCallback, mContext.getAttributionSource());
+            } catch (RemoteException e) {
                 Log.e(TAG, "Unable to unregister", e);
-            } finally {
-                mAdapterLock.readLock().unlock();
             }
 
-            // This method is always called while bluetooth is in STATE_ON
-            assert (mState.oneOf(STATE_ON));
-
-            unbindAllBluetoothProfileServices();
             // disable
-            addActiveLog(
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_USER_SWITCH,
-                    mContext.getPackageName(),
-                    false);
-            handleDisable();
+            ActiveLogs.add(ENABLE_DISABLE_REASON_USER_SWITCH, false);
+            onToBleOn();
             // Pbap service need receive STATE_TURNING_OFF intent to close
             bluetoothStateChangeHandler(STATE_ON, STATE_TURNING_OFF);
 
@@ -2322,21 +1745,19 @@ class BluetoothManagerService {
             // shut down completely before attempting to restart.
             //
             if (didDisableTimeout) {
+                Log.d(TAG, "Force sleep 3000 ms for user switch that timed out");
                 SystemClock.sleep(3000);
             } else {
+                Log.d(TAG, "Force sleep 100 ms for");
                 SystemClock.sleep(100);
             }
 
             mHandler.removeMessages(MESSAGE_BLUETOOTH_STATE_CHANGE);
-            mState.set(STATE_OFF);
             // enable
-            addActiveLog(
-                    BluetoothProtoEnums.ENABLE_DISABLE_REASON_USER_SWITCH,
-                    mContext.getPackageName(),
-                    true);
+            ActiveLogs.add(ENABLE_DISABLE_REASON_USER_SWITCH, true);
             // mEnable flag could have been reset on stopBle. Reenable it.
             mEnable = true;
-            handleEnable(mQuietEnable);
+            handleEnable();
         }
     }
 
@@ -2344,64 +1765,177 @@ class BluetoothManagerService {
         return mHandler.hasMessages(MESSAGE_TIMEOUT_BIND);
     }
 
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
-    private void handleEnable(boolean quietMode) {
-        mQuietEnable = quietMode;
+    private void handleEnableMessage(int quietEnable, int isBle) {
+        if (mShutdownInProgress) {
+            Log.d(TAG, "Skip Bluetooth Enable in device shutdown process");
+            return;
+        }
 
-        mAdapterLock.writeLock().lock();
-        try {
-            if (mAdapter == null && !isBinding()) {
-                Log.d(TAG, "binding Bluetooth service");
-                // Start bind timeout and bind
-                mHandler.sendEmptyMessageDelayed(MESSAGE_TIMEOUT_BIND, TIMEOUT_BIND_MS);
-                Intent i = new Intent(IBluetooth.class.getName());
-                if (!doBind(
-                        i,
-                        mConnection,
-                        Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT,
-                        UserHandle.CURRENT)) {
-                    mHandler.removeMessages(MESSAGE_TIMEOUT_BIND);
-                }
-            } else if (mAdapter != null) {
-                // Enable bluetooth
-                try {
-                    if (!mAdapter.enable(mQuietEnable, mContext.getAttributionSource())) {
-                        Log.e(TAG, "IBluetooth.enable() returned false");
-                    }
-                } catch (RemoteException | TimeoutException e) {
-                    Log.e(TAG, "Unable to call enable()", e);
-                }
-            }
-        } finally {
-            mAdapterLock.writeLock().unlock();
+        if (mHandler.hasMessages(MESSAGE_HANDLE_DISABLE_DELAYED)
+                || mHandler.hasMessages(MESSAGE_HANDLE_ENABLE_DELAYED)) {
+            // We are handling enable or disable right now, wait for it.
+            mHandler.sendMessageDelayed(
+                    mHandler.obtainMessage(MESSAGE_ENABLE, quietEnable, isBle),
+                    ENABLE_DISABLE_DELAY_MS);
+            return;
+        }
+
+        mHandler.removeMessages(MESSAGE_RESTART_BLUETOOTH_SERVICE);
+        mEnable = true;
+
+        if (isBle == 0) {
+            setBluetoothPersistedState(BLUETOOTH_ON_BLUETOOTH);
+        }
+
+        if (mState.oneOf(STATE_BLE_TURNING_ON, STATE_TURNING_ON, STATE_ON)) {
+            Log.i(TAG, "MESSAGE_ENABLE: already enabled. Current state=" + mState);
+            return;
+        }
+
+        if (mState.oneOf(STATE_BLE_ON) && isBle == 1) {
+            Log.i(TAG, "MESSAGE_ENABLE: Already in BLE_ON while being requested to go to BLE_ON");
+            return;
+        }
+
+        if (mState.oneOf(STATE_BLE_ON)) {
+            Log.i(TAG, "MESSAGE_ENABLE: Bluetooth transition from STATE_BLE_ON to STATE_ON");
+            bleOnToOn();
+            return;
+        }
+
+        if (mAdapter != null) {
+            // TODO: b/339548431 - Adapt this after removal of Flags.explicitKillFromSystemServer
+            //
+            // We need to wait until transitioned to STATE_OFF and the previous Bluetooth process
+            // has exited. The waiting period has three components:
+            // (a) Wait until the local state is STATE_OFF. This is accomplished by sending delay a
+            //     message MESSAGE_HANDLE_ENABLE_DELAYED
+            // (b) Wait until the STATE_OFF state is updated to all components.
+            // (c) Wait until the Bluetooth process exits, and ActivityManager detects it.
+            //
+            // The waiting for (b) and (c) is accomplished by delaying the
+            // MESSAGE_RESTART_BLUETOOTH_SERVICE message. The delay time is backed off if Bluetooth
+            // continuously failed to turn on itself.
+            mWaitForEnableRetry = 0;
+            mHandler.sendEmptyMessageDelayed(
+                    MESSAGE_HANDLE_ENABLE_DELAYED, ENABLE_DISABLE_DELAY_MS);
+            return;
+        }
+
+        mQuietEnable = (quietEnable == 1);
+        handleEnable();
+    }
+
+    private void handleDisableMessage() {
+        if (mHandler.hasMessages(MESSAGE_HANDLE_DISABLE_DELAYED)
+                || isBinding()
+                || mHandler.hasMessages(MESSAGE_HANDLE_ENABLE_DELAYED)) {
+            // We are handling enable or disable right now, wait for it.
+            mHandler.sendEmptyMessageDelayed(MESSAGE_DISABLE, ENABLE_DISABLE_DELAY_MS);
+            return;
+        }
+
+        mHandler.removeMessages(MESSAGE_RESTART_BLUETOOTH_SERVICE);
+
+        if (mEnable && mAdapter != null) {
+            mWaitForDisableRetry = 0;
+            mHandler.sendEmptyMessageDelayed(
+                    MESSAGE_HANDLE_DISABLE_DELAYED, ENABLE_DISABLE_DELAY_MS);
+        } else {
+            mEnable = false;
+            onToBleOn();
         }
     }
 
-    boolean doBind(Intent intent, ServiceConnection conn, int flags, UserHandle user) {
+    private void bindToAdapter() {
+        UserHandle user = UserHandle.CURRENT;
+        int flags = Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT;
+        Intent intent = new Intent(IBluetooth.class.getName());
         ComponentName comp = resolveSystemService(intent);
+        if (comp == null && !Flags.enforceResolveSystemServiceBehavior()) {
+            Log.e(TAG, "No ComponentName found for intent=" + intent);
+            return;
+        }
         intent.setComponent(comp);
-        if (comp == null || !mContext.bindServiceAsUser(intent, conn, flags, user)) {
-            Log.e(TAG, "Fail to bind to: " + intent);
+
+        mHandler.sendEmptyMessageDelayed(MESSAGE_TIMEOUT_BIND, TIMEOUT_BIND_MS);
+        Log.d(TAG, "Start binding to the Bluetooth service with intent=" + intent);
+        if (!mContext.bindServiceAsUser(intent, mConnection, flags, user)) {
+            Log.e(TAG, "Fail to bind to intent=" + intent);
+            mContext.unbindService(mConnection);
+            mHandler.removeMessages(MESSAGE_TIMEOUT_BIND);
+        }
+    }
+
+    private boolean resetAdapter() {
+        if (mAdapter == null) {
             return false;
         }
+        mAdapter = null;
+        mContext.unbindService(mConnection);
         return true;
     }
 
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
-    private void handleDisable() {
-        mAdapterLock.readLock().lock();
-        try {
-            if (mAdapter != null) {
-                Log.d(TAG, "handleDisable: Sending off request.");
-                if (!mAdapter.disable(mContext.getAttributionSource())) {
-                    Log.e(TAG, "IBluetooth.disable() returned false");
-                }
-            }
-        } catch (RemoteException | TimeoutException e) {
-            Log.e(TAG, "Unable to call disable()", e);
-        } finally {
-            mAdapterLock.readLock().unlock();
+    private void handleEnable() {
+        if (mAdapter == null && !isBinding()) {
+            bindToAdapter();
         }
+    }
+
+    private void offToBleOn() {
+        if (!mState.oneOf(STATE_OFF)) {
+            Log.e(TAG, "offToBleOn: Impossible transition from " + mState);
+            return;
+        }
+        Log.d(TAG, "offToBleOn: Sending request");
+        try {
+            mAdapter.offToBleOn(mQuietEnable, mContext.getAttributionSource());
+        } catch (RemoteException e) {
+            Log.e(TAG, "Unable to call offToBleOn()", e);
+        }
+        bluetoothStateChangeHandler(STATE_OFF, STATE_BLE_TURNING_ON);
+    }
+
+    private void onToBleOn() {
+        if (!mState.oneOf(STATE_ON)) {
+            Log.e(TAG, "onToBleOn: Impossible transition from " + mState);
+            return;
+        }
+        Log.d(TAG, "onToBleOn: Sending request");
+        try {
+            mAdapter.onToBleOn(mContext.getAttributionSource());
+        } catch (RemoteException e) {
+            Log.e(TAG, "Unable to call onToBleOn()", e);
+        }
+        bluetoothStateChangeHandler(STATE_ON, STATE_TURNING_OFF);
+    }
+
+    private void bleOnToOn() {
+        if (!mState.oneOf(STATE_BLE_ON)) {
+            Log.e(TAG, "bleOnToOn: Impossible transition from " + mState);
+            return;
+        }
+        Log.d(TAG, "bleOnToOn: sending request");
+        try {
+            mAdapter.bleOnToOn(mContext.getAttributionSource());
+        } catch (RemoteException e) {
+            Log.e(TAG, "Unable to call bleOnToOn()", e);
+        }
+        bluetoothStateChangeHandler(STATE_BLE_ON, STATE_TURNING_ON);
+    }
+
+    private void bleOnToOff() {
+        if (!mState.oneOf(STATE_BLE_ON)) {
+            Log.e(TAG, "bleOnToOff: Impossible transition from " + mState);
+            return;
+        }
+        Log.d(TAG, "bleOnToOff: Sending request");
+        try {
+            mAdapter.bleOnToOff(mContext.getAttributionSource());
+        } catch (RemoteException e) {
+            Log.e(TAG, "Unable to call bleOnToOff()", e);
+        }
+        bluetoothStateChangeHandler(STATE_BLE_ON, STATE_BLE_TURNING_OFF);
     }
 
     private void broadcastIntentStateChange(String action, int prevState, int newState) {
@@ -2409,8 +1943,8 @@ class BluetoothManagerService {
                 TAG,
                 "broadcastIntentStateChange:"
                         + (" action=" + action.substring(action.lastIndexOf('.') + 1))
-                        + (" prevState=" + BluetoothAdapter.nameForState(prevState))
-                        + (" newState=" + BluetoothAdapter.nameForState(newState)));
+                        + (" prevState=" + nameForState(prevState))
+                        + (" newState=" + nameForState(newState)));
         // Send broadcast message to everyone else
         Intent intent = new Intent(action);
         intent.putExtra(BluetoothAdapter.EXTRA_PREVIOUS_STATE, prevState);
@@ -2430,27 +1964,20 @@ class BluetoothManagerService {
         return false;
     }
 
-    @RequiresPermission(
-            allOf = {
-                android.Manifest.permission.BLUETOOTH_CONNECT,
-                android.Manifest.permission.BLUETOOTH_PRIVILEGED,
-            })
     private void bluetoothStateChangeHandler(int prevState, int newState) {
-        if (prevState == newState) { // No change. Nothing to do.
+        if (mState.oneOf(newState)) { // Already in correct state
+            Log.d(TAG, "bluetoothStateChangeHandler: Already in state " + mState);
             return;
         }
 
-        // Notify all proxy objects first of adapter state change
-        if (newState == STATE_ON) {
-            sendBluetoothStateCallback(true);
-        } else if (newState == STATE_OFF) {
+        if (newState == STATE_OFF) {
             // If Bluetooth is off, send service down event to proxy objects, and unbind
             Log.d(TAG, "bluetoothStateChangeHandler: Bluetooth is OFF send Service Down");
             sendBluetoothServiceDownCallback();
             unbindAndFinish();
-        } else if (newState == STATE_BLE_ON && prevState == STATE_BLE_TURNING_ON) {
-            continueFromBleOnState();
-        } // Nothing specific to do for STATE_TURNING_<X>
+        }
+
+        mState.set(newState);
 
         broadcastIntentStateChange(BluetoothAdapter.ACTION_BLE_STATE_CHANGED, prevState, newState);
 
@@ -2460,25 +1987,48 @@ class BluetoothManagerService {
 
         if (prevBrEdrState != newBrEdrState) { // Only broadcast when there is a BrEdr state change.
             if (newBrEdrState == STATE_OFF) {
-                sendBluetoothStateCallback(false);
-                sendBrEdrDownCallback(mContext.getAttributionSource());
+                sendBluetoothOffCallback();
+                sendBrEdrDownCallback();
             }
             broadcastIntentStateChange(
                     BluetoothAdapter.ACTION_STATE_CHANGED, prevBrEdrState, newBrEdrState);
         }
+
+        if (prevState == STATE_ON) {
+            autoOnSetupTimer();
+        }
+
+        // Notify all proxy objects first of adapter state change
+        if (newState == STATE_ON) {
+            if (isAtLeastV() && mDeviceConfigAllowAutoOn) {
+                AutoOnFeature.notifyBluetoothOn(mCurrentUserContext);
+            }
+            sendBluetoothOnCallback();
+        } else if (newState == STATE_BLE_ON && prevState == STATE_BLE_TURNING_ON) {
+            continueFromBleOnState();
+        } // Nothing specific to do for STATE_TURNING_<X>
     }
 
     boolean waitForManagerState(int state) {
-        return mState.waitForState(getSyncTimeout(), state);
+        return mState.waitForState(STATE_TIMEOUT, state);
     }
 
     private boolean waitForState(int... states) {
-        return mState.waitForState(getSyncTimeout(), states);
+        Log.d(TAG, "Waiting " + STATE_TIMEOUT + " for state: " + Arrays.toString(states));
+        return mState.waitForState(STATE_TIMEOUT, states);
+    }
+
+    private void sendDisableMsg(int reason) {
+        sendDisableMsg(reason, mContext.getPackageName());
     }
 
     private void sendDisableMsg(int reason, String packageName) {
         mHandler.sendEmptyMessage(MESSAGE_DISABLE);
-        addActiveLog(reason, packageName, false);
+        ActiveLogs.add(reason, false, packageName, false);
+    }
+
+    private void sendEnableMsg(boolean quietMode, int reason) {
+        sendEnableMsg(quietMode, reason, mContext.getPackageName());
     }
 
     private void sendEnableMsg(boolean quietMode, int reason, String packageName) {
@@ -2487,47 +2037,20 @@ class BluetoothManagerService {
 
     private void sendEnableMsg(boolean quietMode, int reason, String packageName, boolean isBle) {
         mHandler.obtainMessage(MESSAGE_ENABLE, quietMode ? 1 : 0, isBle ? 1 : 0).sendToTarget();
-        addActiveLog(reason, packageName, true);
+        ActiveLogs.add(reason, true, packageName, isBle);
         mLastEnabledTime = SystemClock.elapsedRealtime();
-    }
-
-    private void addActiveLog(int reason, String packageName, boolean enable) {
-        synchronized (mActiveLogs) {
-            if (mActiveLogs.size() > ACTIVE_LOG_MAX_SIZE) {
-                mActiveLogs.remove();
-            }
-            mActiveLogs.add(new ActiveLog(reason, packageName, enable, System.currentTimeMillis()));
-
-            int state =
-                    enable
-                            ? BluetoothStatsLog.BLUETOOTH_ENABLED_STATE_CHANGED__STATE__ENABLED
-                            : BluetoothStatsLog.BLUETOOTH_ENABLED_STATE_CHANGED__STATE__DISABLED;
-
-            BluetoothStatsLog.write_non_chained(
-                    BluetoothStatsLog.BLUETOOTH_ENABLED_STATE_CHANGED,
-                    Binder.getCallingUid(),
-                    null,
-                    state,
-                    reason,
-                    packageName);
-        }
     }
 
     private void addCrashLog() {
         synchronized (mCrashTimestamps) {
             if (mCrashTimestamps.size() == CRASH_LOG_MAX_SIZE) {
-                mCrashTimestamps.removeFirst();
+                mCrashTimestamps.remove(0);
             }
             mCrashTimestamps.add(System.currentTimeMillis());
             mCrashes++;
         }
     }
 
-    @RequiresPermission(
-            allOf = {
-                android.Manifest.permission.BLUETOOTH_CONNECT,
-                android.Manifest.permission.BLUETOOTH_PRIVILEGED,
-            })
     private void recoverBluetoothServiceFromError(boolean clearBle) {
         Log.e(TAG, "recoverBluetoothServiceFromError");
         boolean repeatAirplaneRunnable = false;
@@ -2537,41 +2060,27 @@ class BluetoothManagerService {
             mHandler.removeCallbacksAndMessages(ON_AIRPLANE_MODE_CHANGED_TOKEN);
             repeatAirplaneRunnable = true;
         }
-        mAdapterLock.readLock().lock();
-        try {
-            if (mAdapter != null) {
-                // Unregister callback object
+
+        if (mAdapter != null) {
+            try {
                 mAdapter.unregisterCallback(mBluetoothCallback, mContext.getAttributionSource());
+            } catch (RemoteException e) {
+                Log.e(TAG, "Unable to unregister", e);
             }
-        } catch (RemoteException | TimeoutException e) {
-            Log.e(TAG, "Unable to unregister", e);
-        } finally {
-            mAdapterLock.readLock().unlock();
         }
 
+        Log.d(TAG, "Force sleep 500 ms for recovering from error");
         SystemClock.sleep(500);
 
         // disable
-        addActiveLog(
-                BluetoothProtoEnums.ENABLE_DISABLE_REASON_START_ERROR,
-                mContext.getPackageName(),
-                false);
-        handleDisable();
+        ActiveLogs.add(ENABLE_DISABLE_REASON_START_ERROR, false);
+        onToBleOn();
 
         waitForState(STATE_OFF);
 
         sendBluetoothServiceDownCallback();
 
-        mAdapterLock.writeLock().lock();
-        try {
-            if (mAdapter != null) {
-                mAdapter = null;
-                // Unbind
-                mContext.unbindService(mConnection);
-            }
-        } finally {
-            mAdapterLock.writeLock().unlock();
-        }
+        resetAdapter();
 
         mHandler.removeMessages(MESSAGE_BLUETOOTH_STATE_CHANGE);
         mState.set(STATE_OFF);
@@ -2586,7 +2095,7 @@ class BluetoothManagerService {
         mHandler.sendEmptyMessageDelayed(MESSAGE_RESTART_BLUETOOTH_SERVICE, ERROR_RESTART_TIME_MS);
 
         if (repeatAirplaneRunnable) {
-            onAirplaneModeChanged(isAirplaneModeOn());
+            onAirplaneModeChanged(AirplaneModeListener.isOnOverrode());
         }
     }
 
@@ -2694,49 +2203,41 @@ class BluetoothManagerService {
         writer.println("Bluetooth Status");
         writer.println("  enabled: " + isEnabled());
         writer.println("  state: " + mState);
-        writer.println("  address: " + mAddress);
+        writer.println("  address: " + logAddress(mAddress));
         writer.println("  name: " + mName);
         if (mEnable) {
             long onDuration = SystemClock.elapsedRealtime() - mLastEnabledTime;
             String onDurationString =
-                    String.format(
-                            Locale.US,
+                    android.bluetooth.BluetoothUtils.formatSimple(
                             "%02d:%02d:%02d.%03d",
-                            (int) (onDuration / (1000 * 60 * 60)),
-                            (int) ((onDuration / (1000 * 60)) % 60),
-                            (int) ((onDuration / 1000) % 60),
-                            (int) (onDuration % 1000));
+                            onDuration / (1000 * 60 * 60),
+                            (onDuration / (1000 * 60)) % 60,
+                            (onDuration / 1000) % 60,
+                            onDuration % 1000);
             writer.println("  time since enabled: " + onDurationString);
         }
 
-        if (mActiveLogs.size() == 0) {
-            writer.println("\nBluetooth never enabled!");
-        } else {
-            writer.println("\nEnable log:");
-            for (ActiveLog log : mActiveLogs) {
-                writer.println("  " + log);
-            }
-        }
+        writer.println("");
+        ActiveLogs.dump(writer);
 
-        writer.println("\nBluetooth crashed " + mCrashes + " time" + (mCrashes == 1 ? "" : "s"));
+        writer.println("");
+
+        writer.println("Bluetooth crashed " + mCrashes + " time" + (mCrashes == 1 ? "" : "s"));
         if (mCrashes == CRASH_LOG_MAX_SIZE) {
             writer.println("(last " + CRASH_LOG_MAX_SIZE + ")");
         }
         for (Long time : mCrashTimestamps) {
-            writer.println("  " + timeToLog(time));
+            writer.println("  " + Log.timeToStringWithZone(time));
         }
 
-        writer.println(
-                "\n"
-                        + mBleApps.size()
-                        + " BLE app"
-                        + (mBleApps.size() == 1 ? "" : "s")
-                        + " registered");
+        writer.println("");
+        writer.println("Number of Ble app registered: " + mBleApps.size());
         for (ClientDeathRecipient app : mBleApps.values()) {
             writer.println("  " + app.getPackageName());
         }
 
-        writer.println("\nBluetoothManagerService:");
+        writer.println("");
+        writer.println("BluetoothManagerService:");
         writer.println("  mEnable:" + mEnable);
         writer.println("  mQuietEnable:" + mQuietEnable);
         writer.println("  mEnableExternal:" + mEnableExternal);
@@ -2744,18 +2245,21 @@ class BluetoothManagerService {
 
         writer.println("");
         writer.flush();
-        if (args.length == 0) {
-            // Add arg to produce output
-            args = new String[1];
-            args[0] = "--print";
-        }
+
+        dumpBluetoothFlags(writer);
+        writer.println("");
 
         if (mAdapter == null) {
             errorMsg = "Bluetooth Service not connected";
         } else {
+            if (args.length == 0) {
+                // Add arg to produce output
+                args = new String[1];
+                args[0] = "--print";
+            }
+
             try {
-                // TODO(b/239890880): system_server cannot make non-oneway call
-                mAdapter.getAdapterBinder().asBinder().dump(fd, args);
+                mAdapter.getAdapterBinder().asBinder().dumpAsync(fd, args);
             } catch (RemoteException re) {
                 errorMsg = "RemoteException while dumping Bluetooth Service";
             }
@@ -2765,25 +2269,37 @@ class BluetoothManagerService {
         }
     }
 
+    private void dumpBluetoothFlags(PrintWriter writer) {
+        writer.println("🚩Flag dump:");
+        Arrays.stream(Flags.class.getDeclaredMethods())
+                .forEach(
+                        (Method m) -> {
+                            String name =
+                                    m.getName().replaceAll("([A-Z])", "_$1").toLowerCase(Locale.US);
+                            boolean flagValue;
+                            try {
+                                flagValue = (boolean) m.invoke(null);
+                            } catch (IllegalAccessException | InvocationTargetException e) {
+                                writer.println("Cannot invoke " + name + " flag:" + e);
+                                throw new RuntimeException(e);
+                            }
+                            writer.println("\t" + (flagValue ? "[■]" : "[ ]") + ": " + name);
+                        });
+    }
+
     private void dumpProto(FileDescriptor fd) {
         final ProtoOutputStream proto = new ProtoOutputStream(new FileOutputStream(fd));
         proto.write(BluetoothManagerServiceDumpProto.ENABLED, isEnabled());
         proto.write(BluetoothManagerServiceDumpProto.STATE, mState.get());
-        proto.write(
-                BluetoothManagerServiceDumpProto.STATE_NAME,
-                BluetoothAdapter.nameForState(mState.get()));
-        proto.write(BluetoothManagerServiceDumpProto.ADDRESS, mAddress);
+        proto.write(BluetoothManagerServiceDumpProto.STATE_NAME, nameForState(mState.get()));
+        proto.write(BluetoothManagerServiceDumpProto.ADDRESS, logAddress(mAddress));
         proto.write(BluetoothManagerServiceDumpProto.NAME, mName);
         if (mEnable) {
             proto.write(BluetoothManagerServiceDumpProto.LAST_ENABLED_TIME_MS, mLastEnabledTime);
         }
         proto.write(
                 BluetoothManagerServiceDumpProto.CURR_TIMESTAMP_MS, SystemClock.elapsedRealtime());
-        for (ActiveLog log : mActiveLogs) {
-            long token = proto.start(BluetoothManagerServiceDumpProto.ACTIVE_LOGS);
-            log.dump(proto);
-            proto.end(token);
-        }
+        ActiveLogs.dumpProto(proto);
         proto.write(BluetoothManagerServiceDumpProto.NUM_CRASHES, mCrashes);
         proto.write(
                 BluetoothManagerServiceDumpProto.CRASH_LOG_MAXED, mCrashes == CRASH_LOG_MAX_SIZE);
@@ -2798,36 +2314,6 @@ class BluetoothManagerService {
         proto.flush();
     }
 
-    private static String getEnableDisableReasonString(int reason) {
-        switch (reason) {
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_APPLICATION_REQUEST:
-                return "APPLICATION_REQUEST";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_AIRPLANE_MODE:
-                return "AIRPLANE_MODE";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_DISALLOWED:
-                return "DISALLOWED";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTARTED:
-                return "RESTARTED";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_START_ERROR:
-                return "START_ERROR";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_SYSTEM_BOOT:
-                return "SYSTEM_BOOT";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_CRASH:
-                return "CRASH";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_USER_SWITCH:
-                return "USER_SWITCH";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTORE_USER_SETTING:
-                return "RESTORE_USER_SETTING";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_FACTORY_RESET:
-                return "FACTORY_RESET";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_INIT_FLAGS_CHANGED:
-                return "INIT_FLAGS_CHANGED";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_UNSPECIFIED:
-            default:
-                return "UNKNOWN[" + reason + "]";
-        }
-    }
-
     static @NonNull Bundle getTempAllowlistBroadcastOptions() {
         final long duration = 10_000;
         final BroadcastOptions bOptions = BroadcastOptions.makeBasic();
@@ -2839,7 +2325,7 @@ class BluetoothManagerService {
         return bOptions.toBundle();
     }
 
-    private ComponentName resolveSystemService(@NonNull Intent intent) {
+    private ComponentName legacyresolveSystemService(@NonNull Intent intent) {
         List<ResolveInfo> results = mContext.getPackageManager().queryIntentServices(intent, 0);
         if (results == null) {
             return null;
@@ -2867,6 +2353,35 @@ class BluetoothManagerService {
         return comp;
     }
 
+    private ComponentName resolveSystemService(@NonNull Intent intent) {
+        if (!Flags.enforceResolveSystemServiceBehavior()) {
+            return legacyresolveSystemService(intent);
+        }
+        List<ComponentName> results =
+                mContext.getPackageManager().queryIntentServices(intent, 0).stream()
+                        .filter(
+                                ri ->
+                                        (ri.serviceInfo.applicationInfo.flags
+                                                        & ApplicationInfo.FLAG_SYSTEM)
+                                                != 0)
+                        .map(
+                                ri ->
+                                        new ComponentName(
+                                                ri.serviceInfo.applicationInfo.packageName,
+                                                ri.serviceInfo.name))
+                        .collect(Collectors.toList());
+        switch (results.size()) {
+            case 0 -> throw new IllegalStateException("No services can handle intent " + intent);
+            case 1 -> {
+                return results.get(0);
+            }
+            default -> {
+                throw new IllegalStateException(
+                        "Multiples services can handle intent " + intent + ": " + results);
+            }
+        }
+    }
+
     int setBtHciSnoopLogMode(int mode) {
         final BluetoothProperties.snoop_log_mode_values snoopMode;
 
@@ -2881,8 +2396,7 @@ class BluetoothManagerService {
                 snoopMode = BluetoothProperties.snoop_log_mode_values.FULL;
                 break;
             default:
-                Log.e(TAG, "setBtHciSnoopLogMode: Not a valid mode:" + mode);
-                return BluetoothStatusCodes.ERROR_BAD_PARAMETERS;
+                throw new IllegalArgumentException("Invalid HCI snoop log mode param value");
         }
         try {
             BluetoothProperties.snoop_log_mode(snoopMode);
@@ -2905,42 +2419,82 @@ class BluetoothManagerService {
         return BluetoothAdapter.BT_SNOOP_LOG_MODE_DISABLED;
     }
 
-    /**
-     * Check if BLE is supported by this platform
-     *
-     * @param context current device context
-     * @return true if BLE is supported, false otherwise
-     */
+    private final boolean mDeviceConfigAllowAutoOn;
+
+    private void autoOnSetupTimer() {
+        if (!mDeviceConfigAllowAutoOn) {
+            Log.d(TAG, "No support for AutoOn feature: Not creating a timer");
+            return;
+        }
+        AutoOnFeature.resetAutoOnTimerForUser(
+                mLooper, mCurrentUserContext, mState, this::enableFromAutoOn);
+    }
+
+    private <T> T postAndWait(Callable<T> callable) {
+        FutureTask<T> task = new FutureTask(callable);
+
+        mHandler.post(task);
+        try {
+            // Any method calling postAndWait should most likely be done in under 1 seconds.
+            // But real life shows that the system server thread may sometimes be unwillingly busy.
+            // By putting a 10 seconds timeout we make sure this will generate an ANR (on purpose),
+            // and investigation on what is happening in the system server thread and be fixed
+            return task.get(10, TimeUnit.SECONDS);
+        } catch (TimeoutException | InterruptedException e) {
+            SneakyThrow.sneakyThrow(e);
+        } catch (ExecutionException e) {
+            SneakyThrow.sneakyThrow(e.getCause());
+        }
+        return null;
+    }
+
+    boolean isAutoOnSupported() {
+        return mDeviceConfigAllowAutoOn
+                && postAndWait(
+                        () ->
+                                AutoOnFeature.isUserSupported(
+                                        mCurrentUserContext.getContentResolver()));
+    }
+
+    boolean isAutoOnEnabled() {
+        if (!mDeviceConfigAllowAutoOn) {
+            throw new IllegalStateException("AutoOnFeature is not supported in current config");
+        }
+        return postAndWait(() -> AutoOnFeature.isUserEnabled(mCurrentUserContext));
+    }
+
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    void setAutoOnEnabled(boolean status) {
+        if (!mDeviceConfigAllowAutoOn) {
+            throw new IllegalStateException("AutoOnFeature is not supported in current config");
+        }
+        postAndWait(
+                Executors.callable(
+                        () ->
+                                AutoOnFeature.setUserEnabled(
+                                        mLooper,
+                                        mCurrentUserContext,
+                                        mState,
+                                        status,
+                                        this::enableFromAutoOn)));
+    }
+
+    /** Check if BLE is supported by this platform */
     private static boolean isBleSupported(Context context) {
         return context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE);
     }
 
-    /**
-     * Check if this is an automotive device
-     *
-     * @param context current device context
-     * @return true if this Android device is an automotive device, false otherwise
-     */
+    /** Check if this is an automotive device */
     private static boolean isAutomotive(Context context) {
         return context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE);
     }
 
-    /**
-     * Check if this is a watch device
-     *
-     * @param context current device context
-     * @return true if this Android device is a watch device, false otherwise
-     */
+    /** Check if this is a watch device */
     private static boolean isWatch(Context context) {
         return context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WATCH);
     }
 
-    /**
-     * Check if this is a TV device
-     *
-     * @param context current device context
-     * @return true if this Android device is a TV device, false otherwise
-     */
+    /** Check if this is a TV device */
     private static boolean isTv(Context context) {
         PackageManager pm = context.getPackageManager();
         return pm.hasSystemFeature(PackageManager.FEATURE_TELEVISION)

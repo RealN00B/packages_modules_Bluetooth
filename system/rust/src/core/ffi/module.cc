@@ -16,12 +16,12 @@
 
 #include "module.h"
 
+#include <bluetooth/log.h>
 #include <hardware/bt_gatt.h>
 
 #include "btcore/include/module.h"
-#include "osi/include/log.h"
+
 #ifndef TARGET_FLOSS
-#include "src/connection/ffi/connection_shim.h"
 #include "src/core/ffi.rs.h"
 #include "src/gatt/ffi.rs.h"
 #endif
@@ -52,20 +52,19 @@ namespace {
 future_t* Start() {
   auto fut = future_new();
 
-  if (bt_gatt_callbacks == nullptr) {
+  auto callbacks = bt_gatt_callbacks;
+  if (callbacks == nullptr) {
     // We can't crash here since some adapter tests mis-use the stack
     // startup/cleanup logic and start the stack without GATT, but don't fully
     // mock out the native layer.
-    LOG_ERROR(
-        "GATT profile not started, so we cannot start the Rust loop - this "
-        "happens only in tests.");
+    bluetooth::log::error(
+            "GATT profile not started, so we cannot start the Rust loop - this "
+            "happens only in tests.");
     bluetooth::rust_shim::FutureReady(*fut);
     return fut;
   }
   bluetooth::rust_shim::start(
-      std::make_unique<bluetooth::gatt::GattServerCallbacks>(
-          *bt_gatt_callbacks->server),
-      std::make_unique<bluetooth::connection::LeAclManagerShim>(), *fut);
+          std::make_unique<bluetooth::gatt::GattServerCallbacks>(*callbacks->server), *fut);
 
   return fut;
 }

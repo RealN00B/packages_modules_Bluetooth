@@ -16,7 +16,7 @@
 
 #include "grpc/grpc_module.h"
 
-#include "os/log.h"
+#include <bluetooth/log.h>
 
 using ::grpc::Server;
 using ::grpc::ServerBuilder;
@@ -26,16 +26,12 @@ namespace grpc {
 
 void GrpcModule::ListDependencies(ModuleList* /* list */) const {}
 
-void GrpcModule::Start() {
-  ASSERT(!started_);
-}
+void GrpcModule::Start() { log::assert_that(!started_, "assert failed: !started_"); }
 
-void GrpcModule::Stop() {
-  ASSERT(!started_);
-}
+void GrpcModule::Stop() { log::assert_that(!started_, "assert failed: !started_"); }
 
 void GrpcModule::StartServer(const std::string& address, int port) {
-  ASSERT(!started_);
+  log::assert_that(!started_, "assert failed: !started_");
   started_ = true;
 
   std::string listening_port = address + ":" + std::to_string(port);
@@ -48,8 +44,8 @@ void GrpcModule::StartServer(const std::string& address, int port) {
   builder.AddListeningPort(listening_port, ::grpc::InsecureServerCredentials());
   completion_queue_ = builder.AddCompletionQueue();
   server_ = builder.BuildAndStart();
-  ASSERT(server_ != nullptr);
-  LOG_INFO("gRPC server started on %s", listening_port.c_str());
+  log::assert_that(server_ != nullptr, "assert failed: server_ != nullptr");
+  log::info("gRPC server started on {}", listening_port);
 
   for (const auto& facade : facades_) {
     facade->OnServerStarted();
@@ -57,7 +53,7 @@ void GrpcModule::StartServer(const std::string& address, int port) {
 }
 
 void GrpcModule::StopServer() {
-  ASSERT(started_);
+  log::assert_that(started_, "assert failed: started_");
 
   server_->Shutdown();
   completion_queue_->Shutdown();
@@ -70,13 +66,13 @@ void GrpcModule::StopServer() {
 }
 
 void GrpcModule::Register(GrpcFacadeModule* facade) {
-  ASSERT(!started_);
+  log::assert_that(!started_, "assert failed: !started_");
 
   facades_.push_back(facade);
 }
 
 void GrpcModule::Unregister(GrpcFacadeModule* facade) {
-  ASSERT(!started_);
+  log::assert_that(!started_, "assert failed: !started_");
 
   for (auto it = facades_.begin(); it != facades_.end(); it++) {
     if (*it == facade) {
@@ -85,7 +81,7 @@ void GrpcModule::Unregister(GrpcFacadeModule* facade) {
     }
   }
 
-  ASSERT(false);
+  log::fatal("module not found");
 }
 
 void GrpcModule::RunGrpcLoop() {
@@ -93,33 +89,24 @@ void GrpcModule::RunGrpcLoop() {
   bool ok;
   while (true) {
     if (!completion_queue_->Next(&tag, &ok)) {
-      LOG_INFO("gRPC is shutdown");
+      log::info("gRPC is shutdown");
       break;
     }
   }
 }
 
-std::string GrpcModule::ToString() const {
-  return "Grpc Module";
-}
+std::string GrpcModule::ToString() const { return "Grpc Module"; }
 
-const ::bluetooth::ModuleFactory GrpcModule::Factory = ::bluetooth::ModuleFactory([]() { return new GrpcModule(); });
+const ::bluetooth::ModuleFactory GrpcModule::Factory =
+        ::bluetooth::ModuleFactory([]() { return new GrpcModule(); });
 
-void GrpcFacadeModule::ListDependencies(ModuleList* list) const {
-  list->add<GrpcModule>();
-}
+void GrpcFacadeModule::ListDependencies(ModuleList* list) const { list->add<GrpcModule>(); }
 
-void GrpcFacadeModule::Start() {
-  GetDependency<GrpcModule>()->Register(this);
-}
+void GrpcFacadeModule::Start() { GetDependency<GrpcModule>()->Register(this); }
 
-void GrpcFacadeModule::Stop() {
-  GetDependency<GrpcModule>()->Unregister(this);
-}
+void GrpcFacadeModule::Stop() { GetDependency<GrpcModule>()->Unregister(this); }
 
-std::string GrpcFacadeModule::ToString() const {
-  return "Grpc Facade Module";
-}
+std::string GrpcFacadeModule::ToString() const { return "Grpc Facade Module"; }
 
 }  // namespace grpc
 }  // namespace bluetooth

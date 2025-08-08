@@ -31,10 +31,8 @@
 //       still applies, but crafting proper inclusion is out of scope
 //       for this effort.  This compilation unit may compile as-is, or
 //       may need attention to prune from (or add to ) the inclusion set.
-#include "bt_target.h"
 #include "bta/av/bta_av_int.h"
 #include "btif/include/btif_av.h"
-#include "os/log.h"
 #include "osi/include/allocator.h"
 #include "osi/include/compat.h"
 #include "stack/include/bt_hdr.h"
@@ -54,9 +52,8 @@ namespace bta_av_api {
 // Params: tBTA_AV_HNDL handle
 // Return: void
 struct BTA_AvClose {
-  std::function<void(tBTA_AV_HNDL handle)> body{
-      [](tBTA_AV_HNDL /* handle */) {}};
-  void operator()(tBTA_AV_HNDL handle) { body(handle); };
+  std::function<void(tBTA_AV_HNDL handle)> body{[](tBTA_AV_HNDL /* handle */) {}};
+  void operator()(tBTA_AV_HNDL handle) { body(handle); }
 };
 extern struct BTA_AvClose BTA_AvClose;
 
@@ -65,7 +62,7 @@ extern struct BTA_AvClose BTA_AvClose;
 // Return: void
 struct BTA_AvCloseRc {
   std::function<void(uint8_t rc_handle)> body{[](uint8_t /* rc_handle */) {}};
-  void operator()(uint8_t rc_handle) { body(rc_handle); };
+  void operator()(uint8_t rc_handle) { body(rc_handle); }
 };
 extern struct BTA_AvCloseRc BTA_AvCloseRc;
 
@@ -74,7 +71,7 @@ extern struct BTA_AvCloseRc BTA_AvCloseRc;
 // Return: void
 struct BTA_AvDeregister {
   std::function<void(tBTA_AV_HNDL hndl)> body{[](tBTA_AV_HNDL /* hndl */) {}};
-  void operator()(tBTA_AV_HNDL hndl) { body(hndl); };
+  void operator()(tBTA_AV_HNDL hndl) { body(hndl); }
 };
 extern struct BTA_AvDeregister BTA_AvDeregister;
 
@@ -83,7 +80,7 @@ extern struct BTA_AvDeregister BTA_AvDeregister;
 // Return: void
 struct BTA_AvDisable {
   std::function<void(void)> body{[](void) {}};
-  void operator()(void) { body(); };
+  void operator()(void) { body(); }
 };
 extern struct BTA_AvDisable BTA_AvDisable;
 
@@ -91,9 +88,8 @@ extern struct BTA_AvDisable BTA_AvDisable;
 // Params: tBTA_AV_HNDL handle
 // Return: void
 struct BTA_AvDisconnect {
-  std::function<void(tBTA_AV_HNDL handle)> body{
-      [](tBTA_AV_HNDL /* handle */) {}};
-  void operator()(tBTA_AV_HNDL handle) { body(handle); };
+  std::function<void(tBTA_AV_HNDL handle)> body{[](tBTA_AV_HNDL /* handle */) {}};
+  void operator()(tBTA_AV_HNDL handle) { body(handle); }
 };
 extern struct BTA_AvDisconnect BTA_AvDisconnect;
 
@@ -102,10 +98,8 @@ extern struct BTA_AvDisconnect BTA_AvDisconnect;
 // Return: void
 struct BTA_AvEnable {
   std::function<void(tBTA_AV_FEAT features, tBTA_AV_CBACK* p_cback)> body{
-      [](tBTA_AV_FEAT /* features */, tBTA_AV_CBACK* /* p_cback */) {}};
-  void operator()(tBTA_AV_FEAT features, tBTA_AV_CBACK* p_cback) {
-    body(features, p_cback);
-  };
+          [](tBTA_AV_FEAT /* features */, tBTA_AV_CBACK* /* p_cback */) {}};
+  void operator()(tBTA_AV_FEAT features, tBTA_AV_CBACK* p_cback) { body(features, p_cback); }
 };
 extern struct BTA_AvEnable BTA_AvEnable;
 
@@ -113,14 +107,12 @@ extern struct BTA_AvEnable BTA_AvEnable;
 // Params: uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code, BT_HDR* p_pkt
 // Return: void
 struct BTA_AvMetaCmd {
-  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code,
-                     BT_HDR* p_pkt)>
-      body{[](uint8_t /* rc_handle */, uint8_t /* label */,
-              tBTA_AV_CMD /* cmd_code */, BT_HDR* /* p_pkt */) {}};
-  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code,
-                  BT_HDR* p_pkt) {
+  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code, BT_HDR* p_pkt)> body{
+          [](uint8_t /* rc_handle */, uint8_t /* label */, tBTA_AV_CMD /* cmd_code */,
+             BT_HDR* /* p_pkt */) {}};
+  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CMD cmd_code, BT_HDR* p_pkt) {
     body(rc_handle, label, cmd_code, p_pkt);
-  };
+  }
 };
 extern struct BTA_AvMetaCmd BTA_AvMetaCmd;
 
@@ -128,14 +120,12 @@ extern struct BTA_AvMetaCmd BTA_AvMetaCmd;
 // Params: uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, BT_HDR*
 // p_pkt Return: void
 struct BTA_AvMetaRsp {
-  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
-                     BT_HDR* p_pkt)>
-      body{[](uint8_t /* rc_handle */, uint8_t /* label */,
-              tBTA_AV_CODE /* rsp_code */, BT_HDR* /* p_pkt */) {}};
-  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
-                  BT_HDR* p_pkt) {
+  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, BT_HDR* p_pkt)> body{
+          [](uint8_t /* rc_handle */, uint8_t /* label */, tBTA_AV_CODE /* rsp_code */,
+             BT_HDR* /* p_pkt */) {}};
+  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, BT_HDR* p_pkt) {
     body(rc_handle, label, rsp_code, p_pkt);
-  };
+  }
 };
 extern struct BTA_AvMetaRsp BTA_AvMetaRsp;
 
@@ -144,34 +134,20 @@ extern struct BTA_AvMetaRsp BTA_AvMetaRsp;
 // Return: void
 struct BTA_AvOffloadStart {
   std::function<void(tBTA_AV_HNDL hndl)> body{[](tBTA_AV_HNDL /* hndl */) {}};
-  void operator()(tBTA_AV_HNDL hndl) { body(hndl); };
+  void operator()(tBTA_AV_HNDL hndl) { body(hndl); }
 };
 extern struct BTA_AvOffloadStart BTA_AvOffloadStart;
-
-// Name: BTA_AvOffloadStartRsp
-// Params: tBTA_AV_HNDL hndl, tBTA_AV_STATUS status
-// Return: void
-struct BTA_AvOffloadStartRsp {
-  std::function<void(tBTA_AV_HNDL hndl, tBTA_AV_STATUS status)> body{
-      [](tBTA_AV_HNDL /* hndl */, tBTA_AV_STATUS /* status */) {}};
-  void operator()(tBTA_AV_HNDL hndl, tBTA_AV_STATUS status) {
-    body(hndl, status);
-  };
-};
-extern struct BTA_AvOffloadStartRsp BTA_AvOffloadStartRsp;
 
 // Name: BTA_AvOpen
 // Params: const RawAddress& bd_addr, tBTA_AV_HNDL handle, bool use_rc, uint16_t
 // uuid Return: void
 struct BTA_AvOpen {
-  std::function<void(const RawAddress& bd_addr, tBTA_AV_HNDL handle,
-                     bool use_rc, uint16_t uuid)>
-      body{[](const RawAddress& /* bd_addr */, tBTA_AV_HNDL /* handle */,
-              bool /* use_rc */, uint16_t /* uuid */) {}};
-  void operator()(const RawAddress& bd_addr, tBTA_AV_HNDL handle, bool use_rc,
-                  uint16_t uuid) {
+  std::function<void(const RawAddress& bd_addr, tBTA_AV_HNDL handle, bool use_rc, uint16_t uuid)>
+          body{[](const RawAddress& /* bd_addr */, tBTA_AV_HNDL /* handle */, bool /* use_rc */,
+                  uint16_t /* uuid */) {}};
+  void operator()(const RawAddress& bd_addr, tBTA_AV_HNDL handle, bool use_rc, uint16_t uuid) {
     body(bd_addr, handle, use_rc, uuid);
-  };
+  }
 };
 extern struct BTA_AvOpen BTA_AvOpen;
 
@@ -179,9 +155,8 @@ extern struct BTA_AvOpen BTA_AvOpen;
 // Params: tBTA_AV_HNDL handle
 // Return: void
 struct BTA_AvOpenRc {
-  std::function<void(tBTA_AV_HNDL handle)> body{
-      [](tBTA_AV_HNDL /* handle */) {}};
-  void operator()(tBTA_AV_HNDL handle) { body(handle); };
+  std::function<void(tBTA_AV_HNDL handle)> body{[](tBTA_AV_HNDL /* handle */) {}};
+  void operator()(tBTA_AV_HNDL handle) { body(handle); }
 };
 extern struct BTA_AvOpenRc BTA_AvOpenRc;
 
@@ -190,11 +165,8 @@ extern struct BTA_AvOpenRc BTA_AvOpenRc;
 // Return: void
 struct BTA_AvProtectReq {
   std::function<void(tBTA_AV_HNDL hndl, uint8_t* p_data, uint16_t len)> body{
-      [](tBTA_AV_HNDL /* hndl */, uint8_t* /* p_data */, uint16_t /* len */) {
-      }};
-  void operator()(tBTA_AV_HNDL hndl, uint8_t* p_data, uint16_t len) {
-    body(hndl, p_data, len);
-  };
+          [](tBTA_AV_HNDL /* hndl */, uint8_t* /* p_data */, uint16_t /* len */) {}};
+  void operator()(tBTA_AV_HNDL hndl, uint8_t* p_data, uint16_t len) { body(hndl, p_data, len); }
 };
 extern struct BTA_AvProtectReq BTA_AvProtectReq;
 
@@ -202,14 +174,12 @@ extern struct BTA_AvProtectReq BTA_AvProtectReq;
 // Params: tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data, uint16_t len
 // Return: void
 struct BTA_AvProtectRsp {
-  std::function<void(tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data,
-                     uint16_t len)>
-      body{[](tBTA_AV_HNDL /* hndl */, uint8_t /* error_code */,
-              uint8_t* /* p_data */, uint16_t /* len */) {}};
-  void operator()(tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data,
-                  uint16_t len) {
+  std::function<void(tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data, uint16_t len)> body{
+          [](tBTA_AV_HNDL /* hndl */, uint8_t /* error_code */, uint8_t* /* p_data */,
+             uint16_t /* len */) {}};
+  void operator()(tBTA_AV_HNDL hndl, uint8_t error_code, uint8_t* p_data, uint16_t len) {
     body(hndl, error_code, p_data, len);
-  };
+  }
 };
 extern struct BTA_AvProtectRsp BTA_AvProtectRsp;
 
@@ -217,19 +187,15 @@ extern struct BTA_AvProtectRsp BTA_AvProtectRsp;
 // Params: tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx, uint8_t*
 // p_codec_info, uint8_t num_protect, const uint8_t* p_protect_info Return: void
 struct BTA_AvReconfig {
-  std::function<void(tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx,
-                     uint8_t* p_codec_info, uint8_t num_protect,
-                     const uint8_t* p_protect_info)>
-      body{[](tBTA_AV_HNDL /* hndl */, bool /* suspend */,
-              uint8_t /* sep_info_idx */, uint8_t* /* p_codec_info */,
-              uint8_t /* num_protect */,
-              const uint8_t* /* p_protect_info */) {}};
-  void operator()(tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx,
-                  uint8_t* p_codec_info, uint8_t num_protect,
-                  const uint8_t* p_protect_info) {
-    body(hndl, suspend, sep_info_idx, p_codec_info, num_protect,
-         p_protect_info);
-  };
+  std::function<void(tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx, uint8_t* p_codec_info,
+                     uint8_t num_protect, const uint8_t* p_protect_info)>
+          body{[](tBTA_AV_HNDL /* hndl */, bool /* suspend */, uint8_t /* sep_info_idx */,
+                  uint8_t* /* p_codec_info */, uint8_t /* num_protect */,
+                  const uint8_t* /* p_protect_info */) {}};
+  void operator()(tBTA_AV_HNDL hndl, bool suspend, uint8_t sep_info_idx, uint8_t* p_codec_info,
+                  uint8_t num_protect, const uint8_t* p_protect_info) {
+    body(hndl, suspend, sep_info_idx, p_codec_info, num_protect, p_protect_info);
+  }
 };
 extern struct BTA_AvReconfig BTA_AvReconfig;
 
@@ -238,18 +204,15 @@ extern struct BTA_AvReconfig BTA_AvReconfig;
 // tBTA_AV_SINK_DATA_CBACK* p_sink_data_cback, uint16_t service_uuid Return:
 // void
 struct BTA_AvRegister {
-  std::function<void(tBTA_AV_CHNL chnl, const char* p_service_name,
-                     uint8_t app_id, tBTA_AV_SINK_DATA_CBACK* p_sink_data_cback,
-                     uint16_t service_uuid)>
-      body{[](tBTA_AV_CHNL /* chnl */, const char* /* p_service_name */,
-              uint8_t /* app_id */,
-              tBTA_AV_SINK_DATA_CBACK* /* p_sink_data_cback */,
-              uint16_t /* service_uuid */) {}};
+  std::function<void(tBTA_AV_CHNL chnl, const char* p_service_name, uint8_t app_id,
+                     tBTA_AV_SINK_DATA_CBACK* p_sink_data_cback, uint16_t service_uuid)>
+          body{[](tBTA_AV_CHNL /* chnl */, const char* /* p_service_name */, uint8_t /* app_id */,
+                  tBTA_AV_SINK_DATA_CBACK* /* p_sink_data_cback */,
+                  uint16_t /* service_uuid */) {}};
   void operator()(tBTA_AV_CHNL chnl, const char* p_service_name, uint8_t app_id,
-                  tBTA_AV_SINK_DATA_CBACK* p_sink_data_cback,
-                  uint16_t service_uuid) {
+                  tBTA_AV_SINK_DATA_CBACK* p_sink_data_cback, uint16_t service_uuid) {
     body(chnl, p_service_name, app_id, p_sink_data_cback, service_uuid);
-  };
+  }
 };
 extern struct BTA_AvRegister BTA_AvRegister;
 
@@ -257,14 +220,12 @@ extern struct BTA_AvRegister BTA_AvRegister;
 // Params: uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id, tBTA_AV_STATE
 // key_state Return: void
 struct BTA_AvRemoteCmd {
-  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id,
-                     tBTA_AV_STATE key_state)>
-      body{[](uint8_t /* rc_handle */, uint8_t /* label */,
-              tBTA_AV_RC /* rc_id */, tBTA_AV_STATE /* key_state */) {}};
-  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id,
-                  tBTA_AV_STATE key_state) {
+  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id, tBTA_AV_STATE key_state)>
+          body{[](uint8_t /* rc_handle */, uint8_t /* label */, tBTA_AV_RC /* rc_id */,
+                  tBTA_AV_STATE /* key_state */) {}};
+  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_RC rc_id, tBTA_AV_STATE key_state) {
     body(rc_handle, label, rc_id, key_state);
-  };
+  }
 };
 extern struct BTA_AvRemoteCmd BTA_AvRemoteCmd;
 
@@ -272,15 +233,14 @@ extern struct BTA_AvRemoteCmd BTA_AvRemoteCmd;
 // Params: uint8_t rc_handle, uint8_t label, tBTA_AV_STATE key_state, uint8_t*
 // p_msg, uint8_t buf_len Return: void
 struct BTA_AvRemoteVendorUniqueCmd {
-  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_STATE key_state,
-                     uint8_t* p_msg, uint8_t buf_len)>
-      body{[](uint8_t /* rc_handle */, uint8_t /* label */,
-              tBTA_AV_STATE /* key_state */, uint8_t* /* p_msg */,
-              uint8_t /* buf_len */) {}};
-  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_STATE key_state,
-                  uint8_t* p_msg, uint8_t buf_len) {
+  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_STATE key_state, uint8_t* p_msg,
+                     uint8_t buf_len)>
+          body{[](uint8_t /* rc_handle */, uint8_t /* label */, tBTA_AV_STATE /* key_state */,
+                  uint8_t* /* p_msg */, uint8_t /* buf_len */) {}};
+  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_STATE key_state, uint8_t* p_msg,
+                  uint8_t buf_len) {
     body(rc_handle, label, key_state, p_msg, buf_len);
-  };
+  }
 };
 extern struct BTA_AvRemoteVendorUniqueCmd BTA_AvRemoteVendorUniqueCmd;
 
@@ -289,10 +249,8 @@ extern struct BTA_AvRemoteVendorUniqueCmd BTA_AvRemoteVendorUniqueCmd;
 // Return: void
 struct BTA_AvSetLatency {
   std::function<void(tBTA_AV_HNDL handle, bool is_low_latency)> body{
-      [](tBTA_AV_HNDL /* handle */, bool /* is_low_latency */) {}};
-  void operator()(tBTA_AV_HNDL handle, bool is_low_latency) {
-    body(handle, is_low_latency);
-  };
+          [](tBTA_AV_HNDL /* handle */, bool /* is_low_latency */) {}};
+  void operator()(tBTA_AV_HNDL handle, bool is_low_latency) { body(handle, is_low_latency); }
 };
 extern struct BTA_AvSetLatency BTA_AvSetLatency;
 
@@ -301,8 +259,8 @@ extern struct BTA_AvSetLatency BTA_AvSetLatency;
 // Return: void
 struct BTA_AvSetPeerSep {
   std::function<void(const RawAddress& bdaddr, uint8_t sep)> body{
-      [](const RawAddress& /* bdaddr */, uint8_t /* sep */) {}};
-  void operator()(const RawAddress& bdaddr, uint8_t sep) { body(bdaddr, sep); };
+          [](const RawAddress& /* bdaddr */, uint8_t /* sep */) {}};
+  void operator()(const RawAddress& bdaddr, uint8_t sep) { body(bdaddr, sep); }
 };
 extern struct BTA_AvSetPeerSep BTA_AvSetPeerSep;
 
@@ -311,10 +269,8 @@ extern struct BTA_AvSetPeerSep BTA_AvSetPeerSep;
 // Return: void
 struct BTA_AvStart {
   std::function<void(tBTA_AV_HNDL handle, bool use_latency_mode)> body{
-      [](tBTA_AV_HNDL /* handle */, bool /* use_latency_mode */) {}};
-  void operator()(tBTA_AV_HNDL handle, bool use_latency_mode) {
-    body(handle, use_latency_mode);
-  };
+          [](tBTA_AV_HNDL /* handle */, bool /* use_latency_mode */) {}};
+  void operator()(tBTA_AV_HNDL handle, bool use_latency_mode) { body(handle, use_latency_mode); }
 };
 extern struct BTA_AvStart BTA_AvStart;
 
@@ -323,8 +279,8 @@ extern struct BTA_AvStart BTA_AvStart;
 // Return: void
 struct BTA_AvStop {
   std::function<void(tBTA_AV_HNDL handle, bool suspend)> body{
-      [](tBTA_AV_HNDL /* handle */, bool /* suspend */) {}};
-  void operator()(tBTA_AV_HNDL handle, bool suspend) { body(handle, suspend); };
+          [](tBTA_AV_HNDL /* handle */, bool /* suspend */) {}};
+  void operator()(tBTA_AV_HNDL handle, bool suspend) { body(handle, suspend); }
 };
 extern struct BTA_AvStop BTA_AvStop;
 
@@ -332,15 +288,14 @@ extern struct BTA_AvStop BTA_AvStop;
 // Params: uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code, uint8_t*
 // p_data, uint16_t len Return: void
 struct BTA_AvVendorCmd {
-  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code,
-                     uint8_t* p_data, uint16_t len)>
-      body{[](uint8_t /* rc_handle */, uint8_t /* label */,
-              tBTA_AV_CODE /* cmd_code */, uint8_t* /* p_data */,
-              uint16_t /* len */) {}};
-  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code,
-                  uint8_t* p_data, uint16_t len) {
+  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code, uint8_t* p_data,
+                     uint16_t len)>
+          body{[](uint8_t /* rc_handle */, uint8_t /* label */, tBTA_AV_CODE /* cmd_code */,
+                  uint8_t* /* p_data */, uint16_t /* len */) {}};
+  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE cmd_code, uint8_t* p_data,
+                  uint16_t len) {
     body(rc_handle, label, cmd_code, p_data, len);
-  };
+  }
 };
 extern struct BTA_AvVendorCmd BTA_AvVendorCmd;
 
@@ -348,15 +303,14 @@ extern struct BTA_AvVendorCmd BTA_AvVendorCmd;
 // Params: uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, uint8_t*
 // p_data, uint16_t len, uint32_t company_id Return: void
 struct BTA_AvVendorRsp {
-  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
-                     uint8_t* p_data, uint16_t len, uint32_t company_id)>
-      body{[](uint8_t /* rc_handle */, uint8_t /* label */,
-              tBTA_AV_CODE /* rsp_code */, uint8_t* /* p_data */,
-              uint16_t /* len */, uint32_t /* company_id */) {}};
-  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code,
-                  uint8_t* p_data, uint16_t len, uint32_t company_id) {
+  std::function<void(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, uint8_t* p_data,
+                     uint16_t len, uint32_t company_id)>
+          body{[](uint8_t /* rc_handle */, uint8_t /* label */, tBTA_AV_CODE /* rsp_code */,
+                  uint8_t* /* p_data */, uint16_t /* len */, uint32_t /* company_id */) {}};
+  void operator()(uint8_t rc_handle, uint8_t label, tBTA_AV_CODE rsp_code, uint8_t* p_data,
+                  uint16_t len, uint32_t company_id) {
     body(rc_handle, label, rsp_code, p_data, len, company_id);
-  };
+  }
 };
 extern struct BTA_AvVendorRsp BTA_AvVendorRsp;
 

@@ -349,6 +349,7 @@ enum OpCode : 16 {
   LE_READ_LOCAL_RESOLVABLE_ADDRESS = 0x202C,
   LE_SET_ADDRESS_RESOLUTION_ENABLE = 0x202D,
   LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT = 0x202E,
+  LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_V2 = 0x209E,
   LE_READ_MAXIMUM_DATA_LENGTH = 0x202F,
   LE_READ_PHY = 0x2030,
   LE_SET_DEFAULT_PHY = 0x2031,
@@ -429,20 +430,20 @@ enum OpCode : 16 {
   LE_SET_DATA_RELATED_ADDRESS_CHANGES = 0x207C,
   LE_SET_DEFAULT_SUBRATE = 0x207D,
   LE_SUBRATE_REQUEST = 0x207E,
-  LE_CS_WRITE_CACHED_REMOTE_SUPPORTED_CAPABILITIES = 0xFBE9,
-  LE_CS_SET_PROCEDURE_PARAMETERS = 0xFBEA,
-  LE_CS_TEST_END = 0xFBEB,
-  LE_CS_TEST = 0xFBEC,
-  LE_CS_PROCEDURE_ENABLE = 0xFBF1,
-  LE_CS_SET_CHANNEL_CLASSIFICATION = 0xFBF2,
-  LE_CS_REMOVE_CONFIG = 0xFBF3,
-  LE_CS_CREATE_CONFIG = 0xFBF4,
-  LE_CS_READ_REMOTE_FAE_TABLE = 0xFBF6,
-  LE_CS_WRITE_CACHED_REMOTE_FAE_TABLE = 0xFBF7,
-  LE_CS_SET_DEFAULT_SETTINGS = 0xFBF8,
-  LE_CS_SECURITY_ENABLE = 0xFBF9,
-  LE_CS_READ_REMOTE_SUPPORTED_CAPABILITIES = 0xFBFA,
-  LE_CS_READ_LOCAL_SUPPORTED_CAPABILITIES = 0xFBFB,
+  LE_CS_READ_LOCAL_SUPPORTED_CAPABILITIES = 0x2089,
+  LE_CS_READ_REMOTE_SUPPORTED_CAPABILITIES = 0x208A,
+  LE_CS_WRITE_CACHED_REMOTE_SUPPORTED_CAPABILITIES = 0x208B,
+  LE_CS_SECURITY_ENABLE = 0x208C,
+  LE_CS_SET_DEFAULT_SETTINGS = 0x208D,
+  LE_CS_READ_REMOTE_FAE_TABLE = 0x208E,
+  LE_CS_WRITE_CACHED_REMOTE_FAE_TABLE = 0x208F,
+  LE_CS_CREATE_CONFIG = 0x2090,
+  LE_CS_REMOVE_CONFIG = 0x0291,
+  LE_CS_SET_CHANNEL_CLASSIFICATION = 0x2092,
+  LE_CS_SET_PROCEDURE_PARAMETERS = 0x2093,
+  LE_CS_PROCEDURE_ENABLE = 0x2094,
+  LE_CS_TEST = 0x2095,
+  LE_CS_TEST_END = 0x2096,
 
   // VENDOR_SPECIFIC
   // MSFT_OPCODE_xxxx below is needed for the tests.
@@ -456,6 +457,7 @@ enum OpCode : 16 {
   CONTROLLER_DEBUG_INFO = 0xFD5B,
   CONTROLLER_A2DP_OPCODE = 0xFD5D,
   CONTROLLER_BQR = 0xFD5E,
+  DYNAMIC_AUDIO_BUFFER = 0xFD5F,
   // MSFT_OPCODE_xxxx below are needed for the tests.
   MSFT_OPCODE_MEDIATEK = 0xFD30,
   MSFT_OPCODE_QUALCOMM = 0xFD70,
@@ -548,6 +550,8 @@ enum OpCodeIndex : 16 {
   READ_CURRENT_IAC_LAP = 113,
   WRITE_CURRENT_IAC_LAP = 114,
   SET_AFH_HOST_CHANNEL_CLASSIFICATION = 121,
+  LE_CS_READ_REMOTE_FAE_TABLE = 122,
+  LE_CS_WRITE_CACHED_REMOTE_FAE_TABLE = 123,
   READ_INQUIRY_SCAN_TYPE = 124,
   WRITE_INQUIRY_SCAN_TYPE = 125,
   READ_INQUIRY_MODE = 126,
@@ -573,6 +577,8 @@ enum OpCodeIndex : 16 {
   SETUP_SYNCHRONOUS_CONNECTION = 163,
   ACCEPT_SYNCHRONOUS_CONNECTION = 164,
   REJECT_SYNCHRONOUS_CONNECTION = 165,
+  LE_CS_CREATE_CONFIG = 166,
+  LE_CS_REMOVE_CONFIG = 167,
   READ_EXTENDED_INQUIRY_RESPONSE = 170,
   WRITE_EXTENDED_INQUIRY_RESPONSE = 171,
   REFRESH_ENCRYPTION_KEY = 172,
@@ -596,13 +602,20 @@ enum OpCodeIndex : 16 {
   SEND_KEYPRESS_NOTIFICATION = 202,
   IO_CAPABILITY_REQUEST_NEGATIVE_REPLY = 203,
   READ_ENCRYPTION_KEY_SIZE = 204,
+  LE_CS_READ_LOCAL_SUPPORTED_CAPABILITIES = 205,
+  LE_CS_READ_REMOTE_SUPPORTED_CAPABILITIES = 206,
+  LE_CS_WRITE_CACHED_REMOTE_SUPPORTED_CAPABILITIES = 207,
   SET_EVENT_MASK_PAGE_2 = 222,
   READ_FLOW_CONTROL_MODE = 230,
   WRITE_FLOW_CONTROL_MODE = 231,
   READ_DATA_BLOCK_SIZE = 232,
+  LE_CS_TEST = 233,
+  LE_CS_TEST_END = 234,
   READ_ENHANCED_TRANSMIT_POWER_LEVEL = 240,
+  LE_CS_SECURITY_ENABLE = 241,
   READ_LE_HOST_SUPPORT = 245,
   WRITE_LE_HOST_SUPPORT = 246,
+  LE_CS_SET_DEFAULT_SETTINGS = 247,
   LE_SET_EVENT_MASK = 250,
   LE_READ_BUFFER_SIZE_V1 = 251,
   LE_READ_LOCAL_SUPPORTED_FEATURES = 252,
@@ -633,6 +646,9 @@ enum OpCodeIndex : 16 {
   LE_RECEIVER_TEST_V1 = 284,
   LE_TRANSMITTER_TEST_V1 = 285,
   LE_TEST_END = 286,
+  LE_CS_SET_CHANNEL_CLASSIFICATION = 290,
+  LE_CS_SET_PROCEDURE_PARAMETERS = 291,
+  LE_CS_PROCEDURE_ENABLE = 292,
   ENHANCED_SETUP_SYNCHRONOUS_CONNECTION = 293,
   ENHANCED_ACCEPT_SYNCHRONOUS_CONNECTION = 294,
   READ_LOCAL_SUPPORTED_CODECS_V1 = 295,
@@ -768,6 +784,7 @@ enum OpCodeIndex : 16 {
   SET_MIN_ENCRYPTION_KEY_SIZE = 457,
   LE_SET_DEFAULT_SUBRATE = 460,
   LE_SUBRATE_REQUEST = 461,
+  LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_V2 = 482,
 }
 
 packet Command {
@@ -847,6 +864,7 @@ enum EventCode : 8 {
   LE_META_EVENT = 0x3e,
   NUMBER_OF_COMPLETED_DATA_BLOCKS = 0x48,
   AUTHENTICATED_PAYLOAD_TIMEOUT_EXPIRED = 0x57,
+  ENCRYPTION_CHANGE_V2 = 0x59,
   VENDOR_SPECIFIC = 0xFF,
 }
 
@@ -894,14 +912,14 @@ enum SubeventCode : 8 {
   TRANSMIT_POWER_REPORTING = 0x21,
   BIG_INFO_ADVERTISING_REPORT = 0x22,
   LE_SUBRATE_CHANGE = 0x23,
-  LE_CS_TEST_END_COMPLETE = 0xF5,
-  LE_CS_SUBEVENT_RESULT_CONTINUE = 0xF6,
-  LE_CS_SUBEVENT_RESULT = 0xF7,
-  LE_CS_PROCEDURE_ENABLE_COMPLETE = 0xF8,
-  LE_CS_CONFIG_COMPLETE = 0xF9,
-  LE_CS_SECURITY_ENABLE_COMPLETE = 0xFA,
-  LE_CS_READ_REMOTE_FAE_TABLE_COMPLETE = 0xFB,
-  LE_CS_READ_REMOTE_SUPPORTED_CAPABILITIES_COMPLETE = 0xFC,
+  LE_CS_READ_REMOTE_SUPPORTED_CAPABILITIES_COMPLETE = 0x2C,
+  LE_CS_READ_REMOTE_FAE_TABLE_COMPLETE = 0x2D,
+  LE_CS_SECURITY_ENABLE_COMPLETE = 0x2E,
+  LE_CS_CONFIG_COMPLETE = 0x2F,
+  LE_CS_PROCEDURE_ENABLE_COMPLETE = 0x30,
+  LE_CS_SUBEVENT_RESULT = 0x31,
+  LE_CS_SUBEVENT_RESULT_CONTINUE = 0x32,
+  LE_CS_TEST_END_COMPLETE = 0x33,
 }
 
 // Vendor specific events
@@ -3792,6 +3810,15 @@ packet LeSetResolvablePrivateAddressTimeoutComplete : CommandComplete (command_o
   status : ErrorCode,
 }
 
+packet LeSetResolvablePrivateAddressTimeoutV2 : LeSecurityCommand (op_code = LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_V2) {
+  rpa_timeout_min : 16, // Minimum RPA_Timeout measured in seconds 0x0001 to 0x0E10 1s to 1 hour, default 0x01E0 (480 s or 8 minutes)
+  rpa_timeout_max : 16, // Maximum RPA_Timeout measured in seconds 0x0001 to 0x0E10 1s to 1 hour, default 0x0384 (900 s or 15 minutes)
+}
+
+packet LeSetResolvablePrivateAddressTimeoutV2Complete : CommandComplete (command_op_code = LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_V2) {
+  status : ErrorCode,
+}
+
 packet LeReadMaximumDataLength : Command (op_code = LE_READ_MAXIMUM_DATA_LENGTH) {
 }
 
@@ -4743,6 +4770,7 @@ packet LeRemoveIsoDataPathComplete : CommandComplete (command_op_code = LE_REMOV
 enum LeHostFeatureBits : 8 {
   CONNECTED_ISO_STREAM_HOST_SUPPORT = 32,
   CONNECTION_SUBRATING_HOST_SUPPORT = 38,
+  CHANNEL_SOUNDING_HOST_SUPPORT = 47,
 }
 
 packet LeSetHostFeature : Command (op_code = LE_SET_HOST_FEATURE) {
@@ -4995,6 +5023,7 @@ packet LeCsReadLocalSupportedCapabilitiesComplete : CommandComplete (command_op_
   optional_t_fcs_times_supported : CsOptionalTFcsTimesSupported,
   optional_t_pm_times_supported : CsOptionalTPmTimesSupported,
   t_sw_time_supported : 8,
+  optional_tx_snr_capability : 8,
 }
 
 packet LeCsReadRemoteSupportedCapabilities : DistanceMeasurementCommand (op_code = LE_CS_READ_REMOTE_SUPPORTED_CAPABILITIES) {
@@ -5027,6 +5056,7 @@ packet LeCsWriteCachedRemoteSupportedCapabilities : DistanceMeasurementCommand (
   optional_t_fcs_times_supported : CsOptionalTFcsTimesSupported,
   optional_t_pm_times_supported : CsOptionalTPmTimesSupported,
   t_sw_time_supported : 8,
+  optional_tx_snr_capability: 8,
 }
 
 packet LeCsWriteCachedRemoteSupportedCapabilitiesComplete : CommandComplete (command_op_code = LE_CS_WRITE_CACHED_REMOTE_SUPPORTED_CAPABILITIES) {
@@ -5156,7 +5186,7 @@ packet LeCsCreateConfig : DistanceMeasurementCommand (op_code = LE_CS_CREATE_CON
   channel_selection_type : CsChannelSelectionType,
   ch3c_shape : CsCh3cShape,
   ch3c_jump : 8,
-  companion_signal_enable : Enable,
+  _reserved_ : 8,
 }
 
 packet LeCsCreateConfigStatus : CommandStatus (command_op_code = LE_CS_CREATE_CONFIG) {
@@ -5194,6 +5224,15 @@ struct CsPreferredPeerAntenna {
   _reserved_ : 4,
 }
 
+enum CsSnrControl : 8 {
+  ADJUST_18_DB = 0x00,
+  ADJUST_21_DB = 0x01,
+  ADJUST_24_DB = 0x02,
+  ADJUST_27_DB = 0x03,
+  ADJUST_30_DB = 0x04,
+  NOT_APPLIED = 0xFF,
+}
+
 packet LeCsSetProcedureParameters  : DistanceMeasurementCommand (op_code = LE_CS_SET_PROCEDURE_PARAMETERS) {
   connection_handle: 12,
   _reserved_ : 4,
@@ -5209,6 +5248,8 @@ packet LeCsSetProcedureParameters  : DistanceMeasurementCommand (op_code = LE_CS
   phy : CsPhy,
   tx_pwr_delta : 8,
   preferred_peer_antenna : CsPreferredPeerAntenna,
+  snr_control_initiator: CsSnrControl,
+  snr_control_reflector: CsSnrControl,
 }
 
 packet LeCsSetProcedureParametersComplete : CommandComplete (command_op_code = LE_CS_SET_PROCEDURE_PARAMETERS) {
@@ -5231,35 +5272,30 @@ packet LeCsProcedureEnableStatus : CommandStatus (command_op_code = LE_CS_PROCED
 packet LeCsTest : DistanceMeasurementCommand (op_code = LE_CS_TEST) {
   main_mode_type : 8,
   sub_mode_type : 8,
-  main_mode_steps : 8,
   main_mode_repetition : 8,
   mode_0_steps : 8,
   role : 8,
   rtt_type : 8,
   cs_sync_phy : 8,
   cs_sync_antenna_selection : 8,
-  cs_sync_aa_initiator : 32,
-  cs_sync_aa_reflector : 32,
-  cs_sync_random : 8[16],
-  cs_sync_user_payload_pattern : 8,
   cs_subevent_length : 24,
   cs_subevent_interval : 16,
+  max_num_subevents : 8,
   transmit_power_level : 8,
   t_ip1_time : 8,
   t_ip2_time : 8,
   t_fcs_time : 8,
   t_pm_time : 8,
   t_sw_time : 8,
-  t_pm_tone_ext : 8,
-  ss_marker1_position: 8,
-  ss_marker2_position: 8,
-  ss_marker_value : 8,
-  companion_signal_enable : 8,
-  tone_antenna_config : 8,
-  tone_antenna_permutation : 8,
-  channel_map_repetition: 8,
-  _size_(channel) : 8,
-  channel : 8[],
+  tone_antenna_config_selection : 8,
+  _reserved_ : 8,
+  snr_control_initiator: CsSnrControl,
+  snr_control_reflector: CsSnrControl,
+  drbg_nonce : 16,
+  channel_map_repetition : 8,
+  override_config : 8,
+  override_parameters_length : 8,
+  override_parameters_data : 8[],
 }
 
 packet LeCsTestComplete : CommandComplete (command_op_code = LE_CS_TEST) {
@@ -5311,7 +5347,22 @@ packet LeGetVendorCapabilitiesComplete096 : LeGetVendorCapabilitiesComplete095 {
 
 packet LeGetVendorCapabilitiesComplete098 : LeGetVendorCapabilitiesComplete096 {
   a2dp_source_offload_capability_mask: 32,
-  bluetooth_quality_report_support: 8
+  bluetooth_quality_report_support: 8,
+  _payload_,
+}
+
+packet LeGetVendorCapabilitiesComplete103 : LeGetVendorCapabilitiesComplete098 {
+  dynamic_audio_buffer_support : 32,
+  _payload_,
+}
+
+test LeGetVendorCapabilitiesComplete103 {
+  "\x0e\x1c\x01\x53\xfd\x00\x10\x01\x00\x28\x00\x01\x3e\x01\x03\x01\x14\x00\x01\x01\x00\x23\x00\x00\x00\x01\x23\x00\x00\x00",
+}
+
+packet LeGetVendorCapabilitiesComplete104 : LeGetVendorCapabilitiesComplete103 {
+  a2dp_offload_v2_support : 8,
+  _payload_,
 }
 
 enum SubOcf : 8 {
@@ -5761,7 +5812,7 @@ enum BqrReportAction : 8 {
   CLEAR = 0x02,
 }
 
-packet ControllerBqr : VendorCommand(op_code = CONTROLLER_BQR) {
+packet ControllerBqr : VendorCommand (op_code = CONTROLLER_BQR) {
   bqr_report_action : BqrReportAction,
   bqr_quality_event_mask : 32,
   bqr_minimum_report_interval : 16,
@@ -5778,6 +5829,60 @@ packet ControllerBqrComplete : CommandComplete (command_op_code = CONTROLLER_BQR
 
 test ControllerBqrComplete {
   "\x0e\x08\x01\x5e\xfd\x00\x1f\x00\x07\x00",
+}
+
+enum DabCommand : 8 {
+  GET_AUDIO_BUFFER_TIME_CAPABILITY = 0x01,
+  SET_AUDIO_BUFFER_TIME = 0x02,
+}
+
+packet DynamicAudioBuffer : VendorCommand (op_code = DYNAMIC_AUDIO_BUFFER) {
+  dab_command : DabCommand,
+  _body_,
+}
+
+packet DynamicAudioBufferComplete : CommandComplete (command_op_code = DYNAMIC_AUDIO_BUFFER) {
+  status : ErrorCode,
+  dab_command : DabCommand,
+  _body_,
+}
+
+packet DabGetAudioBufferTimeCapability : DynamicAudioBuffer (dab_command = GET_AUDIO_BUFFER_TIME_CAPABILITY) {
+}
+
+test DabGetAudioBufferTimeCapability {
+  "\x5f\xfd\x01\x01",
+}
+
+struct DynamicAudioBufferCodecCapability {
+  default_time_ms : 16,
+  maximum_time_ms : 16,
+  minimum_time_ms : 16,
+}
+
+packet DabGetAudioBufferTimeCapabilityComplete : DynamicAudioBufferComplete (dab_command = GET_AUDIO_BUFFER_TIME_CAPABILITY) {
+  audio_codec_type_supported : 32,
+  audio_codec_capabilities : DynamicAudioBufferCodecCapability[32],
+}
+
+test DabGetAudioBufferTimeCapabilityComplete {
+  "\x0e\xc9\x01\x5f\xfd\x00\x01\x03\x00\x00\x00\xf4\x01\xf4\x01\x64\x00\xf4\x01\xf4\x01\x64\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+}
+
+packet DabSetAudioBufferTime : DynamicAudioBuffer(dab_command = SET_AUDIO_BUFFER_TIME) {
+  buffer_time_ms : 16, // Requested audio buffer time for the currently used codec.
+}
+
+test DabSetAudioBufferTime {
+  "\x5f\xfd\x03\x02\x23\x01",
+}
+
+packet DabSetAudioBufferTimeComplete : DynamicAudioBufferComplete (dab_command = SET_AUDIO_BUFFER_TIME) {
+  current_buffer_time_ms : 16,
+}
+
+test DabSetAudioBufferTimeComplete {
+  "\x0e\x07\x01\x5f\xfd\x00\x02\x23\x01",
 }
 
 // HCI Event Packets
@@ -6183,7 +6288,7 @@ packet LinkSupervisionTimeoutChanged : Event (event_code = LINK_SUPERVISION_TIME
   link_supervision_timeout : 16, // 0x001-0xFFFF (0.625ms-40.9s)
 }
 
-packet EnhancedFlush : Command (op_code = ENHANCED_FLUSH) {
+packet EnhancedFlush : AclCommand (op_code = ENHANCED_FLUSH) {
   connection_handle : 12,
   _reserved_ : 4,
   _reserved_ : 8, // Automatically flushable only (0x00)
@@ -6234,6 +6339,14 @@ packet NumberOfCompletedDataBlocks : Event (event_code = NUMBER_OF_COMPLETED_DAT
 packet AuthenticatedPayloadTimeoutExpired : Event (event_code = AUTHENTICATED_PAYLOAD_TIMEOUT_EXPIRED) {
   connection_handle : 12,
   _reserved_ : 4,
+}
+
+packet EncryptionChangeV2 : Event (event_code = ENCRYPTION_CHANGE_V2) {
+  status : ErrorCode,
+  connection_handle : 12,
+  _reserved_ : 4,
+  encryption_enabled : EncryptionEnabled,
+  key_size : 8,
 }
 
 // LE Events
@@ -6701,6 +6814,7 @@ packet LeCsReadRemoteSupportedCapabilitiesComplete : LeMetaEvent (subevent_code 
   optional_t_fcs_times_supported : CsOptionalTFcsTimesSupported,
   optional_t_pm_times_supported : CsOptionalTPmTimesSupported,
   t_sw_time_supported : 8,
+  optional_tx_snr_capability : 8,
 }
 
 packet LeCsReadRemoteFaeTableComplete : LeMetaEvent (subevent_code = LE_CS_READ_REMOTE_FAE_TABLE_COMPLETE) {
@@ -6754,7 +6868,7 @@ packet LeCsConfigComplete : LeMetaEvent (subevent_code = LE_CS_CONFIG_COMPLETE) 
   channel_selection_type : CsChannelSelectionType,
   ch3c_shape : CsCh3cShape,
   ch3c_jump : 8,
-  companion_signal_enable : Enable,
+  _reserved_ : 8,
   t_ip1_time : 8,
   t_ip2_time : 8,
   t_fcs_time : 8,
@@ -6778,6 +6892,132 @@ packet LeCsProcedureEnableComplete : LeMetaEvent (subevent_code = LE_CS_PROCEDUR
   procedure_count : 16,
 }
 
+struct LeCsMode0InitatorData {
+  packet_quality : 8,
+  packet_rssi : 8,
+  packet_antenna : 8,
+  measured_freq_offset : 15,
+  _reserved_ : 1,
+}
+
+struct LeCsMode0ReflectorData {
+  packet_quality : 8,
+  packet_rssi : 8,
+  packet_antenna : 8,
+}
+
+enum CsPacketNadm : 8 {
+  ATTACK_IS_EXTREMELY_UNLIKELY = 0x00,
+  ATTACK_IS_VERY_UNLIKELY = 0x01,
+  ATTACK_IS_UNLIKELY = 0x02,
+  ATTACK_IS_POSSIBLE = 0x03,
+  ATTACK_IS_LIKELY = 0x04,
+  ATTACK_IS_VERY_LIKELY = 0x05,
+  ATTACK_IS_EXTREMELY_LIKELY = 0x06,
+  UNKNOWN_NADM = 0xFF,
+}
+
+struct LeCsToneData {
+  i_sample : 12,
+  q_sample : 12,
+}
+
+struct LeCsMode1InitatorData {
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  toa_tod_initiator : 16,
+  packet_antenna : 8,
+}
+
+struct LeCsMode1InitatorDataWithPacketPct {
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  toa_tod_initiator : 16,
+  packet_antenna : 8,
+  packet_pct1 : LeCsToneData,
+  packet_pct2 : LeCsToneData,
+}
+
+struct LeCsMode1ReflectorData {
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  tod_toa_reflector : 16,
+  packet_antenna : 8,
+}
+
+struct LeCsMode1ReflectorDataWithPacketPct {
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  tod_toa_reflector : 16,
+  packet_antenna : 8,
+  packet_pct1 : LeCsToneData,
+  packet_pct2 : LeCsToneData,
+}
+
+struct LeCsToneDataWithQuality {
+  i_sample : 12,
+  q_sample : 12,
+  tone_quality_indicator : 8,
+}
+
+struct LeCsMode2Data {
+  _count_(tone_data) : 8,
+  antenna_permutation_index : 8,
+  tone_data : LeCsToneDataWithQuality[],
+}
+
+struct LeCsMode3InitatorData {
+  _count_(tone_data) : 8,
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  packet_antenna : 8,
+  toa_tod_initiator : 16,
+  antenna_permutation_index : 8,
+  tone_data : LeCsToneDataWithQuality[],
+}
+
+struct LeCsMode3InitatorDataWithPacketPct {
+  _count_(tone_data) : 8,
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  packet_antenna : 8,
+  packet_pct1 : LeCsToneData,
+  packet_pct2 : LeCsToneData,
+  toa_tod_initiator : 16,
+  antenna_permutation_index : 8,
+  tone_data : LeCsToneDataWithQuality[],
+}
+
+struct LeCsMode3ReflectorData {
+  _count_(tone_data) : 8,
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  packet_antenna : 8,
+  tod_toa_reflector : 16,
+  antenna_permutation_index : 8,
+  tone_data : LeCsToneDataWithQuality[],
+}
+
+struct LeCsMode3ReflectorDataWithPacketPct {
+  _count_(tone_data) : 8,
+  packet_quality : 8,
+  packet_nadm : CsPacketNadm,
+  packet_rssi : 8,
+  packet_antenna : 8,
+  packet_pct1 : LeCsToneData,
+  packet_pct2 : LeCsToneData,
+  tod_toa_reflector : 16,
+  antenna_permutation_index : 8,
+  tone_data : LeCsToneDataWithQuality[],
+}
+
 enum CsProcedureDoneStatus : 4 {
   ALL_RESULTS_COMPLETE = 0x0,
   PARTIAL_RESULTS = 0x1,
@@ -6797,6 +7037,22 @@ struct LeCsResultDataStructure {
   step_data : 8[],
 }
 
+enum ProcedureAbortReason : 4 {
+  NO_ABORT = 0x0,
+  LOCAL_HOST_OR_REMOTE = 0x1,
+  INSUFFICIENT_FILTERED_CHANNELS = 0x2,
+  INSTANT_HAS_PASSED = 0x3,
+  UNSPECIFIED = 0xF,
+}
+
+enum SubeventAbortReason : 4 {
+  NO_ABORT = 0x0,
+  LOCAL_HOST_OR_REMOTE = 0x1,
+  NO_CS_SYNC_RECEIVED = 0x2,
+  SCHEDULING_CONFLICTS_OR_LIMITED_RESOURCES = 0x3,
+  UNSPECIFIED = 0xF,
+}
+
 packet LeCsSubeventResult : LeMetaEvent (subevent_code = LE_CS_SUBEVENT_RESULT) {
   connection_handle : 12,
   _reserved_ : 4,
@@ -6810,7 +7066,8 @@ packet LeCsSubeventResult : LeMetaEvent (subevent_code = LE_CS_SUBEVENT_RESULT) 
   _reserved_ : 4,
   subevent_done_status : CsSubeventDoneStatus,
   _reserved_ : 4,
-  abort_reason : 8,
+  procedure_abort_reason : ProcedureAbortReason,
+  subevent_abort_reason : SubeventAbortReason,
   num_antenna_paths : 8,
   _count_(result_data_structures) : 8,
   result_data_structures : LeCsResultDataStructure[],
@@ -6825,10 +7082,15 @@ packet LeCsSubeventResultContinue : LeMetaEvent (subevent_code = LE_CS_SUBEVENT_
   _reserved_ : 4,
   subevent_done_status : CsSubeventDoneStatus,
   _reserved_ : 4,
-  abort_reason : 8,
+  procedure_abort_reason : ProcedureAbortReason,
+  subevent_abort_reason : SubeventAbortReason,
   num_antenna_paths : 8,
   _count_(result_data_structures) : 8,
   result_data_structures : LeCsResultDataStructure[],
+}
+
+packet LeCsTestEndComplete : LeMetaEvent (subevent_code = LE_CS_TEST_END_COMPLETE) {
+  status : ErrorCode,
 }
 
 // Vendor specific events
@@ -6882,6 +7144,8 @@ enum QualityReportId : 8 {
   A2DP_AUDIO_CHOPPY = 0x03,
   SCO_VOICE_CHOPPY = 0x04,
   ROOT_INFLAMMATION = 0x05,
+  LE_AUDIO_CHOPPY = 0x07,
+  CONNECT_FAIL = 0x08,
   LMP_LL_MESSAGE_TRACE = 0x11,
   BT_SCHEDULING_TRACE = 0x12,
   CONTROLLER_DBG_INFO = 0x13,
@@ -6959,6 +7223,14 @@ packet BqrA2dpAudioChoppyEvent : BqrLinkQualityEvent (quality_report_id = A2DP_A
 }
 
 packet BqrScoVoiceChoppyEvent : BqrLinkQualityEvent (quality_report_id = SCO_VOICE_CHOPPY) {
+ _payload_, // vendor specific parameter
+}
+
+packet BqrLeAudioChoppyEvent : BqrLinkQualityEvent (quality_report_id = LE_AUDIO_CHOPPY) {
+ _payload_, // vendor specific parameter
+}
+
+packet BqrConnectFailEvent : BqrLinkQualityEvent (quality_report_id = CONNECT_FAIL) {
  _payload_, // vendor specific parameter
 }
 
@@ -7091,6 +7363,15 @@ packet MsftLeMonitorAdvConditionPatterns : MsftLeMonitorAdv (condition_type = MS
 test MsftLeMonitorAdvConditionPatterns {
   "\x1e\xfc\x0e\x03\x10\x05\x04\xaa\x01\x01\x06\x03\x00\x80\x81\x82\x83", // 1 pattern
   "\x70\xfd\x13\x03\x15\x04\x02\xbb\x01\x02\x04\x03\x00\x80\x81\x06\x0f\x00\x90\x91\x92\x93", // 2 patterns
+}
+
+packet MsftLeMonitorAdvConditionAddress : MsftLeMonitorAdv (condition_type = MSFT_CONDITION_TYPE_ADDRESS) {
+  addr_type: 8,
+  addr : Address,
+}
+
+test MsftLeMonitorAdvConditionAddress {
+    "\x1e\xfc\x0d\x03\x10\x05\x04\xaa\x04\x00\x03\x03\x05\xc4\x05\xc4",
 }
 
 packet MsftLeMonitorAdvConditionUuid : MsftLeMonitorAdv (condition_type = MSFT_CONDITION_TYPE_UUID) {

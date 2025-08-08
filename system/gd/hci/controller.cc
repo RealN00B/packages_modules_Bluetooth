@@ -16,27 +16,38 @@
 
 #include "hci/controller.h"
 
+#include <android_bluetooth_sysprop.h>
+#include <bluetooth/log.h>
+#include <com_android_bluetooth_flags.h>
+
 #include <future>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "common/init_flags.h"
+#include "hci/controller_interface.h"
 #include "hci/event_checkers.h"
 #include "hci/hci_layer.h"
-#include "hci_controller_generated.h"
 #include "os/metrics.h"
 #include "os/system_properties.h"
+#include "stack/include/hcidefs.h"
+#if TARGET_FLOSS
 #include "sysprops/sysprops_module.h"
+#endif
 
 namespace bluetooth {
 namespace hci {
 
-constexpr uint8_t kMinEncryptionKeySize = 7;  // #define MIN_ENCRYPTION_KEY_SIZE 7
+constexpr int kMinEncryptionKeySize = 7;
+constexpr int kMinEncryptionKeySizeDefault = kMinEncryptionKeySize;
+constexpr int kMaxEncryptionKeySize = 16;
 
 constexpr bool kDefaultVendorCapabilitiesEnabled = true;
+constexpr bool kDefaultRpaOffload = false;
+
 static const std::string kPropertyVendorCapabilitiesEnabled =
-    "bluetooth.core.le.vendor_capabilities.enabled";
+        "bluetooth.core.le.vendor_capabilities.enabled";
+static const std::string kPropertyRpaOffload = "bluetooth.core.le.rpa_offload";
 
 using os::Handler;
 
@@ -46,80 +57,106 @@ struct Controller::impl {
   void Start(hci::HciLayer* hci) {
     hci_ = hci;
     Handler* handler = module_.GetHandler();
-    hci_->RegisterEventHandler(
-        EventCode::NUMBER_OF_COMPLETED_PACKETS, handler->BindOn(this, &Controller::impl::NumberOfCompletedPackets));
+    hci_->RegisterEventHandler(EventCode::NUMBER_OF_COMPLETED_PACKETS,
+                               handler->BindOn(this, &Controller::impl::NumberOfCompletedPackets));
 
     set_event_mask(kDefaultEventMask);
+    if (com::android::bluetooth::flags::encryption_change_v2()) {
+      set_event_mask_page_2(kDefaultEventMaskPage2);
+    }
+
     write_le_host_support(Enable::ENABLED, Enable::DISABLED);
-    hci_->EnqueueCommand(ReadLocalNameBuilder::Create(),
-                         handler->BindOnceOn(this, &Controller::impl::read_local_name_complete_handler));
-    hci_->EnqueueCommand(ReadLocalVersionInformationBuilder::Create(),
-                         handler->BindOnceOn(this, &Controller::impl::read_local_version_information_complete_handler));
-    hci_->EnqueueCommand(ReadLocalSupportedCommandsBuilder::Create(),
-                         handler->BindOnceOn(this, &Controller::impl::read_local_supported_commands_complete_handler));
+    hci_->EnqueueCommand(
+            ReadLocalNameBuilder::Create(),
+            handler->BindOnceOn(this, &Controller::impl::read_local_name_complete_handler));
+    hci_->EnqueueCommand(
+            ReadLocalVersionInformationBuilder::Create(),
+            handler->BindOnceOn(
+                    this, &Controller::impl::read_local_version_information_complete_handler));
+    hci_->EnqueueCommand(
+            ReadLocalSupportedCommandsBuilder::Create(),
+            handler->BindOnceOn(this,
+                                &Controller::impl::read_local_supported_commands_complete_handler));
 
     hci_->EnqueueCommand(
-        LeReadLocalSupportedFeaturesBuilder::Create(),
-        handler->BindOnceOn(this, &Controller::impl::le_read_local_supported_features_handler));
+            LeReadLocalSupportedFeaturesBuilder::Create(),
+            handler->BindOnceOn(this, &Controller::impl::le_read_local_supported_features_handler));
 
     hci_->EnqueueCommand(
-        LeReadSupportedStatesBuilder::Create(),
-        handler->BindOnceOn(this, &Controller::impl::le_read_supported_states_handler));
+            LeReadSupportedStatesBuilder::Create(),
+            handler->BindOnceOn(this, &Controller::impl::le_read_supported_states_handler));
 
     // Wait for all extended features read
     std::promise<void> features_promise;
     auto features_future = features_promise.get_future();
 
-    hci_->EnqueueCommand(ReadLocalExtendedFeaturesBuilder::Create(0x00),
-                         handler->BindOnceOn(this, &Controller::impl::read_local_extended_features_complete_handler,
-                                             std::move(features_promise)));
+    hci_->EnqueueCommand(
+            ReadLocalExtendedFeaturesBuilder::Create(0x00),
+            handler->BindOnceOn(this,
+                                &Controller::impl::read_local_extended_features_complete_handler,
+                                std::move(features_promise)));
     features_future.wait();
 
-    le_set_event_mask(MaskLeEventMask(local_version_information_.hci_version_, kDefaultLeEventMask));
+    if (com::android::bluetooth::flags::channel_sounding_in_stack() &&
+        module_.SupportsBleChannelSounding()) {
+      le_set_event_mask(MaskLeEventMask(local_version_information_.hci_version_,
+                                        kDefaultLeEventMask | kLeCSEventMask));
+    } else {
+      le_set_event_mask(
+              MaskLeEventMask(local_version_information_.hci_version_, kDefaultLeEventMask));
+    }
 
-    hci_->EnqueueCommand(ReadBufferSizeBuilder::Create(),
-                         handler->BindOnceOn(this, &Controller::impl::read_buffer_size_complete_handler));
+    hci_->EnqueueCommand(
+            ReadBufferSizeBuilder::Create(),
+            handler->BindOnceOn(this, &Controller::impl::read_buffer_size_complete_handler));
 
-    if (common::init_flags::set_min_encryption_is_enabled() && is_supported(OpCode::SET_MIN_ENCRYPTION_KEY_SIZE)) {
+    if (is_supported(OpCode::SET_MIN_ENCRYPTION_KEY_SIZE)) {
+      uint8_t min_key_size =
+              (uint8_t)std::min(std::max(android::sysprop::bluetooth::Gap::min_key_size().value_or(
+                                                 kMinEncryptionKeySizeDefault),
+                                         kMinEncryptionKeySize),
+                                kMaxEncryptionKeySize);
       hci_->EnqueueCommand(
-          SetMinEncryptionKeySizeBuilder::Create(kMinEncryptionKeySize),
-          handler->BindOnceOn(this, &Controller::impl::set_min_encryption_key_size_handler));
+              SetMinEncryptionKeySizeBuilder::Create(min_key_size),
+              handler->BindOnceOn(this, &Controller::impl::set_min_encryption_key_size_handler));
     }
 
     if (is_supported(OpCode::LE_READ_BUFFER_SIZE_V2)) {
       hci_->EnqueueCommand(
-          LeReadBufferSizeV2Builder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_read_buffer_size_v2_handler));
+              LeReadBufferSizeV2Builder::Create(),
+              handler->BindOnceOn(this, &Controller::impl::le_read_buffer_size_v2_handler));
     } else {
       hci_->EnqueueCommand(
-          LeReadBufferSizeV1Builder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_read_buffer_size_handler));
+              LeReadBufferSizeV1Builder::Create(),
+              handler->BindOnceOn(this, &Controller::impl::le_read_buffer_size_handler));
     }
 
     if (is_supported(OpCode::READ_LOCAL_SUPPORTED_CODECS_V1)) {
       hci_->EnqueueCommand(
-          ReadLocalSupportedCodecsV1Builder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::read_local_supported_codecs_v1_handler));
+              ReadLocalSupportedCodecsV1Builder::Create(),
+              handler->BindOnceOn(this, &Controller::impl::read_local_supported_codecs_v1_handler));
     }
 
     hci_->EnqueueCommand(
-        LeReadFilterAcceptListSizeBuilder::Create(),
-        handler->BindOnceOn(this, &Controller::impl::le_read_connect_list_size_handler));
+            LeReadFilterAcceptListSizeBuilder::Create(),
+            handler->BindOnceOn(this, &Controller::impl::le_read_accept_list_size_handler));
 
     if (is_supported(OpCode::LE_READ_RESOLVING_LIST_SIZE) && module_.SupportsBlePrivacy()) {
       hci_->EnqueueCommand(
-          LeReadResolvingListSizeBuilder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_read_resolving_list_size_handler));
+              LeReadResolvingListSizeBuilder::Create(),
+              handler->BindOnceOn(this, &Controller::impl::le_read_resolving_list_size_handler));
     } else {
-      LOG_INFO("LE_READ_RESOLVING_LIST_SIZE not supported, defaulting to 0");
+      log::info("LE_READ_RESOLVING_LIST_SIZE not supported, defaulting to 0");
       le_resolving_list_size_ = 0;
     }
 
-    if (is_supported(OpCode::LE_READ_MAXIMUM_DATA_LENGTH) && module_.SupportsBleDataPacketLengthExtension()) {
-      hci_->EnqueueCommand(LeReadMaximumDataLengthBuilder::Create(),
-                           handler->BindOnceOn(this, &Controller::impl::le_read_maximum_data_length_handler));
+    if (is_supported(OpCode::LE_READ_MAXIMUM_DATA_LENGTH) &&
+        module_.SupportsBleDataPacketLengthExtension()) {
+      hci_->EnqueueCommand(
+              LeReadMaximumDataLengthBuilder::Create(),
+              handler->BindOnceOn(this, &Controller::impl::le_read_maximum_data_length_handler));
     } else {
-      LOG_INFO("LE_READ_MAXIMUM_DATA_LENGTH not supported, defaulting to 0");
+      log::info("LE_READ_MAXIMUM_DATA_LENGTH not supported, defaulting to 0");
       le_maximum_data_length_.supported_max_rx_octets_ = 0;
       le_maximum_data_length_.supported_max_rx_time_ = 0;
       le_maximum_data_length_.supported_max_tx_octets_ = 0;
@@ -130,74 +167,96 @@ struct Controller::impl {
     write_simple_pairing_mode(Enable::ENABLED);
     if (module_.SupportsSecureConnections()) {
       hci_->EnqueueCommand(
-          WriteSecureConnectionsHostSupportBuilder::Create(Enable::ENABLED),
-          handler->BindOnceOn(
-              this, &Controller::impl::write_secure_connections_host_support_complete_handler));
+              WriteSecureConnectionsHostSupportBuilder::Create(Enable::ENABLED),
+              handler->BindOnceOn(
+                      this,
+                      &Controller::impl::write_secure_connections_host_support_complete_handler));
     }
-    if (is_supported(OpCode::LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH) && module_.SupportsBleDataPacketLengthExtension()) {
+    if (is_supported(OpCode::LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH) &&
+        module_.SupportsBleDataPacketLengthExtension()) {
       hci_->EnqueueCommand(
-          LeReadSuggestedDefaultDataLengthBuilder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_read_suggested_default_data_length_handler));
+              LeReadSuggestedDefaultDataLengthBuilder::Create(),
+              handler->BindOnceOn(
+                      this, &Controller::impl::le_read_suggested_default_data_length_handler));
     } else {
-      LOG_INFO("LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH not supported, defaulting to 27 (0x1B)");
+      log::info("LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH not supported, defaulting to 27 (0x1B)");
       le_suggested_default_data_length_ = 27;
     }
 
-    if (is_supported(OpCode::LE_READ_MAXIMUM_ADVERTISING_DATA_LENGTH) && module_.SupportsBleExtendedAdvertising()) {
+    if (is_supported(OpCode::LE_READ_MAXIMUM_ADVERTISING_DATA_LENGTH) &&
+        module_.SupportsBleExtendedAdvertising()) {
       hci_->EnqueueCommand(
-          LeReadMaximumAdvertisingDataLengthBuilder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_read_maximum_advertising_data_length_handler));
+              LeReadMaximumAdvertisingDataLengthBuilder::Create(),
+              handler->BindOnceOn(
+                      this, &Controller::impl::le_read_maximum_advertising_data_length_handler));
     } else {
-      LOG_INFO("LE_READ_MAXIMUM_ADVERTISING_DATA_LENGTH not supported, defaulting to 31 (0x1F)");
+      log::info("LE_READ_MAXIMUM_ADVERTISING_DATA_LENGTH not supported, defaulting to 31 (0x1F)");
       le_maximum_advertising_data_length_ = 31;
     }
 
     if (is_supported(OpCode::LE_READ_NUMBER_OF_SUPPORTED_ADVERTISING_SETS) &&
         module_.SupportsBleExtendedAdvertising()) {
       hci_->EnqueueCommand(
-          LeReadNumberOfSupportedAdvertisingSetsBuilder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_read_number_of_supported_advertising_sets_handler));
+              LeReadNumberOfSupportedAdvertisingSetsBuilder::Create(),
+              handler->BindOnceOn(
+                      this,
+                      &Controller::impl::le_read_number_of_supported_advertising_sets_handler));
     } else {
-      LOG_INFO("LE_READ_NUMBER_OF_SUPPORTED_ADVERTISING_SETS not supported, defaulting to 1");
+      log::info("LE_READ_NUMBER_OF_SUPPORTED_ADVERTISING_SETS not supported, defaulting to 1");
       le_number_supported_advertising_sets_ = 1;
     }
 
     if (is_supported(OpCode::LE_READ_PERIODIC_ADVERTISER_LIST_SIZE) &&
         module_.SupportsBlePeriodicAdvertising()) {
       hci_->EnqueueCommand(
-          LeReadPeriodicAdvertiserListSizeBuilder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_read_periodic_advertiser_list_size_handler));
+              LeReadPeriodicAdvertiserListSizeBuilder::Create(),
+              handler->BindOnceOn(
+                      this, &Controller::impl::le_read_periodic_advertiser_list_size_handler));
     } else {
-      LOG_INFO("LE_READ_PERIODIC_ADVERTISER_LIST_SIZE not supported, defaulting to 0");
+      log::info("LE_READ_PERIODIC_ADVERTISER_LIST_SIZE not supported, defaulting to 0");
       le_periodic_advertiser_list_size_ = 0;
     }
-    if (is_supported(OpCode::LE_SET_HOST_FEATURE) && module_.SupportsBleConnectedIsochronousStreamCentral()) {
+    if (is_supported(OpCode::LE_SET_HOST_FEATURE) &&
+        module_.SupportsBleConnectedIsochronousStreamCentral()) {
       hci_->EnqueueCommand(
-          LeSetHostFeatureBuilder::Create(LeHostFeatureBits::CONNECTED_ISO_STREAM_HOST_SUPPORT, Enable::ENABLED),
-          handler->BindOnceOn(this, &Controller::impl::le_set_host_feature_handler));
+              LeSetHostFeatureBuilder::Create(LeHostFeatureBits::CONNECTED_ISO_STREAM_HOST_SUPPORT,
+                                              Enable::ENABLED),
+              handler->BindOnceOn(this, &Controller::impl::le_set_host_feature_handler));
     }
 
-    if (common::init_flags::subrating_is_enabled() && is_supported(OpCode::LE_SET_HOST_FEATURE) &&
-        module_.SupportsBleConnectionSubrating()) {
+    if (is_supported(OpCode::LE_SET_HOST_FEATURE) && module_.SupportsBleConnectionSubrating()) {
       hci_->EnqueueCommand(
-          LeSetHostFeatureBuilder::Create(
-              LeHostFeatureBits::CONNECTION_SUBRATING_HOST_SUPPORT, Enable::ENABLED),
-          handler->BindOnceOn(this, &Controller::impl::le_set_host_feature_handler));
+              LeSetHostFeatureBuilder::Create(LeHostFeatureBits::CONNECTION_SUBRATING_HOST_SUPPORT,
+                                              Enable::ENABLED),
+              handler->BindOnceOn(this, &Controller::impl::le_set_host_feature_handler));
+    }
+
+    if (com::android::bluetooth::flags::channel_sounding_in_stack() &&
+        module_.SupportsBleChannelSounding()) {
+      hci_->EnqueueCommand(
+              LeSetHostFeatureBuilder::Create(LeHostFeatureBits::CHANNEL_SOUNDING_HOST_SUPPORT,
+                                              Enable::ENABLED),
+              handler->BindOnceOn(this, &Controller::impl::le_set_host_feature_handler));
     }
 
     if (is_supported(OpCode::READ_DEFAULT_ERRONEOUS_DATA_REPORTING)) {
       hci_->EnqueueCommand(
-          ReadDefaultErroneousDataReportingBuilder::Create(),
-          handler->BindOnceOn(
-              this, &Controller::impl::read_default_erroneous_data_reporting_handler));
+              ReadDefaultErroneousDataReportingBuilder::Create(),
+              handler->BindOnceOn(
+                      this, &Controller::impl::read_default_erroneous_data_reporting_handler));
     }
 
     // Skip vendor capabilities check if configured.
-    if (os::GetSystemPropertyBool(
-            kPropertyVendorCapabilitiesEnabled, kDefaultVendorCapabilitiesEnabled)) {
+    if (os::GetSystemPropertyBool(kPropertyVendorCapabilitiesEnabled,
+                                  kDefaultVendorCapabilitiesEnabled)) {
+      // More commands can be enqueued from le_get_vendor_capabilities_handler
+      std::promise<void> vendor_promise;
+      auto vendor_future = vendor_promise.get_future();
       hci_->EnqueueCommand(
-          LeGetVendorCapabilitiesBuilder::Create(),
-          handler->BindOnceOn(this, &Controller::impl::le_get_vendor_capabilities_handler));
+              LeGetVendorCapabilitiesBuilder::Create(),
+              handler->BindOnceOn(this, &Controller::impl::le_get_vendor_capabilities_handler,
+                                  std::move(vendor_promise)));
+      vendor_future.wait();
     } else {
       vendor_capabilities_.is_supported_ = 0x00;
     }
@@ -206,18 +265,17 @@ struct Controller::impl {
     std::promise<void> promise;
     auto future = promise.get_future();
     hci_->EnqueueCommand(
-        ReadBdAddrBuilder::Create(),
-        handler->BindOnceOn(this, &Controller::impl::read_controller_mac_address_handler, std::move(promise)));
+            ReadBdAddrBuilder::Create(),
+            handler->BindOnceOn(this, &Controller::impl::read_controller_mac_address_handler,
+                                std::move(promise)));
     future.wait();
   }
 
-  void Stop() {
-    hci_ = nullptr;
-  }
+  void Stop() { hci_ = nullptr; }
 
   void NumberOfCompletedPackets(EventView event) {
-    if (acl_credits_callback_.IsEmpty()) {
-      LOG_WARN("Received event when AclManager is not listening");
+    if (!acl_credits_callback_) {
+      log::warn("Received event when AclManager is not listening");
       return;
     }
     auto complete_view = NumberOfCompletedPacketsView::Create(event);
@@ -225,40 +283,40 @@ struct Controller::impl {
     for (auto completed_packets : complete_view.GetCompletedPackets()) {
       uint16_t handle = completed_packets.connection_handle_;
       uint16_t credits = completed_packets.host_num_of_completed_packets_;
-      acl_credits_callback_.Invoke(handle, credits);
-      if (!acl_monitor_credits_callback_.IsEmpty()) {
-        acl_monitor_credits_callback_.Invoke(handle, credits);
+      acl_credits_callback_(handle, credits);
+      if (acl_monitor_credits_callback_) {
+        acl_monitor_credits_callback_(handle, credits);
       }
     }
   }
 
   void register_completed_acl_packets_callback(CompletedAclPacketsCallback callback) {
-    ASSERT(acl_credits_callback_.IsEmpty());
+    ASSERT(!acl_credits_callback_);
     acl_credits_callback_ = callback;
   }
 
   void unregister_completed_acl_packets_callback() {
-    ASSERT(!acl_credits_callback_.IsEmpty());
+    ASSERT(acl_credits_callback_);
     acl_credits_callback_ = {};
   }
 
   void register_completed_monitor_acl_packets_callback(CompletedAclPacketsCallback callback) {
-    ASSERT(acl_monitor_credits_callback_.IsEmpty());
+    ASSERT(!acl_monitor_credits_callback_);
     acl_monitor_credits_callback_ = callback;
   }
 
   void unregister_completed_monitor_acl_packets_callback() {
-    ASSERT(!acl_monitor_credits_callback_.IsEmpty());
+    ASSERT(acl_monitor_credits_callback_);
     acl_monitor_credits_callback_ = {};
   }
 
   void register_monitor_completed_acl_packets_callback(CompletedAclPacketsCallback callback) {
-    ASSERT(acl_monitor_credits_callback_.IsEmpty());
+    ASSERT(!acl_monitor_credits_callback_);
     acl_monitor_credits_callback_ = callback;
   }
 
   void unregister_monitor_completed_acl_packets_callback() {
-    ASSERT(!acl_monitor_credits_callback_.IsEmpty());
+    ASSERT(acl_monitor_credits_callback_);
     acl_monitor_credits_callback_ = {};
   }
 
@@ -266,14 +324,14 @@ struct Controller::impl {
     auto complete_view = WriteSecureConnectionsHostSupportCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
   }
 
   void read_local_name_complete_handler(CommandCompleteView view) {
     auto complete_view = ReadLocalNameCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     std::array<uint8_t, 248> local_name_array = complete_view.GetLocalName();
 
     local_name_ = std::string(local_name_array.begin(), local_name_array.end());
@@ -285,40 +343,50 @@ struct Controller::impl {
     auto complete_view = ReadLocalVersionInformationCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
 
     local_version_information_ = complete_view.GetLocalVersionInformation();
     bluetooth::os::LogMetricBluetoothLocalVersions(
-        local_version_information_.manufacturer_name_,
-        static_cast<uint8_t>(local_version_information_.lmp_version_),
-        local_version_information_.lmp_subversion_,
-        static_cast<uint8_t>(local_version_information_.hci_version_),
-        local_version_information_.hci_revision_);
+            local_version_information_.manufacturer_name_,
+            static_cast<uint8_t>(local_version_information_.lmp_version_),
+            local_version_information_.lmp_subversion_,
+            static_cast<uint8_t>(local_version_information_.hci_version_),
+            local_version_information_.hci_revision_);
   }
 
   void read_local_supported_commands_complete_handler(CommandCompleteView view) {
     auto complete_view = ReadLocalSupportedCommandsCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     local_supported_commands_ = complete_view.GetSupportedCommands();
   }
 
-  void read_local_extended_features_complete_handler(std::promise<void> promise, CommandCompleteView view) {
+  void read_local_extended_features_complete_handler(std::promise<void> promise,
+                                                     CommandCompleteView view) {
     auto complete_view = ReadLocalExtendedFeaturesCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     uint8_t page_number = complete_view.GetPageNumber();
     extended_lmp_features_array_.push_back(complete_view.GetExtendedLmpFeatures());
-    bluetooth::os::LogMetricBluetoothLocalSupportedFeatures(page_number, complete_view.GetExtendedLmpFeatures());
+    if (page_number == 0 && local_version_information_.manufacturer_name_ == LMP_COMPID_INTEL &&
+        local_version_information_.lmp_version_ == LmpVersion::V_4_2 &&
+        local_version_information_.lmp_subversion_ == LMP_SUBVERSION_INTEL_AC7265) {
+      // Override the packet boundary feature bit on Intel AC7265 because it don't support well.
+      extended_lmp_features_array_.back() &=
+              ~static_cast<uint64_t>(LMPFeaturesPage0Bits::NON_FLUSHABLE_PACKET_BOUNDARY_FLAG);
+    }
+    bluetooth::os::LogMetricBluetoothLocalSupportedFeatures(page_number,
+                                                            complete_view.GetExtendedLmpFeatures());
     // Query all extended features
     if (page_number < complete_view.GetMaximumPageNumber()) {
       page_number++;
       hci_->EnqueueCommand(
-          ReadLocalExtendedFeaturesBuilder::Create(page_number),
-          module_.GetHandler()->BindOnceOn(this, &Controller::impl::read_local_extended_features_complete_handler,
-                                           std::move(promise)));
+              ReadLocalExtendedFeaturesBuilder::Create(page_number),
+              module_.GetHandler()->BindOnceOn(
+                      this, &Controller::impl::read_local_extended_features_complete_handler,
+                      std::move(promise)));
     } else {
       promise.set_value();
     }
@@ -328,7 +396,7 @@ struct Controller::impl {
     auto complete_view = ReadBufferSizeCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     acl_buffer_length_ = complete_view.GetAclDataPacketLength();
     acl_buffers_ = complete_view.GetTotalNumAclDataPackets();
 
@@ -340,7 +408,7 @@ struct Controller::impl {
     auto complete_view = ReadBdAddrCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     mac_address_ = complete_view.GetBdAddr();
     promise.set_value();
   }
@@ -349,10 +417,11 @@ struct Controller::impl {
     auto complete_view = LeReadBufferSizeV1CompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_buffer_size_ = complete_view.GetLeBufferSize();
 
-    // If LE buffer size is zero, then buffers returned by Read_Buffer_Size are shared between BR/EDR and LE.
+    // If LE buffer size is zero, then buffers returned by Read_Buffer_Size are shared between
+    // BR/EDR and LE.
     if (le_buffer_size_.total_num_le_packets_ == 0) {
       ASSERT(acl_buffers_ != 0);
       le_buffer_size_.total_num_le_packets_ = acl_buffers_ / 2;
@@ -365,8 +434,7 @@ struct Controller::impl {
     auto complete_view = ReadLocalSupportedCodecsV1CompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(
-        status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     local_supported_codec_ids_ = complete_view.GetSupportedCodecs();
     local_supported_vendor_codec_ids_ = complete_view.GetVendorSpecificCodecs();
   }
@@ -375,18 +443,19 @@ struct Controller::impl {
     auto complete_view = SetMinEncryptionKeySizeCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
   }
 
   void le_read_buffer_size_v2_handler(CommandCompleteView view) {
     auto complete_view = LeReadBufferSizeV2CompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_buffer_size_ = complete_view.GetLeBufferSize();
     iso_buffer_size_ = complete_view.GetIsoBufferSize();
 
-    // If LE buffer size is zero, then buffers returned by Read_Buffer_Size are shared between BR/EDR and LE.
+    // If LE buffer size is zero, then buffers returned by Read_Buffer_Size are shared between
+    // BR/EDR and LE.
     if (le_buffer_size_.total_num_le_packets_ == 0) {
       ASSERT(acl_buffers_ != 0);
       le_buffer_size_.total_num_le_packets_ = acl_buffers_ / 2;
@@ -399,18 +468,18 @@ struct Controller::impl {
     auto complete_view = LeSetHostFeatureCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
   }
 
   void read_default_erroneous_data_reporting_handler(CommandCompleteView view) {
     ASSERT(view.GetCommandOpCode() == OpCode::READ_DEFAULT_ERRONEOUS_DATA_REPORTING);
     auto complete_view = ReadDefaultErroneousDataReportingCompleteView::Create(view);
     // Check to see that the opcode was correct.
-    // ASSERT(complete_view.IsValid()) is not used here to avoid process abort.
+    // log::assert_that is not used here to avoid process abort.
     // Some devices, such as mokey_go32, may claim to support it but do not
     // actually do so (b/277589118).
     if (!complete_view.IsValid()) {
-      LOG_ERROR("invalid command complete view");
+      log::error("invalid command complete view");
       return;
     }
 
@@ -418,22 +487,22 @@ struct Controller::impl {
     // This is an optional feature to enhance audio quality. It is okay
     // to just return if the status is not SUCCESS.
     if (status != ErrorCode::SUCCESS) {
-      LOG_ERROR("Unexpected status: %s", ErrorCodeText(status).c_str());
+      log::error("Unexpected status: {}", ErrorCodeText(status));
       return;
     }
 
     Enable erroneous_data_reporting = complete_view.GetErroneousDataReporting();
-    LOG_INFO("erroneous data reporting: %hhu", erroneous_data_reporting);
+    log::info("erroneous data reporting: {}", erroneous_data_reporting);
 
     // Enable Erroneous Data Reporting if it is disabled and the write command is supported.
     if (erroneous_data_reporting == Enable::DISABLED &&
         is_supported(OpCode::WRITE_DEFAULT_ERRONEOUS_DATA_REPORTING)) {
       std::unique_ptr<WriteDefaultErroneousDataReportingBuilder> packet =
-          WriteDefaultErroneousDataReportingBuilder::Create(Enable::ENABLED);
+              WriteDefaultErroneousDataReportingBuilder::Create(Enable::ENABLED);
       hci_->EnqueueCommand(
-          std::move(packet),
-          module_.GetHandler()->BindOnceOn(
-              this, &Controller::impl::write_default_erroneous_data_reporting_handler));
+              std::move(packet),
+              module_.GetHandler()->BindOnceOn(
+                      this, &Controller::impl::write_default_erroneous_data_reporting_handler));
     }
   }
 
@@ -441,11 +510,11 @@ struct Controller::impl {
     ASSERT(view.GetCommandOpCode() == OpCode::WRITE_DEFAULT_ERRONEOUS_DATA_REPORTING);
     auto complete_view = WriteDefaultErroneousDataReportingCompleteView::Create(view);
     // Check to see that the opcode was correct.
-    // ASSERT(complete_view.IsValid()) is not used here to avoid process abort.
+    // log::assert_that is not used here to avoid process abort.
     // Some devices, such as mokey_go32, may claim to support it but do not
     // actually do so (b/277589118).
     if (!complete_view.IsValid()) {
-      LOG_ERROR("invalid command complete view");
+      log::error("invalid command complete view");
       return;
     }
 
@@ -453,7 +522,7 @@ struct Controller::impl {
     // This is an optional feature to enhance audio quality. It is okay
     // to just return if the status is not SUCCESS.
     if (status != ErrorCode::SUCCESS) {
-      LOG_ERROR("Unexpected status: %s", ErrorCodeText(status).c_str());
+      log::error("Unexpected status: {}", ErrorCodeText(status));
       return;
     }
   }
@@ -462,7 +531,7 @@ struct Controller::impl {
     auto complete_view = LeReadLocalSupportedFeaturesCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", status, ErrorCodeText(status));
     le_local_supported_features_ = complete_view.GetLeFeatures();
   }
 
@@ -470,23 +539,23 @@ struct Controller::impl {
     auto complete_view = LeReadSupportedStatesCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_supported_states_ = complete_view.GetLeStates();
   }
 
-  void le_read_connect_list_size_handler(CommandCompleteView view) {
+  void le_read_accept_list_size_handler(CommandCompleteView view) {
     auto complete_view = LeReadFilterAcceptListSizeCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
-    le_connect_list_size_ = complete_view.GetFilterAcceptListSize();
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
+    le_accept_list_size_ = complete_view.GetFilterAcceptListSize();
   }
 
   void le_read_resolving_list_size_handler(CommandCompleteView view) {
     auto complete_view = LeReadResolvingListSizeCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_resolving_list_size_ = complete_view.GetResolvingListSize();
   }
 
@@ -494,7 +563,7 @@ struct Controller::impl {
     auto complete_view = LeReadMaximumDataLengthCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_maximum_data_length_ = complete_view.GetLeMaximumDataLength();
   }
 
@@ -502,7 +571,7 @@ struct Controller::impl {
     auto complete_view = LeReadSuggestedDefaultDataLengthCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_suggested_default_data_length_ = complete_view.GetTxOctets();
   }
 
@@ -510,7 +579,7 @@ struct Controller::impl {
     auto complete_view = LeReadMaximumAdvertisingDataLengthCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_maximum_advertising_data_length_ = complete_view.GetMaximumAdvertisingDataLength();
   }
 
@@ -518,7 +587,7 @@ struct Controller::impl {
     auto complete_view = LeReadNumberOfSupportedAdvertisingSetsCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_number_supported_advertising_sets_ = complete_view.GetNumberSupportedAdvertisingSets();
   }
 
@@ -526,11 +595,12 @@ struct Controller::impl {
     auto complete_view = LeReadPeriodicAdvertiserListSizeCompleteView::Create(view);
     ASSERT(complete_view.IsValid());
     ErrorCode status = complete_view.GetStatus();
-    ASSERT_LOG(status == ErrorCode::SUCCESS, "Status 0x%02hhx, %s", status, ErrorCodeText(status).c_str());
+    log::assert_that(status == ErrorCode::SUCCESS, "Status {}", ErrorCodeText(status));
     le_periodic_advertiser_list_size_ = complete_view.GetPeriodicAdvertiserListSize();
   }
 
-  void le_get_vendor_capabilities_handler(CommandCompleteView view) {
+  void le_get_vendor_capabilities_handler(std::promise<void> vendor_promise,
+                                          CommandCompleteView view) {
     auto complete_view = LeGetVendorCapabilitiesCompleteView::Create(view);
 
     vendor_capabilities_.is_supported_ = 0x00;
@@ -549,113 +619,213 @@ struct Controller::impl {
     vendor_capabilities_.le_address_generation_offloading_support_ = 0x00;
     vendor_capabilities_.a2dp_source_offload_capability_mask_ = 0x00;
     vendor_capabilities_.bluetooth_quality_report_support_ = 0x00;
+    vendor_capabilities_.a2dp_offload_v2_support_ = 0x00;
 
-    if (complete_view.IsValid()) {
-      vendor_capabilities_.is_supported_ = 0x01;
-
-      // v0.55
-      BaseVendorCapabilities base_vendor_capabilities = complete_view.GetBaseVendorCapabilities();
-      vendor_capabilities_.max_advt_instances_ = base_vendor_capabilities.max_advt_instances_;
-      vendor_capabilities_.offloaded_resolution_of_private_address_ =
-          base_vendor_capabilities.offloaded_resolution_of_private_address_;
-      vendor_capabilities_.total_scan_results_storage_ = base_vendor_capabilities.total_scan_results_storage_;
-      vendor_capabilities_.max_irk_list_sz_ = base_vendor_capabilities.max_irk_list_sz_;
-      vendor_capabilities_.filtering_support_ = base_vendor_capabilities.filtering_support_;
-      vendor_capabilities_.max_filter_ = base_vendor_capabilities.max_filter_;
-      vendor_capabilities_.activity_energy_info_support_ = base_vendor_capabilities.activity_energy_info_support_;
-      if (complete_view.GetPayload().size() == 0) {
-        vendor_capabilities_.version_supported_ = 55;
-        return;
-      }
-
-      // v0.95
-      auto v95 = LeGetVendorCapabilitiesComplete095View::Create(complete_view);
-      if (!v95.IsValid()) {
-        LOG_ERROR("invalid data for hci requirements v0.95");
-        return;
-      }
-      vendor_capabilities_.version_supported_ = v95.GetVersionSupported();
-      vendor_capabilities_.total_num_of_advt_tracked_ = v95.GetTotalNumOfAdvtTracked();
-      vendor_capabilities_.extended_scan_support_ = v95.GetExtendedScanSupport();
-      vendor_capabilities_.debug_logging_supported_ = v95.GetDebugLoggingSupported();
-      if (vendor_capabilities_.version_supported_ <= 95 || complete_view.GetPayload().size() == 0) {
-        return;
-      }
-
-      // v0.96
-      auto v96 = LeGetVendorCapabilitiesComplete096View::Create(v95);
-      if (!v96.IsValid()) {
-        LOG_ERROR("invalid data for hci requirements v0.96");
-        return;
-      }
-      vendor_capabilities_.le_address_generation_offloading_support_ = v96.GetLeAddressGenerationOffloadingSupport();
-      if (vendor_capabilities_.version_supported_ <= 96 || complete_view.GetPayload().size() == 0) {
-        return;
-      }
-
-      // v0.98
-      auto v98 = LeGetVendorCapabilitiesComplete098View::Create(v96);
-      if (!v98.IsValid()) {
-        LOG_ERROR("invalid data for hci requirements v0.98");
-        return;
-      }
-      vendor_capabilities_.a2dp_source_offload_capability_mask_ = v98.GetA2dpSourceOffloadCapabilityMask();
-      vendor_capabilities_.bluetooth_quality_report_support_ = v98.GetBluetoothQualityReportSupport();
+    if (!complete_view.IsValid()) {
+      vendor_promise.set_value();
+      return;
     }
+    vendor_capabilities_.is_supported_ = 0x01;
+
+    // v0.55
+    BaseVendorCapabilities base_vendor_capabilities = complete_view.GetBaseVendorCapabilities();
+    vendor_capabilities_.max_advt_instances_ = base_vendor_capabilities.max_advt_instances_;
+    vendor_capabilities_.offloaded_resolution_of_private_address_ =
+            base_vendor_capabilities.offloaded_resolution_of_private_address_;
+    vendor_capabilities_.total_scan_results_storage_ =
+            base_vendor_capabilities.total_scan_results_storage_;
+    vendor_capabilities_.max_irk_list_sz_ = base_vendor_capabilities.max_irk_list_sz_;
+    vendor_capabilities_.filtering_support_ = base_vendor_capabilities.filtering_support_;
+    vendor_capabilities_.max_filter_ = base_vendor_capabilities.max_filter_;
+    vendor_capabilities_.activity_energy_info_support_ =
+            base_vendor_capabilities.activity_energy_info_support_;
+
+    if (complete_view.GetPayload().size() == 0) {
+      vendor_capabilities_.version_supported_ = 55;
+      vendor_promise.set_value();
+      return;
+    }
+
+    // v0.95
+    auto v95 = LeGetVendorCapabilitiesComplete095View::Create(complete_view);
+    if (!v95.IsValid()) {
+      log::info("invalid data for hci requirements v0.95");
+      vendor_promise.set_value();
+      return;
+    }
+    vendor_capabilities_.version_supported_ = v95.GetVersionSupported();
+    vendor_capabilities_.total_num_of_advt_tracked_ = v95.GetTotalNumOfAdvtTracked();
+    vendor_capabilities_.extended_scan_support_ = v95.GetExtendedScanSupport();
+    vendor_capabilities_.debug_logging_supported_ = v95.GetDebugLoggingSupported();
+    if (vendor_capabilities_.version_supported_ <= 95 || complete_view.GetPayload().size() == 0) {
+      vendor_promise.set_value();
+      return;
+    }
+
+    // v0.96
+    auto v96 = LeGetVendorCapabilitiesComplete096View::Create(v95);
+    if (!v96.IsValid()) {
+      log::info("invalid data for hci requirements v0.96");
+      vendor_promise.set_value();
+      return;
+    }
+    vendor_capabilities_.le_address_generation_offloading_support_ =
+            v96.GetLeAddressGenerationOffloadingSupport();
+    if (vendor_capabilities_.version_supported_ <= 96 || complete_view.GetPayload().size() == 0) {
+      vendor_promise.set_value();
+      return;
+    }
+
+    // v0.98
+    auto v98 = LeGetVendorCapabilitiesComplete098View::Create(v96);
+    if (!v98.IsValid()) {
+      log::info("invalid data for hci requirements v0.98");
+      vendor_promise.set_value();
+      return;
+    }
+    vendor_capabilities_.a2dp_source_offload_capability_mask_ =
+            v98.GetA2dpSourceOffloadCapabilityMask();
+    vendor_capabilities_.bluetooth_quality_report_support_ = v98.GetBluetoothQualityReportSupport();
+
+    // v1.03
+    auto v103 = LeGetVendorCapabilitiesComplete103View::Create(v98);
+    if (!v103.IsValid()) {
+      log::info("invalid data for hci requirements v1.03");
+      vendor_promise.set_value();
+      return;
+    }
+    vendor_capabilities_.dynamic_audio_buffer_support_ = v103.GetDynamicAudioBufferSupport();
+
+    // v1.04
+    auto v104 = LeGetVendorCapabilitiesComplete104View::Create(v103);
+    if (!v104.IsValid()) {
+      log::info("invalid data for hci requirements v1.04");
+    } else {
+      vendor_capabilities_.a2dp_offload_v2_support_ = v104.GetA2dpOffloadV2Support();
+    }
+
+    if (vendor_capabilities_.dynamic_audio_buffer_support_) {
+      hci_->EnqueueCommand(
+              DabGetAudioBufferTimeCapabilityBuilder::Create(),
+              module_.GetHandler()->BindOnceOn(
+                      this, &Controller::impl::le_get_dynamic_audio_buffer_support_handler,
+                      std::move(vendor_promise)));
+      return;
+    }
+
+    vendor_promise.set_value();
+  }
+
+  void le_get_dynamic_audio_buffer_support_handler(std::promise<void> vendor_promise,
+                                                   CommandCompleteView view) {
+    vendor_promise.set_value();
+    auto dab_complete_view = DynamicAudioBufferCompleteView::Create(view);
+    if (!dab_complete_view.IsValid()) {
+      log::warn("Invalid command complete");
+      return;
+    }
+
+    if (dab_complete_view.GetStatus() != ErrorCode::SUCCESS) {
+      log::warn("Unexpected error code {}", ErrorCodeText(dab_complete_view.GetStatus()));
+      return;
+    }
+
+    auto complete_view = DabGetAudioBufferTimeCapabilityCompleteView::Create(dab_complete_view);
+    if (!complete_view.IsValid()) {
+      log::warn("Invalid get complete");
+      return;
+    }
+    dab_supported_codecs_ = complete_view.GetAudioCodecTypeSupported();
+    dab_codec_capabilities_ = complete_view.GetAudioCodecCapabilities();
+  }
+
+  void set_controller_dab_audio_buffer_time_complete(CommandCompleteView complete) {
+    auto dab_complete = DynamicAudioBufferCompleteView::Create(complete);
+    if (!dab_complete.IsValid()) {
+      log::warn("Invalid command complete");
+      return;
+    }
+
+    if (dab_complete.GetStatus() != ErrorCode::SUCCESS) {
+      log::warn("Unexpected return code {}", ErrorCodeText(dab_complete.GetStatus()));
+      return;
+    }
+
+    auto dab_set_complete = DabSetAudioBufferTimeCompleteView::Create(dab_complete);
+
+    if (!dab_set_complete.IsValid()) {
+      log::warn("Invalid set complete");
+      return;
+    }
+
+    log::info("Configured Media Tx Buffer, time returned = {}",
+              dab_set_complete.GetCurrentBufferTimeMs());
+  }
+
+  void set_controller_dab_audio_buffer_time(uint16_t buffer_time_ms) {
+    hci_->EnqueueCommand(
+            DabSetAudioBufferTimeBuilder::Create(buffer_time_ms),
+            module_.GetHandler()->BindOnceOn(
+                    this, &Controller::impl::set_controller_dab_audio_buffer_time_complete));
   }
 
   void set_event_mask(uint64_t event_mask) {
     std::unique_ptr<SetEventMaskBuilder> packet = SetEventMaskBuilder::Create(event_mask);
-    hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnce(check_complete<SetEventMaskCompleteView>));
+    hci_->EnqueueCommand(std::move(packet),
+                         module_.GetHandler()->BindOnce(check_complete<SetEventMaskCompleteView>));
+  }
+
+  void set_event_mask_page_2(uint64_t event_mask_page_2) {
+    std::unique_ptr<SetEventMaskPage2Builder> packet =
+            SetEventMaskPage2Builder::Create(event_mask_page_2);
+    hci_->EnqueueCommand(std::move(packet), module_.GetHandler()->BindOnce(
+                                                    check_complete<SetEventMaskPage2CompleteView>));
   }
 
   void write_le_host_support(Enable enable, Enable deprecated_host_bit) {
     if (deprecated_host_bit == Enable::ENABLED) {
       // Since Bluetooth Core Spec 4.1, this bit should be 0
-      LOG_WARN("Setting deprecated Simultaneous LE BR/EDR Host bit");
+      log::warn("Setting deprecated Simultaneous LE BR/EDR Host bit");
     }
-    std::unique_ptr<WriteLeHostSupportBuilder> packet = WriteLeHostSupportBuilder::Create(enable, deprecated_host_bit);
+    std::unique_ptr<WriteLeHostSupportBuilder> packet =
+            WriteLeHostSupportBuilder::Create(enable, deprecated_host_bit);
     hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnce(check_complete<WriteLeHostSupportCompleteView>));
+            std::move(packet),
+            module_.GetHandler()->BindOnce(check_complete<WriteLeHostSupportCompleteView>));
   }
 
   void write_simple_pairing_mode(Enable enable) {
-    std::unique_ptr<WriteSimplePairingModeBuilder> packet = WriteSimplePairingModeBuilder::Create(enable);
+    std::unique_ptr<WriteSimplePairingModeBuilder> packet =
+            WriteSimplePairingModeBuilder::Create(enable);
     hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnce(check_complete<WriteSimplePairingModeCompleteView>));
+            std::move(packet),
+            module_.GetHandler()->BindOnce(check_complete<WriteSimplePairingModeCompleteView>));
   }
 
   void reset() {
     std::unique_ptr<ResetBuilder> packet = ResetBuilder::Create();
-    hci_->EnqueueCommand(
-        std::move(packet), module_.GetHandler()->BindOnce(check_complete<ResetCompleteView>));
+    hci_->EnqueueCommand(std::move(packet),
+                         module_.GetHandler()->BindOnce(check_complete<ResetCompleteView>));
   }
 
   void le_rand(LeRandCallback cb) {
     std::unique_ptr<LeRandBuilder> packet = LeRandBuilder::Create();
     hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnceOn(
-            this, &Controller::impl::le_rand_cb<LeRandCompleteView>, std::move(cb)));
+            std::move(packet),
+            module_.GetHandler()->BindOnceOn(this, &Controller::impl::le_rand_cb, std::move(cb)));
   }
 
-  template <class T>
   void le_rand_cb(LeRandCallback cb, CommandCompleteView view) {
     ASSERT(view.IsValid());
-    auto status_view = T::Create(view);
+    auto status_view = LeRandCompleteView::Create(view);
     ASSERT(status_view.IsValid());
     ASSERT(status_view.GetStatus() == ErrorCode::SUCCESS);
-    std::move(cb).Run(status_view.GetRandomNumber());
+    std::move(cb)(status_view.GetRandomNumber());
   }
 
   void set_event_filter(std::unique_ptr<SetEventFilterBuilder> packet) {
-    hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnce(check_complete<SetEventFilterCompleteView>));
+    hci_->EnqueueCommand(std::move(packet), module_.GetHandler()->BindOnce(
+                                                    check_complete<SetEventFilterCompleteView>));
   }
 
   void write_local_name(std::string local_name) {
@@ -666,42 +836,38 @@ struct Controller::impl {
     std::copy(std::begin(local_name), std::end(local_name), std::begin(local_name_array));
 
     std::unique_ptr<WriteLocalNameBuilder> packet = WriteLocalNameBuilder::Create(local_name_array);
-    hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnce(check_complete<WriteLocalNameCompleteView>));
+    hci_->EnqueueCommand(std::move(packet), module_.GetHandler()->BindOnce(
+                                                    check_complete<WriteLocalNameCompleteView>));
   }
 
-  void host_buffer_size(uint16_t host_acl_data_packet_length, uint8_t host_synchronous_data_packet_length,
-                        uint16_t host_total_num_acl_data_packets, uint16_t host_total_num_synchronous_data_packets) {
-    std::unique_ptr<HostBufferSizeBuilder> packet =
-        HostBufferSizeBuilder::Create(host_acl_data_packet_length, host_synchronous_data_packet_length,
-                                      host_total_num_acl_data_packets, host_total_num_synchronous_data_packets);
-    hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnce(check_complete<HostBufferSizeCompleteView>));
+  void host_buffer_size(uint16_t host_acl_data_packet_length,
+                        uint8_t host_synchronous_data_packet_length,
+                        uint16_t host_total_num_acl_data_packets,
+                        uint16_t host_total_num_synchronous_data_packets) {
+    std::unique_ptr<HostBufferSizeBuilder> packet = HostBufferSizeBuilder::Create(
+            host_acl_data_packet_length, host_synchronous_data_packet_length,
+            host_total_num_acl_data_packets, host_total_num_synchronous_data_packets);
+    hci_->EnqueueCommand(std::move(packet), module_.GetHandler()->BindOnce(
+                                                    check_complete<HostBufferSizeCompleteView>));
   }
 
   void le_set_event_mask(uint64_t le_event_mask) {
     std::unique_ptr<LeSetEventMaskBuilder> packet = LeSetEventMaskBuilder::Create(le_event_mask);
-    hci_->EnqueueCommand(
-        std::move(packet),
-        module_.GetHandler()->BindOnce(check_complete<LeSetEventMaskCompleteView>));
+    hci_->EnqueueCommand(std::move(packet), module_.GetHandler()->BindOnce(
+                                                    check_complete<LeSetEventMaskCompleteView>));
   }
 
-#define OP_CODE_MAPPING(name)                                                  \
-  case OpCode::name: {                                                         \
-    uint16_t index = (uint16_t)OpCodeIndex::name;                              \
-    uint16_t byte_index = index / 10;                                          \
-    uint16_t bit_index = index % 10;                                           \
-    bool supported = local_supported_commands_[byte_index] & (1 << bit_index); \
-    if (!supported) {                                                          \
-      LOG_DEBUG("unsupported command opcode: 0x%04x", (uint16_t)OpCode::name); \
-    }                                                                          \
-    return supported;                                                          \
+#define OP_CODE_MAPPING(name)                                                     \
+  case OpCode::name: {                                                            \
+    uint16_t index = (uint16_t)OpCodeIndex::name;                                 \
+    uint16_t byte_index = index / 10;                                             \
+    uint16_t bit_index = index % 10;                                              \
+    bool supported = local_supported_commands_[byte_index] & (1 << bit_index);    \
+    if (!supported) {                                                             \
+      log::debug("unsupported command opcode: 0x{:04x}", (uint16_t)OpCode::name); \
+    }                                                                             \
+    return supported;                                                             \
   }
-
-  void Dump(
-      std::promise<flatbuffers::Offset<ControllerData>> promise, flatbuffers::FlatBufferBuilder* fb_builder) const;
 
   bool is_supported(OpCode op_code) {
     switch (op_code) {
@@ -928,6 +1094,7 @@ struct Controller::impl {
       OP_CODE_MAPPING(LE_READ_LOCAL_RESOLVABLE_ADDRESS)
       OP_CODE_MAPPING(LE_SET_ADDRESS_RESOLUTION_ENABLE)
       OP_CODE_MAPPING(LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT)
+      OP_CODE_MAPPING(LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_V2)
       OP_CODE_MAPPING(LE_READ_MAXIMUM_DATA_LENGTH)
       OP_CODE_MAPPING(LE_READ_PHY)
       OP_CODE_MAPPING(LE_SET_DEFAULT_PHY)
@@ -1032,7 +1199,10 @@ struct Controller::impl {
         return vendor_capabilities_.a2dp_source_offload_capability_mask_ != 0x00;
       case OpCode::CONTROLLER_BQR:
         return vendor_capabilities_.bluetooth_quality_report_support_ == 0x01;
-      // Before MSFT extension is fully supported, return false for the following MSFT_OPCODE_XXXX for now.
+      case OpCode::DYNAMIC_AUDIO_BUFFER:
+        return vendor_capabilities_.dynamic_audio_buffer_support_ > 0x00;
+      // Before MSFT extension is fully supported, return false for the following MSFT_OPCODE_XXXX
+      // for now.
       case OpCode::MSFT_OPCODE_INTEL:
         return false;
       case OpCode::MSFT_OPCODE_MEDIATEK:
@@ -1065,6 +1235,9 @@ struct Controller::impl {
   }
 #undef OP_CODE_MAPPING
 
+  template <typename OutputT>
+  void dump(OutputT&& out) const;
+
   Controller& module_;
 
   HciLayer* hci_;
@@ -1086,7 +1259,7 @@ struct Controller::impl {
   LeBufferSize iso_buffer_size_{};
   uint64_t le_local_supported_features_{};
   uint64_t le_supported_states_{};
-  uint8_t le_connect_list_size_{};
+  uint8_t le_accept_list_size_{};
   uint8_t le_resolving_list_size_{};
   LeMaximumDataLength le_maximum_data_length_{};
   uint16_t le_maximum_advertising_data_length_{};
@@ -1094,6 +1267,8 @@ struct Controller::impl {
   uint8_t le_number_supported_advertising_sets_{};
   uint8_t le_periodic_advertiser_list_size_{};
   VendorCapabilities vendor_capabilities_{};
+  uint32_t dab_supported_codecs_{};
+  std::array<DynamicAudioBufferCodecCapability, 32> dab_codec_capabilities_{};
 };  // namespace hci
 
 Controller::Controller() : impl_(std::make_unique<impl>(*this)) {}
@@ -1116,9 +1291,7 @@ void Controller::UnregisterCompletedMonitorAclPacketsCallback() {
   CallOn(impl_.get(), &impl::unregister_completed_monitor_acl_packets_callback);
 }
 
-std::string Controller::GetLocalName() const {
-  return impl_->local_name_;
-}
+std::string Controller::GetLocalName() const { return impl_->local_name_; }
 
 LocalVersionInformation Controller::GetLocalVersionInformation() const {
   return impl_->local_version_information_;
@@ -1131,9 +1304,7 @@ std::vector<uint8_t> Controller::GetLocalSupportedBrEdrCodecIds() const {
 #define BIT(x) (0x1ULL << (x))
 
 #define LOCAL_FEATURE_ACCESSOR(name, page, bit) \
-  bool Controller::name() const {               \
-    return GetLocalFeatures(page) & BIT(bit);   \
-  }
+  bool Controller::name() const { return GetLocalFeatures(page) & BIT(bit); }
 
 LOCAL_FEATURE_ACCESSOR(Supports3SlotPackets, 0, 0)
 LOCAL_FEATURE_ACCESSOR(Supports5SlotPackets, 0, 1)
@@ -1167,9 +1338,7 @@ LOCAL_FEATURE_ACCESSOR(SupportsNonFlushablePb, 0, 54)
 LOCAL_FEATURE_ACCESSOR(SupportsSecureConnections, 2, 8)
 
 #define LOCAL_LE_FEATURE_ACCESSOR(name, bit) \
-  bool Controller::name() const {            \
-    return GetLocalLeFeatures() & BIT(bit);  \
-  }
+  bool Controller::name() const { return GetLocalLeFeatures() & BIT(bit); }
 
 LOCAL_LE_FEATURE_ACCESSOR(SupportsBleEncryption, 0)
 LOCAL_LE_FEATURE_ACCESSOR(SupportsBleConnectionParametersRequest, 1)
@@ -1210,6 +1379,7 @@ LOCAL_LE_FEATURE_ACCESSOR(SupportsBlePathLossMonitoring, 35)
 LOCAL_LE_FEATURE_ACCESSOR(SupportsBlePeriodicAdvertisingAdi, 36)
 LOCAL_LE_FEATURE_ACCESSOR(SupportsBleConnectionSubrating, 37)
 LOCAL_LE_FEATURE_ACCESSOR(SupportsBleConnectionSubratingHost, 38)
+LOCAL_LE_FEATURE_ACCESSOR(SupportsBleChannelSounding, 46)
 
 uint64_t Controller::GetLocalFeatures(uint8_t page_number) const {
   if (page_number < impl_->extended_lmp_features_array_.size()) {
@@ -1218,37 +1388,23 @@ uint64_t Controller::GetLocalFeatures(uint8_t page_number) const {
   return 0x00;
 }
 
-uint16_t Controller::GetAclPacketLength() const {
-  return impl_->acl_buffer_length_;
-}
+uint16_t Controller::GetAclPacketLength() const { return impl_->acl_buffer_length_; }
 
-uint16_t Controller::GetNumAclPacketBuffers() const {
-  return impl_->acl_buffers_;
-}
+uint16_t Controller::GetNumAclPacketBuffers() const { return impl_->acl_buffers_; }
 
-uint8_t Controller::GetScoPacketLength() const {
-  return impl_->sco_buffer_length_;
-}
+uint8_t Controller::GetScoPacketLength() const { return impl_->sco_buffer_length_; }
 
-uint16_t Controller::GetNumScoPacketBuffers() const {
-  return impl_->sco_buffers_;
-}
+uint16_t Controller::GetNumScoPacketBuffers() const { return impl_->sco_buffers_; }
 
-Address Controller::GetMacAddress() const {
-  return impl_->mac_address_;
-}
+Address Controller::GetMacAddress() const { return impl_->mac_address_; }
 
 void Controller::SetEventMask(uint64_t event_mask) {
   CallOn(impl_.get(), &impl::set_event_mask, event_mask);
 }
 
-void Controller::Reset() {
-  CallOn(impl_.get(), &impl::reset);
-}
+void Controller::Reset() { CallOn(impl_.get(), &impl::reset); }
 
-void Controller::LeRand(LeRandCallback cb) {
-  CallOn(impl_.get(), &impl::le_rand, std::move(cb));
-}
+void Controller::LeRand(LeRandCallback cb) { CallOn(impl_.get(), &impl::le_rand, std::move(cb)); }
 
 void Controller::SetEventFilterClearAll() {
   std::unique_ptr<SetEventFilterClearAllBuilder> packet = SetEventFilterClearAllBuilder::Create();
@@ -1257,26 +1413,27 @@ void Controller::SetEventFilterClearAll() {
 
 void Controller::SetEventFilterInquiryResultAllDevices() {
   std::unique_ptr<SetEventFilterInquiryResultAllDevicesBuilder> packet =
-      SetEventFilterInquiryResultAllDevicesBuilder::Create();
+          SetEventFilterInquiryResultAllDevicesBuilder::Create();
   CallOn(impl_.get(), &impl::set_event_filter, std::move(packet));
 }
 
 void Controller::SetEventFilterInquiryResultClassOfDevice(ClassOfDevice class_of_device,
                                                           ClassOfDevice class_of_device_mask) {
   std::unique_ptr<SetEventFilterInquiryResultClassOfDeviceBuilder> packet =
-      SetEventFilterInquiryResultClassOfDeviceBuilder::Create(class_of_device, class_of_device_mask);
+          SetEventFilterInquiryResultClassOfDeviceBuilder::Create(class_of_device,
+                                                                  class_of_device_mask);
   CallOn(impl_.get(), &impl::set_event_filter, std::move(packet));
 }
 
 void Controller::SetEventFilterInquiryResultAddress(Address address) {
   std::unique_ptr<SetEventFilterInquiryResultAddressBuilder> packet =
-      SetEventFilterInquiryResultAddressBuilder::Create(address);
+          SetEventFilterInquiryResultAddressBuilder::Create(address);
   CallOn(impl_.get(), &impl::set_event_filter, std::move(packet));
 }
 
 void Controller::SetEventFilterConnectionSetupAllDevices(AutoAcceptFlag auto_accept_flag) {
   std::unique_ptr<SetEventFilterConnectionSetupAllDevicesBuilder> packet =
-      SetEventFilterConnectionSetupAllDevicesBuilder::Create(auto_accept_flag);
+          SetEventFilterConnectionSetupAllDevicesBuilder::Create(auto_accept_flag);
   CallOn(impl_.get(), &impl::set_event_filter, std::move(packet));
 }
 
@@ -1284,14 +1441,15 @@ void Controller::SetEventFilterConnectionSetupClassOfDevice(ClassOfDevice class_
                                                             ClassOfDevice class_of_device_mask,
                                                             AutoAcceptFlag auto_accept_flag) {
   std::unique_ptr<SetEventFilterConnectionSetupClassOfDeviceBuilder> packet =
-      SetEventFilterConnectionSetupClassOfDeviceBuilder::Create(class_of_device, class_of_device_mask,
-                                                                auto_accept_flag);
+          SetEventFilterConnectionSetupClassOfDeviceBuilder::Create(
+                  class_of_device, class_of_device_mask, auto_accept_flag);
   CallOn(impl_.get(), &impl::set_event_filter, std::move(packet));
 }
 
-void Controller::SetEventFilterConnectionSetupAddress(Address address, AutoAcceptFlag auto_accept_flag) {
+void Controller::SetEventFilterConnectionSetupAddress(Address address,
+                                                      AutoAcceptFlag auto_accept_flag) {
   std::unique_ptr<SetEventFilterConnectionSetupAddressBuilder> packet =
-      SetEventFilterConnectionSetupAddressBuilder::Create(address, auto_accept_flag);
+          SetEventFilterConnectionSetupAddressBuilder::Create(address, auto_accept_flag);
   CallOn(impl_.get(), &impl::set_event_filter, std::move(packet));
 }
 
@@ -1300,49 +1458,34 @@ void Controller::WriteLocalName(std::string local_name) {
   CallOn(impl_.get(), &impl::write_local_name, local_name);
 }
 
-void Controller::HostBufferSize(uint16_t host_acl_data_packet_length, uint8_t host_synchronous_data_packet_length,
+void Controller::HostBufferSize(uint16_t host_acl_data_packet_length,
+                                uint8_t host_synchronous_data_packet_length,
                                 uint16_t host_total_num_acl_data_packets,
                                 uint16_t host_total_num_synchronous_data_packets) {
-  CallOn(
-      impl_.get(),
-      &impl::host_buffer_size,
-      host_acl_data_packet_length,
-      host_synchronous_data_packet_length,
-      host_total_num_acl_data_packets,
-      host_total_num_synchronous_data_packets);
+  CallOn(impl_.get(), &impl::host_buffer_size, host_acl_data_packet_length,
+         host_synchronous_data_packet_length, host_total_num_acl_data_packets,
+         host_total_num_synchronous_data_packets);
 }
 
 void Controller::LeSetEventMask(uint64_t le_event_mask) {
   CallOn(impl_.get(), &impl::le_set_event_mask, le_event_mask);
 }
 
-LeBufferSize Controller::GetLeBufferSize() const {
-  return impl_->le_buffer_size_;
-}
+LeBufferSize Controller::GetLeBufferSize() const { return impl_->le_buffer_size_; }
 
-uint64_t Controller::GetLocalLeFeatures() const {
-  return impl_->le_local_supported_features_;
-}
+uint64_t Controller::GetLocalLeFeatures() const { return impl_->le_local_supported_features_; }
 
-LeBufferSize Controller::GetControllerIsoBufferSize() const {
-  return impl_->iso_buffer_size_;
-}
+LeBufferSize Controller::GetControllerIsoBufferSize() const { return impl_->iso_buffer_size_; }
 
 uint64_t Controller::GetControllerLeLocalSupportedFeatures() const {
   return impl_->le_local_supported_features_;
 }
 
-uint64_t Controller::GetLeSupportedStates() const {
-  return impl_->le_supported_states_;
-}
+uint64_t Controller::GetLeSupportedStates() const { return impl_->le_supported_states_; }
 
-uint8_t Controller::GetLeFilterAcceptListSize() const {
-  return impl_->le_connect_list_size_;
-}
+uint8_t Controller::GetLeFilterAcceptListSize() const { return impl_->le_accept_list_size_; }
 
-uint8_t Controller::GetLeResolvingListSize() const {
-  return impl_->le_resolving_list_size_;
-}
+uint8_t Controller::GetLeResolvingListSize() const { return impl_->le_resolving_list_size_; }
 
 LeMaximumDataLength Controller::GetLeMaximumDataLength() const {
   return impl_->le_maximum_data_length_;
@@ -1364,6 +1507,21 @@ Controller::VendorCapabilities Controller::GetVendorCapabilities() const {
   return impl_->vendor_capabilities_;
 }
 
+uint32_t Controller::GetDabSupportedCodecs() const { return impl_->dab_supported_codecs_; }
+
+const std::array<DynamicAudioBufferCodecCapability, 32>& Controller::GetDabCodecCapabilities()
+        const {
+  return impl_->dab_codec_capabilities_;
+}
+
+void Controller::SetDabAudioBufferTime(uint16_t buffer_time_ms) {
+  if (impl_->vendor_capabilities_.dynamic_audio_buffer_support_ == 0) {
+    log::warn("Dynamic Audio Buffer not supported");
+    return;
+  }
+  impl_->set_controller_dab_audio_buffer_time(buffer_time_ms);
+}
+
 uint8_t Controller::GetLePeriodicAdvertiserListSize() const {
   return impl_->le_periodic_advertiser_list_size_;
 }
@@ -1373,9 +1531,6 @@ bool Controller::IsSupported(bluetooth::hci::OpCode op_code) const {
 }
 
 uint64_t Controller::MaskLeEventMask(HciVersion version, uint64_t mask) {
-  if (!common::init_flags::subrating_is_enabled()) {
-    mask = mask & ~(static_cast<uint64_t>(LLFeaturesBits::CONNECTION_SUBRATING_HOST_SUPPORT));
-  }
   if (version >= HciVersion::V_5_3) {
     return mask;
   } else if (version >= HciVersion::V_5_2) {
@@ -1391,121 +1546,145 @@ uint64_t Controller::MaskLeEventMask(HciVersion version, uint64_t mask) {
   }
 }
 
+bool Controller::IsRpaGenerationSupported(void) const {
+  static const bool rpa_supported =
+          com::android::bluetooth::flags::rpa_offload_to_bt_controller() &&
+          os::GetSystemPropertyBool(kPropertyRpaOffload, kDefaultRpaOffload) &&
+          IsSupported(OpCode::LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_V2);
+
+  return rpa_supported;
+}
+
 const ModuleFactory Controller::Factory = ModuleFactory([]() { return new Controller(); });
 
 void Controller::ListDependencies(ModuleList* list) const {
   list->add<hci::HciLayer>();
+#if TARGET_FLOSS
   list->add<sysprops::SyspropsModule>();
+#endif
 }
 
-void Controller::Start() {
-  impl_->Start(GetDependency<hci::HciLayer>());
-}
+void Controller::Start() { impl_->Start(GetDependency<hci::HciLayer>()); }
 
-void Controller::Stop() {
-  impl_->Stop();
-}
+void Controller::Stop() { impl_->Stop(); }
 
-std::string Controller::ToString() const {
-  return "Controller";
-}
+std::string Controller::ToString() const { return "Controller"; }
 
-void Controller::impl::Dump(
-    std::promise<flatbuffers::Offset<ControllerData>> promise, flatbuffers::FlatBufferBuilder* fb_builder) const {
-  ASSERT(fb_builder != nullptr);
-  auto title = fb_builder->CreateString("----- Hci Controller Dumpsys -----");
+template <typename OutputT>
+void Controller::impl::dump(OutputT&& out) const {
+  std::format_to(out, "\nHCI Controller Dumpsys:\n");
 
-  auto local_version_information_data = CreateLocalVersionInformationData(
-      *fb_builder,
-      fb_builder->CreateString(HciVersionText(local_version_information_.hci_version_)),
-      local_version_information_.hci_revision_,
-      fb_builder->CreateString(LmpVersionText(local_version_information_.lmp_version_)),
-      local_version_information_.manufacturer_name_,
-      local_version_information_.lmp_subversion_);
+  std::format_to(out,
+                 "    local_version_information:\n"
+                 "        hci_version: {}\n"
+                 "        hci_revision: 0x{:x}\n"
+                 "        lmp_version: {}\n"
+                 "        lmp_subversion: 0x{:x}\n"
+                 "        manufacturer_name: {}\n",
+                 HciVersionText(local_version_information_.hci_version_),
+                 local_version_information_.hci_revision_,
+                 LmpVersionText(local_version_information_.lmp_version_),
+                 local_version_information_.lmp_subversion_,
+                 local_version_information_.manufacturer_name_);
 
-  auto acl_buffer_size_data = BufferSizeData(acl_buffer_length_, acl_buffers_);
+  std::format_to(out,
+                 "    buffer_size:\n"
+                 "        acl_data_packet_length: {}\n"
+                 "        total_num_acl_data_packets: {}\n"
+                 "        sco_data_packet_length: {}\n"
+                 "        total_num_sco_data_packets: {}\n",
+                 acl_buffer_length_, acl_buffers_, sco_buffer_length_, sco_buffers_);
 
-  auto sco_buffer_size_data = BufferSizeData(sco_buffer_length_, sco_buffers_);
+  std::format_to(out,
+                 "    le_buffer_size:\n"
+                 "        le_acl_data_packet_length: {}\n"
+                 "        total_num_le_acl_data_packets: {}\n"
+                 "        iso_data_packet_length: {}\n"
+                 "        total_num_iso_data_packets: {}\n",
+                 le_buffer_size_.le_data_packet_length_, le_buffer_size_.total_num_le_packets_,
+                 iso_buffer_size_.le_data_packet_length_, iso_buffer_size_.total_num_le_packets_);
 
-  auto le_buffer_size_data =
-      BufferSizeData(le_buffer_size_.le_data_packet_length_, le_buffer_size_.total_num_le_packets_);
+  std::format_to(out,
+                 "    le_maximum_data_length:\n"
+                 "        supported_max_tx_octets: {}\n"
+                 "        supported_max_tx_time: {}\n"
+                 "        supported_max_rx_octets: {}\n"
+                 "        supported_max_rx_time: {}\n",
+                 le_maximum_data_length_.supported_max_tx_octets_,
+                 le_maximum_data_length_.supported_max_tx_time_,
+                 le_maximum_data_length_.supported_max_rx_octets_,
+                 le_maximum_data_length_.supported_max_rx_time_);
 
-  auto iso_buffer_size_data =
-      BufferSizeData(iso_buffer_size_.le_data_packet_length_, iso_buffer_size_.total_num_le_packets_);
+  std::format_to(out,
+                 "    le_accept_list_size: {}\n"
+                 "    le_resolving_list_size: {}\n"
+                 "    le_maximum_advertising_data_length: {}\n"
+                 "    le_suggested_default_data_length: {}\n"
+                 "    le_number_supported_advertising_sets: {}\n"
+                 "    le_periodic_advertiser_list_size: {}\n"
+                 "    le_supported_states: 0x{:016x}\n",
+                 le_accept_list_size_, le_resolving_list_size_, le_maximum_advertising_data_length_,
+                 le_suggested_default_data_length_, le_number_supported_advertising_sets_,
+                 le_periodic_advertiser_list_size_, le_supported_states_);
 
-  auto le_maximum_data_length_data = LeMaximumDataLengthData(
-      le_maximum_data_length_.supported_max_tx_octets_,
-      le_maximum_data_length_.supported_max_tx_time_,
-      le_maximum_data_length_.supported_max_rx_octets_,
-      le_maximum_data_length_.supported_max_rx_time_);
+  std::format_to(out,
+                 "    local_supported_features:\n"
+                 "        page0: 0x{:016x}\n"
+                 "        page1: 0x{:016x}\n"
+                 "        page2: 0x{:016x}\n"
+                 "    le_local_supported_features:\n"
+                 "        page0: 0x{:016x}\n",
+                 extended_lmp_features_array_[0], extended_lmp_features_array_[1],
+                 extended_lmp_features_array_[2], le_local_supported_features_);
 
-  std::vector<LocalSupportedCommandsData> local_supported_commands_vector;
-  for (uint8_t index = 0; index < local_supported_commands_.size(); index++) {
-    local_supported_commands_vector.push_back(LocalSupportedCommandsData(index, local_supported_commands_[index]));
+  std::format_to(out, "    local_supported_commands: [");
+  for (size_t i = 0; i < local_supported_commands_.size(); i++) {
+    if ((i % 8) == 0) {
+      std::format_to(out, "\n       ");
+    }
+    std::format_to(out, " 0x{:02x},", local_supported_commands_[i]);
   }
-  auto local_supported_commands_data = fb_builder->CreateVectorOfStructs(local_supported_commands_vector);
+  std::format_to(out, "\n    ]\n");
 
-  auto vendor_capabilities_data = VendorCapabilitiesData(
-      vendor_capabilities_.is_supported_,
-      vendor_capabilities_.max_advt_instances_,
-      vendor_capabilities_.offloaded_resolution_of_private_address_,
-      vendor_capabilities_.total_scan_results_storage_,
-      vendor_capabilities_.max_irk_list_sz_,
-      vendor_capabilities_.filtering_support_,
-      vendor_capabilities_.max_filter_,
-      vendor_capabilities_.activity_energy_info_support_,
-      vendor_capabilities_.version_supported_,
-      vendor_capabilities_.total_num_of_advt_tracked_,
-      vendor_capabilities_.extended_scan_support_,
-      vendor_capabilities_.debug_logging_supported_,
-      vendor_capabilities_.le_address_generation_offloading_support_,
-      vendor_capabilities_.a2dp_source_offload_capability_mask_,
-      vendor_capabilities_.bluetooth_quality_report_support_);
-
-  auto extended_lmp_features_vector = fb_builder->CreateVector(extended_lmp_features_array_);
-
-  // Create the root table
-  ControllerDataBuilder builder(*fb_builder);
-
-  builder.add_title(title);
-  builder.add_local_version_information(local_version_information_data);
-
-  builder.add_acl_buffer_size(&acl_buffer_size_data);
-  builder.add_sco_buffer_size(&sco_buffer_size_data);
-  builder.add_iso_buffer_size(&iso_buffer_size_data);
-  builder.add_le_buffer_size(&le_buffer_size_data);
-
-  builder.add_le_connect_list_size(le_connect_list_size_);
-  builder.add_le_resolving_list_size(le_resolving_list_size_);
-
-  builder.add_le_maximum_data_length(&le_maximum_data_length_data);
-  builder.add_le_maximum_advertising_data_length(le_maximum_advertising_data_length_);
-  builder.add_le_suggested_default_data_length(le_suggested_default_data_length_);
-  builder.add_le_number_supported_advertising_sets(le_number_supported_advertising_sets_);
-  builder.add_le_periodic_advertiser_list_size(le_periodic_advertiser_list_size_);
-
-  builder.add_local_supported_commands(local_supported_commands_data);
-  builder.add_extended_lmp_features_array(extended_lmp_features_vector);
-  builder.add_le_local_supported_features(le_local_supported_features_);
-  builder.add_le_supported_states(le_supported_states_);
-  builder.add_vendor_capabilities(&vendor_capabilities_data);
-
-  flatbuffers::Offset<ControllerData> dumpsys_data = builder.Finish();
-  promise.set_value(dumpsys_data);
+  std::format_to(
+          out,
+          "    vendor_capabilities:\n"
+          "        is_supported: {}\n"
+          "        max_adv_instances: {}\n"
+          "        offloaded_resolution_of_private_addresses: {}\n"
+          "        total_scan_result_storage: {}\n"
+          "        max_irk_list_size: {}\n"
+          "        filtering_support: {}\n"
+          "        max_filter: {}\n"
+          "        activity_energy_info_support: {}\n"
+          "        version_supported: {}\n"
+          "        total_num_of_advt_tracked: {}\n"
+          "        extended_scan_support: {}\n"
+          "        debug_logging_supported: {}\n"
+          "        le_address_generation_offloading_support: {}\n"
+          "        a2dp_source_offload_capability_mask: {}\n"
+          "        bluetooth_quality_report_support: {}\n"
+          "        dynamic_audio_buffer_support: {}\n"
+          "        a2dp_offload_v2_support: {}\n",
+          vendor_capabilities_.is_supported_, vendor_capabilities_.max_advt_instances_,
+          vendor_capabilities_.offloaded_resolution_of_private_address_,
+          vendor_capabilities_.total_scan_results_storage_, vendor_capabilities_.max_irk_list_sz_,
+          vendor_capabilities_.filtering_support_, vendor_capabilities_.max_filter_,
+          vendor_capabilities_.activity_energy_info_support_,
+          vendor_capabilities_.version_supported_, vendor_capabilities_.total_num_of_advt_tracked_,
+          vendor_capabilities_.extended_scan_support_,
+          vendor_capabilities_.debug_logging_supported_,
+          vendor_capabilities_.le_address_generation_offloading_support_,
+          vendor_capabilities_.a2dp_source_offload_capability_mask_,
+          vendor_capabilities_.bluetooth_quality_report_support_,
+          vendor_capabilities_.dynamic_audio_buffer_support_,
+          vendor_capabilities_.a2dp_offload_v2_support_);
 }
 
-DumpsysDataFinisher Controller::GetDumpsysData(flatbuffers::FlatBufferBuilder* fb_builder) const {
-  ASSERT(fb_builder != nullptr);
-
-  std::promise<flatbuffers::Offset<ControllerData>> promise;
-  auto future = promise.get_future();
-  impl_->Dump(std::move(promise), fb_builder);
-
-  auto dumpsys_data = future.get();
-
-  return [dumpsys_data](DumpsysDataBuilder* dumpsys_builder) {
-    dumpsys_builder->add_hci_controller_dumpsys_data(dumpsys_data);
-  };
+void Controller::Dump(int fd) const {
+  std::string out;
+  impl_->dump(std::back_inserter(out));
+  dprintf(fd, "%s", out.c_str());
 }
 
 }  // namespace hci

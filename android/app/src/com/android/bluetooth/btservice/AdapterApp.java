@@ -20,40 +20,15 @@ import android.util.Log;
 
 public class AdapterApp extends Application {
     private static final String TAG = "BluetoothAdapterApp";
-    private static final boolean DBG = false;
-    //For Debugging only
-    private static int sRefCount = 0;
-
-    public AdapterApp() {
-        super();
-        if (DBG) {
-            synchronized (AdapterApp.class) {
-                sRefCount++;
-                Log.d(TAG, "REFCOUNT: Constructed " + this + " Instance Count = " + sRefCount);
-            }
-        }
-    }
 
     @Override
     public void onCreate() {
         super.onCreate();
-        if (DBG) {
-            Log.d(TAG, "onCreate");
-        }
+        Log.d(TAG, "onCreate");
         try {
             DataMigration.run(this);
         } catch (Exception e) {
             Log.e(TAG, "Migration failure: ", e);
-        }
-    }
-
-    @Override
-    protected void finalize() {
-        if (DBG) {
-            synchronized (AdapterApp.class) {
-                sRefCount--;
-                Log.d(TAG, "REFCOUNT: Finalized: " + this + ", Instance Count = " + sRefCount);
-            }
         }
     }
 }

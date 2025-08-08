@@ -34,33 +34,28 @@ cc_fuzz {
         "libbluetooth_headers",
     ],
     shared_libs: [
+        "libaconfig_storage_read_api_cc",
+        "libbase",
         "libdl",
         "liblog",
         "server_configurable_flags",
-    ],
-    generated_headers: [
-        "BluetoothGeneratedDumpsysDataSchema_h",
     ],
     static_libs: [
         "bluetooth_flags_c_lib",
         "libbluetooth-types",
         "libbluetooth_gd",
         "libbluetooth_hci_pdl",
-        "libbt_shim_bridge",
-        "libbt_shim_ffi",
+        "libbluetooth_log",
         "libbtcore",
         "libbtdevice",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libgmock",
         "libosi",
     ],
     include_dirs: [
         "packages/modules/Bluetooth/system",
-        "packages/modules/Bluetooth/system/device/include",
         "packages/modules/Bluetooth/system/gd",
-    ],
-    cflags: [
-        "-DBUILDCFG",
     ],
     fuzz_config: {
         cc: ["android-bluetooth-security@google.com"],

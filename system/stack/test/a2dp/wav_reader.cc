@@ -16,11 +16,12 @@
 
 #include "wav_reader.h"
 
+#include <bluetooth/log.h>
+
 #include <iostream>
 #include <iterator>
 
-#include "gd/os/files.h"
-#include "os/log.h"
+#include "os/files.h"
 
 namespace bluetooth {
 namespace testing {
@@ -31,7 +32,7 @@ WavReader::WavReader(const char* filename) {
     wavFile_.read((char*)&header_, kWavHeaderSize);
     ReadSamples();
   } else {
-    ASSERT_LOG(false, "File %s does not exist!", filename);
+    log::fatal("File {} does not exist!", filename);
   }
 }
 

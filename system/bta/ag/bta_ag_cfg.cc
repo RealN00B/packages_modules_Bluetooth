@@ -23,12 +23,10 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"  // Must be first to define build configuration
 #include "bta/ag/bta_ag_int.h"
 #include "bta/include/bta_ag_api.h"
+#include "btm_api_types.h"
 #include "device/include/esco_parameters.h"
-#include "osi/include/allocator.h"
-#include "osi/include/compat.h"
 
 /* Set the CIND to match HFP 1.5 */
 #define BTA_AG_CIND_INFO                                                       \
@@ -43,32 +41,26 @@
 #define BTA_AG_CONN_TIMEOUT 5000
 #endif
 
-#ifndef BTA_AG_SCO_PKT_TYPES
 /* S1 packet type setting from HFP 1.5 spec */
-#define BTA_AG_SCO_PKT_TYPES /* BTM_SCO_LINK_ALL_PKT_MASK */     \
-  (BTM_SCO_LINK_ONLY_MASK | ESCO_PKT_TYPES_MASK_EV3 |            \
-   ESCO_PKT_TYPES_MASK_NO_3_EV3 | ESCO_PKT_TYPES_MASK_NO_2_EV5 | \
-   ESCO_PKT_TYPES_MASK_NO_3_EV5)
-#endif
+#define BTA_AG_SCO_PKT_TYPES /* BTM_SCO_LINK_ALL_PKT_MASK */                         \
+  (BTM_SCO_LINK_ONLY_MASK | ESCO_PKT_TYPES_MASK_EV3 | ESCO_PKT_TYPES_MASK_NO_3_EV3 | \
+   ESCO_PKT_TYPES_MASK_NO_2_EV5 | ESCO_PKT_TYPES_MASK_NO_3_EV5)
 
 #ifndef BTA_AG_BIND_INFO
 #define BTA_AG_BIND_INFO "(1)"
 #endif
 
 const tBTA_AG_HF_IND bta_ag_local_hf_ind_cfg[] = {
-    /* The first row contains the number of indicators. Need to be updated
-       accordingly */
-    {BTA_AG_NUM_LOCAL_HF_IND, false, false, 0, 0},
+        /* The first row contains the number of indicators. Need to be updated
+           accordingly */
+        {BTA_AG_NUM_LOCAL_HF_IND, false, false, 0, 0},
 
-    {1, true, true, 0,
-     1}, /* Enhanced Driver Status, supported, enabled, range 0 ~ 1 */
-    {2, true, true, 0,
-     100} /* Battery Level Status, supported, enabled, range 0 ~ 100 */
+        {1, true, true, 0, 1},  /* Enhanced Driver Status, supported, enabled, range 0 ~ 1 */
+        {2, true, true, 0, 100} /* Battery Level Status, supported, enabled, range 0 ~ 100 */
 };
 
-const tBTA_AG_CFG bta_ag_cfg = {BTA_AG_CIND_INFO,        BTA_AG_BIND_INFO,
-                                BTA_AG_NUM_LOCAL_HF_IND, BTA_AG_CONN_TIMEOUT,
-                                BTA_AG_SCO_PKT_TYPES,    BTA_AG_CHLD_VAL_ECC,
+const tBTA_AG_CFG bta_ag_cfg = {BTA_AG_CIND_INFO,    BTA_AG_BIND_INFO,     BTA_AG_NUM_LOCAL_HF_IND,
+                                BTA_AG_CONN_TIMEOUT, BTA_AG_SCO_PKT_TYPES, BTA_AG_CHLD_VAL_ECC,
                                 BTA_AG_CHLD_VAL};
 
 const tBTA_AG_CFG* p_bta_ag_cfg = &bta_ag_cfg;

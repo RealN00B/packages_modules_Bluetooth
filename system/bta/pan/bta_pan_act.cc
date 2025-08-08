@@ -24,24 +24,29 @@
 
 #define LOG_TAG "bluetooth"
 
-#include <cstdint>
+#include <bluetooth/log.h>
 
-// PAN_INCLUDED
-#include "bt_target.h"  // Must be first to define build configuration
-#if (PAN_INCLUDED == TRUE)
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <string>
 
 #include "bta/include/bta_pan_co.h"
 #include "bta/pan/bta_pan_int.h"
+#include "bta_api.h"
+#include "bta_pan_api.h"
+#include "bta_sys.h"
+#include "internal_include/bt_target.h"  // PAN_INCLUDED
 #include "osi/include/allocator.h"
 #include "osi/include/fixed_queue.h"
-#include "osi/include/osi.h"  // UNUSED_ATTR
 #include "stack/include/bt_hdr.h"
 #include "stack/include/bt_uuid16.h"
 #include "stack/include/pan_api.h"
 #include "types/raw_address.h"
 
-void bta_pan_sm_execute(tBTA_PAN_SCB* p_scb, uint16_t event,
-                        tBTA_PAN_DATA* p_data);
+using namespace bluetooth;
+
+#if (PAN_INCLUDED == TRUE)
 
 /* RX and TX data flow mask */
 #define BTA_PAN_RX_MASK 0x0F
@@ -59,8 +64,9 @@ void bta_pan_sm_execute(tBTA_PAN_SCB* p_scb, uint16_t event,
  *
  ******************************************************************************/
 static void bta_pan_pm_conn_busy(tBTA_PAN_SCB* p_scb) {
-  if ((p_scb != NULL) && (p_scb->state != BTA_PAN_IDLE_ST))
+  if ((p_scb != NULL) && (p_scb->state != BTA_PAN_IDLE_ST)) {
     bta_sys_busy(BTA_ID_PAN, p_scb->app_id, p_scb->bd_addr);
+  }
 }
 
 /*******************************************************************************
@@ -75,8 +81,9 @@ static void bta_pan_pm_conn_busy(tBTA_PAN_SCB* p_scb) {
  *
  ******************************************************************************/
 static void bta_pan_pm_conn_idle(tBTA_PAN_SCB* p_scb) {
-  if ((p_scb != NULL) && (p_scb->state != BTA_PAN_IDLE_ST))
+  if ((p_scb != NULL) && (p_scb->state != BTA_PAN_IDLE_ST)) {
     bta_sys_idle(BTA_ID_PAN, p_scb->app_id, p_scb->bd_addr);
+  }
 }
 
 /*******************************************************************************
@@ -89,9 +96,8 @@ static void bta_pan_pm_conn_idle(tBTA_PAN_SCB* p_scb) {
  * Returns          void
  *
  ******************************************************************************/
-static void bta_pan_conn_state_cback(uint16_t handle, const RawAddress& bd_addr,
-                                     tPAN_RESULT state, bool is_role_change,
-                                     uint8_t src_role, uint8_t dst_role) {
+static void bta_pan_conn_state_cback(uint16_t handle, const RawAddress& bd_addr, tPAN_RESULT state,
+                                     bool is_role_change, uint8_t src_role, uint8_t dst_role) {
   tBTA_PAN_SCB* p_scb;
   tBTA_PAN_CONN* p_buf = (tBTA_PAN_CONN*)osi_malloc(sizeof(tBTA_PAN_CONN));
 
@@ -115,10 +121,11 @@ static void bta_pan_conn_state_cback(uint16_t handle, const RawAddress& bd_addr,
     p_scb->bd_addr = bd_addr;
     p_scb->data_queue = fixed_queue_new(SIZE_MAX);
 
-    if (src_role == PAN_ROLE_CLIENT)
+    if (src_role == PAN_ROLE_CLIENT) {
       p_scb->app_id = bta_pan_cb.app_id[0];
-    else if (src_role == PAN_ROLE_NAP_SERVER)
+    } else if (src_role == PAN_ROLE_NAP_SERVER) {
       p_scb->app_id = bta_pan_cb.app_id[2];
+    }
   } else if ((state != PAN_SUCCESS) && !is_role_change) {
     p_buf->hdr.event = BTA_PAN_CONN_CLOSE_EVT;
   } else {
@@ -145,7 +152,9 @@ static void bta_pan_data_flow_cb(uint16_t handle, tPAN_RESULT result) {
   tBTA_PAN_SCB* p_scb;
 
   p_scb = bta_pan_scb_by_handle(handle);
-  if (p_scb == NULL) return;
+  if (p_scb == NULL) {
+    return;
+  }
 
   if (result == PAN_TX_FLOW_ON) {
     BT_HDR_RIGID* p_buf = (BT_HDR_RIGID*)osi_malloc(sizeof(BT_HDR_RIGID));
@@ -170,16 +179,15 @@ static void bta_pan_data_flow_cb(uint16_t handle, tPAN_RESULT result) {
  *
  ******************************************************************************/
 static void bta_pan_data_buf_ind_cback(uint16_t handle, const RawAddress& src,
-                                       const RawAddress& dst, uint16_t protocol,
-                                       BT_HDR* p_buf, bool ext, bool forward) {
+                                       const RawAddress& dst, uint16_t protocol, BT_HDR* p_buf,
+                                       bool ext, bool forward) {
   tBTA_PAN_SCB* p_scb = bta_pan_scb_by_handle(handle);
   if (p_scb == NULL) {
     return;
   }
 
-  if (sizeof(BT_HDR) + sizeof(tBTA_PAN_DATA_PARAMS) + p_buf->len >
-      PAN_BUF_SIZE) {
-    LOG_ERROR("%s: received buffer length too large: %d", __func__, p_buf->len);
+  if (sizeof(BT_HDR) + sizeof(tBTA_PAN_DATA_PARAMS) + p_buf->len > PAN_BUF_SIZE) {
+    log::error("received buffer length too large: {}", p_buf->len);
     return;
   }
 
@@ -213,11 +221,9 @@ static void bta_pan_data_buf_ind_cback(uint16_t handle, const RawAddress& src,
  * Returns          void
  *
  ******************************************************************************/
-static void bta_pan_pfilt_ind_cback(uint16_t handle, bool indication,
-                                    tPAN_RESULT result, uint16_t num_filters,
-                                    uint8_t* p_filters) {
-  bta_pan_co_pfilt_ind(handle, indication,
-                       (result == PAN_SUCCESS) ? BTA_PAN_SUCCESS : BTA_PAN_FAIL,
+static void bta_pan_pfilt_ind_cback(uint16_t handle, bool indication, tPAN_RESULT result,
+                                    uint16_t num_filters, uint8_t* p_filters) {
+  bta_pan_co_pfilt_ind(handle, indication, (result == PAN_SUCCESS) ? BTA_PAN_SUCCESS : BTA_PAN_FAIL,
                        num_filters, p_filters);
 }
 
@@ -231,11 +237,9 @@ static void bta_pan_pfilt_ind_cback(uint16_t handle, bool indication,
  * Returns          void
  *
  ******************************************************************************/
-static void bta_pan_mfilt_ind_cback(uint16_t handle, bool indication,
-                                    tPAN_RESULT result, uint16_t num_mfilters,
-                                    uint8_t* p_mfilters) {
-  bta_pan_co_mfilt_ind(handle, indication,
-                       (result == PAN_SUCCESS) ? BTA_PAN_SUCCESS : BTA_PAN_FAIL,
+static void bta_pan_mfilt_ind_cback(uint16_t handle, bool indication, tPAN_RESULT result,
+                                    uint16_t num_mfilters, uint8_t* p_mfilters) {
+  bta_pan_co_mfilt_ind(handle, indication, (result == PAN_SUCCESS) ? BTA_PAN_SUCCESS : BTA_PAN_FAIL,
                        num_mfilters, p_mfilters);
 }
 
@@ -266,15 +270,16 @@ static bool bta_pan_has_multiple_connections(uint8_t app_id) {
   }
 
   /* If cannot find a match then there is no connection at all */
-  if (!found) return false;
+  if (!found) {
+    return false;
+  }
 
   /* Find whether there is another connection with different device other than
      PANU.
       Could be same service or different service */
   for (uint8_t index = 0; index < BTA_PAN_NUM_CONN; index++) {
     p_scb = &bta_pan_cb.scb[index];
-    if (p_scb->in_use && p_scb->app_id != bta_pan_cb.app_id[0] &&
-        bd_addr != p_scb->bd_addr) {
+    if (p_scb->in_use && p_scb->app_id != bta_pan_cb.app_id[0] && bd_addr != p_scb->bd_addr) {
       return true;
     }
   }
@@ -325,32 +330,32 @@ void bta_pan_set_role(tBTA_PAN_DATA* p_data) {
   bta_pan_cb.app_id[2] = p_data->api_set_role.nap_app_id;
 
   /* set security correctly in api and here */
-  tPAN_RESULT status = PAN_SetRole(p_data->api_set_role.role,
-                                   std::string(p_data->api_set_role.user_name),
-                                   std::string(p_data->api_set_role.nap_name));
+  tPAN_RESULT status =
+          PAN_SetRole(p_data->api_set_role.role, std::string(p_data->api_set_role.user_name),
+                      std::string(p_data->api_set_role.nap_name));
 
   tBTA_PAN bta_pan = {
-      .set_role =
-          {
-              .status =
-                  (status == PAN_SUCCESS) ? BTA_PAN_SUCCESS : BTA_PAN_FAIL,
-              .role = p_data->api_set_role.role,
-          },
+          .set_role =
+                  {
+                          .status = (status == PAN_SUCCESS) ? BTA_PAN_SUCCESS : BTA_PAN_FAIL,
+                          .role = p_data->api_set_role.role,
+                  },
   };
 
   if (status == PAN_SUCCESS) {
-    if (p_data->api_set_role.role & PAN_ROLE_NAP_SERVER)
+    if (p_data->api_set_role.role & PAN_ROLE_NAP_SERVER) {
       bta_sys_add_uuid(UUID_SERVCLASS_NAP);
-    else
+    } else {
       bta_sys_remove_uuid(UUID_SERVCLASS_NAP);
+    }
 
-    if (p_data->api_set_role.role & PAN_ROLE_CLIENT)
+    if (p_data->api_set_role.role & PAN_ROLE_CLIENT) {
       bta_sys_add_uuid(UUID_SERVCLASS_PANU);
-    else
+    } else {
       bta_sys_remove_uuid(UUID_SERVCLASS_PANU);
-  }
-  /* if status is not success clear everything */
-  else {
+    }
+  } else {
+    /* if status is not success clear everything */
     PAN_SetRole(0, std::string(), std::string());
     bta_sys_remove_uuid(UUID_SERVCLASS_NAP);
     bta_sys_remove_uuid(UUID_SERVCLASS_GN);
@@ -378,17 +383,15 @@ void bta_pan_disable(void) {
   /* close all connections */
   PAN_SetRole(0, std::string(), std::string());
 
-#if (BTA_EIR_CANNED_UUID_LIST != TRUE)
   bta_sys_remove_uuid(UUID_SERVCLASS_NAP);
   bta_sys_remove_uuid(UUID_SERVCLASS_GN);
   bta_sys_remove_uuid(UUID_SERVCLASS_PANU);
-#endif  // BTA_EIR_CANNED_UUID_LIST
   /* free all queued up data buffers */
   for (i = 0; i < BTA_PAN_NUM_CONN; i++, p_scb++) {
     if (p_scb->in_use) {
-      while ((p_buf = (BT_HDR*)fixed_queue_try_dequeue(p_scb->data_queue)) !=
-             NULL)
+      while ((p_buf = (BT_HDR*)fixed_queue_try_dequeue(p_scb->data_queue)) != NULL) {
         osi_free(p_buf);
+      }
 
       bta_pan_co_close(p_scb->handle, p_scb->app_id);
     }
@@ -412,7 +415,7 @@ void bta_pan_open(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
 
   status = PAN_Connect(p_data->api_open.bd_addr, p_data->api_open.local_role,
                        p_data->api_open.peer_role, &p_scb->handle);
-  LOG_VERBOSE("%s pan connect status: %d", __func__, status);
+  log::verbose("pan connect status: {}", status);
 
   if (status == PAN_SUCCESS) {
     p_scb->bd_addr = p_data->api_open.bd_addr;
@@ -443,7 +446,7 @@ void bta_pan_open(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
  * Returns          void
  *
  ******************************************************************************/
-void bta_pan_api_close(tBTA_PAN_SCB* p_scb, UNUSED_ATTR tBTA_PAN_DATA* p_data) {
+void bta_pan_api_close(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* /* p_data */) {
   tBTA_PAN_CONN* p_buf = (tBTA_PAN_CONN*)osi_malloc(sizeof(tBTA_PAN_CONN));
 
   PAN_Disconnect(p_scb->handle);
@@ -470,7 +473,7 @@ void bta_pan_api_close(tBTA_PAN_SCB* p_scb, UNUSED_ATTR tBTA_PAN_DATA* p_data) {
 void bta_pan_conn_open(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
   tBTA_PAN bta_pan;
 
-  LOG_VERBOSE("%s pan connection result: %d", __func__, p_data->conn.result);
+  log::verbose("pan connection result: {}", p_data->conn.result);
 
   bta_pan.open.bd_addr = p_scb->bd_addr;
   bta_pan.open.handle = p_scb->handle;
@@ -493,8 +496,7 @@ void bta_pan_conn_open(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
   /* If app_id is NAP/GN, check whether there are multiple connections.
      If there are, provide a special app_id to dm to enforce central role only.
      */
-  if (p_scb->app_id == bta_pan_cb.app_id[2] &&
-      bta_pan_has_multiple_connections(p_scb->app_id)) {
+  if (p_scb->app_id == bta_pan_cb.app_id[2] && bta_pan_has_multiple_connections(p_scb->app_id)) {
     p_scb->app_id = BTA_APP_ID_PAN_MULTI;
   }
 
@@ -522,8 +524,9 @@ void bta_pan_conn_close(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
   bta_sys_conn_close(BTA_ID_PAN, p_scb->app_id, p_scb->bd_addr);
 
   /* free all queued up data buffers */
-  while ((p_buf = (BT_HDR*)fixed_queue_try_dequeue(p_scb->data_queue)) != NULL)
+  while ((p_buf = (BT_HDR*)fixed_queue_try_dequeue(p_scb->data_queue)) != NULL) {
     osi_free(p_buf);
+  }
 
   bta_pan_scb_dealloc(p_scb);
 
@@ -541,7 +544,7 @@ void bta_pan_conn_close(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
  * Returns          void
  *
  ******************************************************************************/
-void bta_pan_rx_path(tBTA_PAN_SCB* p_scb, UNUSED_ATTR tBTA_PAN_DATA* p_data) {
+void bta_pan_rx_path(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* /* p_data */) {
   /* if data path configured for rx pull */
   if ((bta_pan_cb.flow_mask & BTA_PAN_RX_MASK) == BTA_PAN_RX_PULL) {
     /* if we can accept data */
@@ -549,9 +552,8 @@ void bta_pan_rx_path(tBTA_PAN_SCB* p_scb, UNUSED_ATTR tBTA_PAN_DATA* p_data) {
       /* call application callout function for rx path */
       bta_pan_co_rx_path(p_scb->handle, p_scb->app_id);
     }
-  }
-  /* else data path configured for rx push */
-  else {
+  } else {
+    /* else data path configured for rx push */
   }
 }
 
@@ -565,7 +567,7 @@ void bta_pan_rx_path(tBTA_PAN_SCB* p_scb, UNUSED_ATTR tBTA_PAN_DATA* p_data) {
  * Returns          void
  *
  ******************************************************************************/
-void bta_pan_tx_path(tBTA_PAN_SCB* p_scb, UNUSED_ATTR tBTA_PAN_DATA* p_data) {
+void bta_pan_tx_path(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* /* p_data */) {
   bta_pan_pm_conn_busy(p_scb);
   /* call application callout function for tx path */
   bta_pan_co_tx_path(p_scb->handle, p_scb->app_id);
@@ -610,9 +612,8 @@ void bta_pan_write_buf(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
     bta_pan_pm_conn_busy(p_scb);
 
     PAN_WriteBuf(p_scb->handle, ((tBTA_PAN_DATA_PARAMS*)p_data)->dst,
-                 ((tBTA_PAN_DATA_PARAMS*)p_data)->src,
-                 ((tBTA_PAN_DATA_PARAMS*)p_data)->protocol, (BT_HDR*)p_data,
-                 ((tBTA_PAN_DATA_PARAMS*)p_data)->ext);
+                 ((tBTA_PAN_DATA_PARAMS*)p_data)->src, ((tBTA_PAN_DATA_PARAMS*)p_data)->protocol,
+                 (BT_HDR*)p_data, ((tBTA_PAN_DATA_PARAMS*)p_data)->ext);
     bta_pan_pm_conn_idle(p_scb);
   }
 }
@@ -627,8 +628,6 @@ void bta_pan_write_buf(tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
  * Returns          void
  *
  ******************************************************************************/
-void bta_pan_free_buf(UNUSED_ATTR tBTA_PAN_SCB* p_scb, tBTA_PAN_DATA* p_data) {
-  osi_free(p_data);
-}
+void bta_pan_free_buf(tBTA_PAN_SCB* /* p_scb */, tBTA_PAN_DATA* p_data) { osi_free(p_data); }
 
 #endif /* PAN_INCLUDED */

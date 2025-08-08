@@ -20,11 +20,11 @@ import android.bluetooth.BluetoothLeAudioCodecConfig;
 import android.content.Context;
 import android.media.AudioManager;
 import android.util.Log;
+
 /*
  * LeAudio Codec Configuration setup.
  */
 class LeAudioCodecConfig {
-    private static final boolean DBG = true;
     private static final String TAG = "LeAudioCodecConfig";
 
     private Context mContext;
@@ -37,20 +37,19 @@ class LeAudioCodecConfig {
 
         AudioManager audioManager = mContext.getSystemService(AudioManager.class);
         if (audioManager == null) {
-            Log.w(TAG, "Can't obtain the codec offloading prefernece from null AudioManager");
+            Log.w(TAG, "Can't obtain the codec offloading preference from null AudioManager");
             return;
         }
 
-        mCodecConfigOffloading = audioManager.getHwOffloadFormatsSupportedForLeAudio()
-                                             .toArray(mCodecConfigOffloading);
+        mCodecConfigOffloading =
+                audioManager
+                        .getHwOffloadFormatsSupportedForLeAudio()
+                        .toArray(mCodecConfigOffloading);
 
-        if (DBG) {
-            Log.i(TAG, "mCodecConfigOffloading size for le -> " + mCodecConfigOffloading.length);
+        Log.i(TAG, "mCodecConfigOffloading size for le -> " + mCodecConfigOffloading.length);
 
-            for (int idx = 0; idx < mCodecConfigOffloading.length; idx++) {
-                Log.i(TAG, String.format("mCodecConfigOffloading[%d] -> %s",
-                        idx, mCodecConfigOffloading[idx].toString()));
-            }
+        for (int idx = 0; idx < mCodecConfigOffloading.length; idx++) {
+            Log.i(TAG, "mCodecConfigOffloading[" + idx + "] -> " + mCodecConfigOffloading[idx]);
         }
     }
 
@@ -58,4 +57,3 @@ class LeAudioCodecConfig {
         return mCodecConfigOffloading;
     }
 }
-

@@ -28,8 +28,10 @@
 #include "osi/include/wakelock.h"
 #include "osi/semaphore.h"
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 using base::Closure;
-using base::TimeDelta;
 using bluetooth::common::MessageLoopThread;
 
 static semaphore_t* semaphore;
@@ -48,21 +50,21 @@ extern int64_t TIMER_INTERVAL_FOR_WAKELOCK_IN_MS;
 
 static bool is_wake_lock_acquired = false;
 
-static int acquire_wake_lock_cb(const char* lock_name) {
+static int acquire_wake_lock_cb(const char* /*lock_name*/) {
   is_wake_lock_acquired = true;
   return BT_STATUS_SUCCESS;
 }
 
-static int release_wake_lock_cb(const char* lock_name) {
+static int release_wake_lock_cb(const char* /*lock_name*/) {
   is_wake_lock_acquired = false;
   return BT_STATUS_SUCCESS;
 }
 
-static bt_os_callouts_t bt_wakelock_callouts = {
-    sizeof(bt_os_callouts_t), acquire_wake_lock_cb, release_wake_lock_cb};
+static bt_os_callouts_t bt_wakelock_callouts = {sizeof(bt_os_callouts_t), acquire_wake_lock_cb,
+                                                release_wake_lock_cb};
 
 class AlarmTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {
     TIMER_INTERVAL_FOR_WAKELOCK_IN_MS = 500;
 
@@ -82,14 +84,16 @@ class AlarmTest : public ::testing::Test {
   }
 };
 
-static void cb(UNUSED_ATTR void* data) {
+static void cb(void* /* data */) {
   ++cb_counter;
   semaphore_post(semaphore);
 }
 
 static void ordered_cb(void* data) {
   int i = PTR_TO_INT(data);
-  if (i != cb_counter) cb_misordered_counter++;
+  if (i != cb_counter) {
+    cb_misordered_counter++;
+  }
   ++cb_counter;
   semaphore_post(semaphore);
 }
@@ -228,8 +232,7 @@ TEST_F(AlarmTest, test_set_short_long) {
                        alarm_new("alarm_test.test_set_short_long_1")};
 
   alarm_set(alarm[0], 10, cb, NULL);
-  alarm_set(alarm[1], 10 + TIMER_INTERVAL_FOR_WAKELOCK_IN_MS + EPSILON_MS, cb,
-            NULL);
+  alarm_set(alarm[1], 10 + TIMER_INTERVAL_FOR_WAKELOCK_IN_MS + EPSILON_MS, cb, NULL);
 
   EXPECT_EQ(cb_counter, 0);
   EXPECT_TRUE(is_wake_lock_acquired);
@@ -253,8 +256,7 @@ TEST_F(AlarmTest, test_set_long_long) {
                        alarm_new("alarm_test.test_set_long_long_1")};
 
   alarm_set(alarm[0], TIMER_INTERVAL_FOR_WAKELOCK_IN_MS + EPSILON_MS, cb, NULL);
-  alarm_set(alarm[1], 2 * (TIMER_INTERVAL_FOR_WAKELOCK_IN_MS + EPSILON_MS), cb,
-            NULL);
+  alarm_set(alarm[1], 2 * (TIMER_INTERVAL_FOR_WAKELOCK_IN_MS + EPSILON_MS), cb, NULL);
 
   EXPECT_EQ(cb_counter, 0);
   EXPECT_FALSE(is_wake_lock_acquired);
@@ -298,8 +300,7 @@ TEST_F(AlarmTest, test_callback_ordering) {
   alarm_t* alarms[100];
 
   for (int i = 0; i < 100; i++) {
-    const std::string alarm_name =
-        "alarm_test.test_callback_ordering[" + std::to_string(i) + "]";
+    const std::string alarm_name = "alarm_test.test_callback_ordering[" + std::to_string(i) + "]";
     alarms[i] = alarm_new(alarm_name.c_str());
   }
 
@@ -314,7 +315,9 @@ TEST_F(AlarmTest, test_callback_ordering) {
   EXPECT_EQ(cb_counter, 100);
   EXPECT_EQ(cb_misordered_counter, 0);
 
-  for (int i = 0; i < 100; i++) alarm_free(alarms[i]);
+  for (int i = 0; i < 100; i++) {
+    alarm_free(alarms[i]);
+  }
 
   EXPECT_FALSE(is_wake_lock_acquired);
 }
@@ -334,7 +337,7 @@ TEST_F(AlarmTest, test_callback_ordering_on_mloop) {
 
   for (int i = 0; i < 100; i++) {
     const std::string alarm_name =
-        "alarm_test.test_callback_ordering_on_mloop[" + std::to_string(i) + "]";
+            "alarm_test.test_callback_ordering_on_mloop[" + std::to_string(i) + "]";
     alarms[i] = alarm_new(alarm_name.c_str());
   }
 
@@ -349,7 +352,9 @@ TEST_F(AlarmTest, test_callback_ordering_on_mloop) {
   EXPECT_EQ(cb_counter, 100);
   EXPECT_EQ(cb_misordered_counter, 0);
 
-  for (int i = 0; i < 100; i++) alarm_free(alarms[i]);
+  for (int i = 0; i < 100; i++) {
+    alarm_free(alarms[i]);
+  }
 
   message_loop_thread.ShutDown();
   EXPECT_FALSE(is_wake_lock_acquired);
@@ -358,8 +363,7 @@ TEST_F(AlarmTest, test_callback_ordering_on_mloop) {
 // Try to catch any race conditions between the timer callback and |alarm_free|.
 TEST_F(AlarmTest, test_callback_free_race) {
   for (int i = 0; i < 1000; ++i) {
-    const std::string alarm_name =
-        "alarm_test.test_callback_free_race[" + std::to_string(i) + "]";
+    const std::string alarm_name = "alarm_test.test_callback_free_race[" + std::to_string(i) + "]";
     alarm_t* alarm = alarm_new(alarm_name.c_str());
     alarm_set(alarm, 0, cb, NULL);
     alarm_free(alarm);

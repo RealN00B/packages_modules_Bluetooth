@@ -17,25 +17,31 @@
 #include "test/common/jni_thread.h"
 
 #include <base/functional/callback.h>
+#include <bluetooth/log.h>
 
 #include <map>
 
-#include "osi/include/log.h"
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
 
 std::queue<base::OnceClosure> do_in_jni_thread_task_queue;
 
 void run_one_jni_thread_task() {
-  ASSERT_LOG(do_in_jni_thread_task_queue.size(),
-             "JNI thread has no closures to execute");
+  bluetooth::log::assert_that(do_in_jni_thread_task_queue.size(),
+                              "JNI thread has no closures to execute");
   base::OnceCallback callback = std::move(do_in_jni_thread_task_queue.front());
   do_in_jni_thread_task_queue.pop();
   std::move(callback).Run();
 }
 
 void run_all_jni_thread_task() {
-  while (do_in_jni_thread_task_queue.size()) run_one_jni_thread_task();
+  while (do_in_jni_thread_task_queue.size()) {
+    run_one_jni_thread_task();
+  }
 }
 
 void reset_mock_jni_thread_queue() {
-  while (do_in_jni_thread_task_queue.size()) do_in_jni_thread_task_queue.pop();
+  while (do_in_jni_thread_task_queue.size()) {
+    do_in_jni_thread_task_queue.pop();
+  }
 }

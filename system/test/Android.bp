@@ -13,6 +13,11 @@ subdirs = [
 ]
 
 filegroup {
+    name: "TestMockAudioHalInterface",
+    srcs: ["mock/mock_audio_hal_interface*.cc"],
+}
+
+filegroup {
     name: "TestMockAudioA2dp",
     srcs: ["mock/mock_audio_a2dp*.cc"],
 }
@@ -130,6 +135,13 @@ filegroup {
 }
 
 filegroup {
+    name: "TestMockBtaRas",
+    srcs: [
+        "mock/mock_bta_ras*.cc",
+    ],
+}
+
+filegroup {
     name: "TestMockBtaScn",
     srcs: [
         "mock/mock_bta_scn.cc",
@@ -176,6 +188,7 @@ filegroup {
         ":TestMockBtaLeAudio",
         ":TestMockBtaLeAudioHalVerifier",
         ":TestMockBtaPan",
+        ":TestMockBtaRas",
         ":TestMockBtaSdp",
         ":TestMockBtaSys",
         ":TestMockBtaVc",
@@ -183,9 +196,27 @@ filegroup {
 }
 
 filegroup {
+    name: "TestMockMainShimDumpsys",
+    srcs: [
+        "mock/mock_main_shim_dumpsys.cc",
+    ],
+}
+
+filegroup {
     name: "TestMockMainShim",
     srcs: [
-        "mock/mock_main_shim*.cc",
+        "mock/mock_main_shim.cc",
+        "mock/mock_main_shim_BtifConfigInterface.cc",
+        "mock/mock_main_shim_acl.cc",
+        "mock/mock_main_shim_acl_api.cc",
+        "mock/mock_main_shim_acl_interface.cc",
+        "mock/mock_main_shim_btm_api.cc",
+        "mock/mock_main_shim_distance_measurement_manager.cc",
+        "mock/mock_main_shim_hci_layer.cc",
+        "mock/mock_main_shim_le_advertising_manager.cc",
+        "mock/mock_main_shim_le_scanning_manager.cc",
+        "mock/mock_main_shim_metric_id_api.cc",
+        "mock/mock_main_shim_metrics_api.cc",
     ],
 }
 
@@ -246,9 +277,23 @@ filegroup {
 }
 
 filegroup {
+    name: "TestMockStackL2capInterface",
+    srcs: [
+        "mock/mock_stack_l2cap_interface.cc",
+    ],
+}
+
+filegroup {
     name: "TestMockStackRfcomm",
     srcs: [
         "mock/mock_stack_rfcomm*.cc",
+    ],
+}
+
+filegroup {
+    name: "TestMockStackRnr",
+    srcs: [
+        "mock/mock_stack_rnr_interface.cc",
     ],
 }
 
@@ -288,13 +333,6 @@ filegroup {
 }
 
 filegroup {
-    name: "TestMockAndroidHardware",
-    srcs: [
-        "mock/mock_android_hardware_*.cc",
-    ],
-}
-
-filegroup {
     name: "TestMockDevice",
     srcs: [
         "mock/mock_device_*.cc",
@@ -312,6 +350,13 @@ filegroup {
     name: "TestMockMainShimEntry",
     srcs: [
         "mock/mock_main_shim_entry.cc",
+    ],
+}
+
+filegroup {
+    name: "TestMockMainShimStack",
+    srcs: [
+        "mock/mock_main_shim_stack.cc",
     ],
 }
 
@@ -341,6 +386,13 @@ filegroup {
 }
 
 filegroup {
+    name: "TestMockJni",
+    srcs: [
+        "mock/mock_jni*.cc",
+    ],
+}
+
+filegroup {
     name: "TestMockStackHid",
     srcs: [
         "mock/mock_stack_hid*.cc",
@@ -365,6 +417,27 @@ filegroup {
     name: "TestMockStackBtm",
     srcs: [
         "mock/mock_stack_btm*.cc",
+    ],
+}
+
+filegroup {
+    name: "TestMockStackBtmInterface",
+    srcs: [
+        "mock/mock_stack_btm_interface.cc",
+    ],
+}
+
+filegroup {
+    name: "TestMockStackSecurityClientInterface",
+    srcs: [
+        "mock/mock_stack_security_client_interface.cc",
+    ],
+}
+
+filegroup {
+    name: "TestMockStackBtmIso",
+    srcs: [
+        "mock/mock_stack_btm_iso.cc",
     ],
 }
 
@@ -411,6 +484,13 @@ filegroup {
 }
 
 filegroup {
+    name: "TestMockStackConnMgr",
+    srcs: [
+        "mock/mock_stack_connection_manager.cc",
+    ],
+}
+
+filegroup {
     name: "TestMockStackEatt",
     srcs: [
         "mock/mock_stack_eatt*.cc",
@@ -453,13 +533,6 @@ filegroup {
 }
 
 filegroup {
-    name: "TestMockUtils",
-    srcs: [
-        "mock/mock_utils_*cc",
-    ],
-}
-
-filegroup {
     name: "TestCommonMockFunctions",
     srcs: [
         "common/mock_functions.cc",
@@ -484,13 +557,6 @@ filegroup {
 filegroup {
     name: "TestCommonSyncMainHandler",
     srcs: ["common/sync_main_handler.cc"],
-}
-
-filegroup {
-    name: "TestCommonInitFlags",
-    srcs: [
-        "common/init_flags.cc",
-    ],
 }
 
 filegroup {
@@ -536,13 +602,6 @@ filegroup {
 }
 
 filegroup {
-    name: "TestMockGdOsLoggingLogRedaction",
-    srcs: [
-        "mock/mock_gd_os_logging_log_redaction.cc",
-    ],
-}
-
-filegroup {
     name: "TestFakeOsi",
     srcs: [
         ":TestMockOsi",
@@ -580,5 +639,46 @@ cc_defaults {
         lib64: {
             suffix: "64",
         },
+    },
+}
+
+cc_test {
+    name: "bluetooth_audio_hal_version_test",
+    local_include_dirs: ["common"],
+    defaults: [
+        "latest_android_hardware_audio_common_ndk_static",
+        "latest_android_hardware_bluetooth_audio_ndk_static",
+        "latest_android_media_audio_common_types_ndk_static",
+        "mts_defaults",
+    ],
+    shared_libs: [
+        "libbase",
+        "libbinder",
+        "libbinder_ndk",
+        "libchrome",
+        "libcutils",
+        "libhidlbase",
+        "liblog",
+        "libutils",
+    ],
+    include_dirs: ["packages/modules/Bluetooth/system"],
+    srcs: ["common/hal_version_manager_test.cc"],
+    static_libs: [
+        "android.hardware.audio.common@5.0",
+        "android.hardware.bluetooth.audio@2.0",
+        "android.hardware.bluetooth.audio@2.1",
+        "android.hardware.common-V2-ndk",
+        "android.hardware.common.fmq-V1-ndk",
+        "libbluetooth_log",
+        "libbt-audio-hal-interface",
+    ],
+    test_suites: ["general-tests"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+    ],
+    sanitize: {
+        address: true,
     },
 }

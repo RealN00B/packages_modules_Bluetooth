@@ -1,3 +1,4 @@
+use bt_topshim::btif::RawAddress;
 use btstack::battery_manager::BatterySet;
 use btstack::battery_provider_manager::{IBatteryProviderCallback, IBatteryProviderManager};
 use btstack::RPCProxy;
@@ -7,6 +8,7 @@ use dbus_projection::prelude::*;
 
 use crate::dbus_arg::DBusArg;
 
+#[allow(dead_code)]
 struct IBatteryProviderCallbackDBus {}
 
 #[dbus_proxy_obj(BatteryProviderCallback, "org.chromium.bluetooth.BatteryProviderCallback")]
@@ -17,6 +19,7 @@ impl IBatteryProviderCallback for IBatteryProviderCallbackDBus {
     }
 }
 
+#[allow(dead_code)]
 struct IBatteryProviderManagerDBus {}
 
 #[generate_dbus_exporter(
@@ -43,7 +46,7 @@ impl IBatteryProviderManager for IBatteryProviderManagerDBus {
     }
 
     #[dbus_method("RemoveBatteryInfo")]
-    fn remove_battery_info(&mut self, battery_provider_id: u32, address: String, uuid: String) {
+    fn remove_battery_info(&mut self, battery_provider_id: u32, address: RawAddress, uuid: String) {
         dbus_generated!()
     }
 }

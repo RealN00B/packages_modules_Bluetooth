@@ -20,8 +20,13 @@ python_test_host {
     name: "avatar",
     main: "main.py",
     srcs: [
-        "*.py",
+        "**/*.py",
     ],
+    version: {
+        py3: {
+            embedded_launcher: false,
+        },
+    },
     libs: [
         "bumble_services_experimental-python",
         "libavatar",
@@ -34,8 +39,41 @@ python_test_host {
         unit_test: false,
     },
     data: [
-        ":PandoraServer",
         "config.yml",
+    ],
+    device_common_data: [
+        ":PandoraServer",
+    ],
+}
+
+python_test_host {
+    name: "avatar_phy",
+    main: "main.py",
+    srcs: [
+        "**/*.py",
+    ],
+    test_config: "AndroidPhyTest.xml",
+    version: {
+        py3: {
+            embedded_launcher: false,
+        },
+    },
+    libs: [
+        "bumble_services_experimental-python",
+        "libavatar",
+    ],
+    required: [
+        "aapt",
+    ],
+    test_suites: ["general-tests"],
+    test_options: {
+        unit_test: false,
+    },
+    data: [
+        "config.yml",
+    ],
+    device_common_data: [
+        ":PandoraServer",
     ],
 }
 
@@ -47,6 +85,5 @@ sh_binary_host {
         "pandora-python-gen-src",
         "pandora_experimental-python-gen-src",
         "tradefed",
-        "tradefed-test-framework",
     ],
 }

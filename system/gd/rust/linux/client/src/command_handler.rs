@@ -9,24 +9,39 @@ use crate::bt_gatt::AuthReq;
 use crate::callbacks::{BtGattCallback, BtGattServerCallback};
 use crate::ClientContext;
 use crate::{console_red, console_yellow, print_error, print_info};
-use bt_topshim::btif::{BtConnectionState, BtDiscMode, BtStatus, BtTransport, INVALID_RSSI};
+use bt_topshim::btif::{
+    BtConnectionState, BtDiscMode, BtStatus, BtTransport, RawAddress, Uuid, INVALID_RSSI,
+};
+use bt_topshim::profiles::gatt::{GattStatus, LePhy};
 use bt_topshim::profiles::hid_host::BthhReportType;
 use bt_topshim::profiles::sdp::{BtSdpMpsRecord, BtSdpRecord};
-use bt_topshim::profiles::{gatt::LePhy, ProfileConnectionState};
+use bt_topshim::profiles::ProfileConnectionState;
+use bt_topshim::syslog::Level;
+use btstack::battery_manager::IBatteryManager;
 use btstack::bluetooth::{BluetoothDevice, IBluetooth};
-use btstack::bluetooth_gatt::{GattWriteType, IBluetoothGatt};
+use btstack::bluetooth_gatt::{
+    BluetoothGattCharacteristic, BluetoothGattDescriptor, BluetoothGattService, GattDbElementType,
+    GattWriteType, IBluetoothGatt,
+};
+use btstack::bluetooth_logging::IBluetoothLogging;
 use btstack::bluetooth_media::{IBluetoothMedia, IBluetoothTelephony};
 use btstack::bluetooth_qa::IBluetoothQA;
 use btstack::socket_manager::{IBluetoothSocketManager, SocketResult};
-use btstack::uuid::{Profile, UuidHelper, UuidWrapper};
+use btstack::uuid::{Profile, UuidHelper};
 use manager_service::iface_bluetooth_manager::IBluetoothManager;
 
 const INDENT_CHAR: &str = " ";
 const BAR1_CHAR: &str = "=";
 const BAR2_CHAR: &str = "-";
 const MAX_MENU_CHAR_WIDTH: usize = 72;
+
 const GATT_CLIENT_APP_UUID: &str = "12345678123456781234567812345678";
 const GATT_SERVER_APP_UUID: &str = "12345678123456781234567812345679";
+const HEART_RATE_SERVICE_UUID: &str = "0000180D-0000-1000-8000-00805F9B34FB";
+const HEART_RATE_MEASUREMENT_UUID: &str = "00002A37-0000-1000-8000-00805F9B34FB";
+const GENERIC_UUID: &str = "00000000-0000-1000-8000-00805F9B34FB";
+const CCC_DESCRIPTOR_UUID: &str = "00002902-0000-1000-8000-00805F9B34FB";
+const BATTERY_SERVICE_UUID: &str = "0000180F-0000-1000-8000-00805F9B34FB";
 
 enum CommandError {
     // Command not handled due to invalid arguments.
@@ -49,9 +64,9 @@ impl From<String> for CommandError {
 
 type CommandResult = Result<(), CommandError>;
 
-type CommandFunction = fn(&mut CommandHandler, &Vec<String>) -> CommandResult;
+type CommandFunction = fn(&mut CommandHandler, &[String]) -> CommandResult;
 
-fn _noop(_handler: &mut CommandHandler, _args: &Vec<String>) -> CommandResult {
+fn _noop(_handler: &mut CommandHandler, _args: &[String]) -> CommandResult {
     // Used so we can add options with no direct function
     // e.g. help and quit
     Ok(())
@@ -88,9 +103,9 @@ struct DisplayList<T>(Vec<T>);
 
 impl<T: Display> Display for DisplayList<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let _ = write!(f, "[\n");
+        let _ = writeln!(f, "[");
         for item in self.0.iter() {
-            let _ = write!(f, "  {}\n", item);
+            let _ = writeln!(f, "  {}", item);
         }
 
         write!(f, "]")
@@ -136,6 +151,24 @@ fn build_commands() -> HashMap<String, CommandOption> {
                  Connectable On/Off (e.g. adapter connectable on)",
             ),
             function_pointer: CommandHandler::cmd_adapter,
+        },
+    );
+    command_options.insert(
+        String::from("battery"),
+        CommandOption {
+            rules: vec![
+                String::from("battery status <address>"),
+                String::from("battery track <address>"),
+                String::from("battery untrack <address>"),
+            ],
+            description: String::from(
+                "
+                status: Current battery status of a given device.\n
+                track: Track a given device to monitor battery updates.\n
+                untrack: Stop tracking a device for battery updates.
+            ",
+            ),
+            function_pointer: CommandHandler::cmd_battery,
         },
     );
     command_options.insert(
@@ -202,8 +235,23 @@ fn build_commands() -> HashMap<String, CommandOption> {
                 ),
                 String::from("gatt register-notification <address> <handle> <enable|disable>"),
                 String::from("gatt register-server"),
+                String::from("gatt unregister-server <server_id>"),
+                String::from("gatt server-connect <server_id> <client_address>"),
+                String::from("gatt server-disconnect <server_id> <client_address>"),
+                String::from("gatt server-add-basic-service <server_id>"),
+                String::from("gatt server-add-service <server_id> <incl_service_instance_id>"),
+                String::from("gatt server-remove-service <server_id> <service_handle>"),
+                String::from("gatt server-clear-all-services <server_id>"),
+                String::from("gatt server-send-response <server_id> <success|fail>"),
+                String::from("gatt server-set-direct-connect <true|false>"),
+                String::from("gatt server-set-connect-transport <Bredr|LE|Auto>"),
             ],
-            description: String::from("GATT tools"),
+            description: String::from(
+                "GATT tools\n\n
+                Creating a GATT Server:\n
+                Register a server, then add a basic (battery) service. After, a more complex\n
+                (heartrate) service can be created with previously created services included.",
+            ),
             function_pointer: CommandHandler::cmd_gatt,
         },
     );
@@ -266,6 +314,7 @@ fn build_commands() -> HashMap<String, CommandOption> {
                 String::from("hid get-report <address> <Input|Output|Feature> <report_id>"),
                 String::from("hid set-report <address> <Input|Output|Feature> <report_value>"),
                 String::from("hid send-data <address> <data>"),
+                String::from("hid virtual-unplug <address>"),
             ],
             description: String::from("Socket manager utilities."),
             function_pointer: CommandHandler::cmd_hid,
@@ -313,6 +362,7 @@ fn build_commands() -> HashMap<String, CommandOption> {
                 String::from("telephony set-roaming <on|off>"),
                 String::from("telephony set-signal <strength>"),
                 String::from("telephony set-battery <level>"),
+                String::from("telephony set-phone-opss <on|off>"),
                 String::from("telephony <enable|disable>"),
                 String::from("telephony <incoming-call|dialing-call> <number>"),
                 String::from("telephony <answer-call|hangup-call>"),
@@ -342,6 +392,25 @@ fn build_commands() -> HashMap<String, CommandOption> {
             function_pointer: _noop,
         },
     );
+    command_options.insert(
+        String::from("dumpsys"),
+        CommandOption {
+            rules: vec![String::from("dumpsys")],
+            description: String::from("Get diagnostic output."),
+            function_pointer: CommandHandler::cmd_dumpsys,
+        },
+    );
+    command_options.insert(
+        String::from("log"),
+        CommandOption {
+            rules: vec![
+                String::from("log set-level <info|debug|verbose>"),
+                String::from("log get-level"),
+            ],
+            description: String::from("Get/set log level"),
+            function_pointer: CommandHandler::cmd_log,
+        },
+    );
     command_options
 }
 
@@ -351,7 +420,7 @@ fn build_commands() -> HashMap<String, CommandOption> {
 // Use this to safely index an argument and conveniently return the error if the argument does not
 // exist.
 fn get_arg<I>(
-    args: &Vec<String>,
+    args: &[String],
     index: I,
 ) -> Result<&<I as SliceIndex<[String]>>::Output, CommandError>
 where
@@ -367,14 +436,14 @@ impl CommandHandler {
     }
 
     /// Entry point for command and arguments
-    pub fn process_cmd_line(&mut self, command: &str, args: &Vec<String>) -> bool {
+    pub fn process_cmd_line(&mut self, command: &str, args: &[String]) -> bool {
         // Ignore empty line
         match command {
             "" => false,
             _ => match self.command_options.get(command) {
                 Some(cmd) => {
                     let rules = cmd.rules.clone();
-                    match (cmd.function_pointer)(self, &args) {
+                    match (cmd.function_pointer)(self, args) {
                         Ok(()) => true,
                         Err(CommandError::InvalidArgs) => {
                             print_error!("Invalid arguments. Usage:\n{}", rules.join("\n"));
@@ -388,7 +457,7 @@ impl CommandHandler {
                 }
                 None => {
                     println!("'{}' is an invalid command!", command);
-                    self.cmd_help(&args).ok();
+                    self.cmd_help(args).ok();
                     false
                 }
             },
@@ -408,8 +477,8 @@ impl CommandHandler {
         .into()
     }
 
-    fn cmd_help(&mut self, args: &Vec<String>) -> CommandResult {
-        if let Some(command) = args.get(0) {
+    fn cmd_help(&mut self, args: &[String]) -> CommandResult {
+        if let Some(command) = args.first() {
             match self.command_options.get(command) {
                 Some(cmd) => {
                     println!(
@@ -422,7 +491,7 @@ impl CommandHandler {
                 }
                 None => {
                     println!("'{}' is an invalid command!", command);
-                    self.cmd_help(&vec![]).ok();
+                    self.cmd_help(&[]).ok();
                 }
             }
         } else {
@@ -434,11 +503,11 @@ impl CommandHandler {
 
             // Header
             println!(
-                "\n{}\n{}\n{}\n{}",
+                "\n{}\n{}\n+{}+\n{}",
                 equal_bar,
                 wrap_help_text("Help Menu", MAX_MENU_CHAR_WIDTH, 2),
                 // Minus bar
-                format!("+{}+", BAR2_CHAR.repeat(MAX_MENU_CHAR_WIDTH)),
+                BAR2_CHAR.repeat(MAX_MENU_CHAR_WIDTH),
                 empty_bar
             );
 
@@ -446,7 +515,7 @@ impl CommandHandler {
             for (key, val) in self.command_options.iter() {
                 println!(
                     "{}\n{}\n{}",
-                    wrap_help_text(&key, MAX_MENU_CHAR_WIDTH, 4),
+                    wrap_help_text(key, MAX_MENU_CHAR_WIDTH, 4),
                     wrap_help_text(&val.description, MAX_MENU_CHAR_WIDTH, 8),
                     empty_bar
                 );
@@ -459,7 +528,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_adapter(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_adapter(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().manager_dbus.get_floss_enabled() {
             return Err("Floss is not enabled. First run, `floss enable`".into());
         }
@@ -467,6 +536,12 @@ impl CommandHandler {
         let default_adapter = self.lock_context().default_adapter;
 
         let command = get_arg(args, 0)?;
+
+        if matches!(&command[..], "show" | "discoverable" | "connectable" | "set-name") {
+            if !self.lock_context().adapter_ready {
+                return Err(self.adapter_not_ready());
+            }
+        }
 
         match &command[..] {
             "enable" => {
@@ -482,15 +557,8 @@ impl CommandHandler {
                 self.lock_context().manager_dbus.stop(default_adapter);
             }
             "show" => {
-                if !self.lock_context().adapter_ready {
-                    return Err(self.adapter_not_ready());
-                }
-
                 let enabled = self.lock_context().enabled;
-                let address = match self.lock_context().adapter_address.as_ref() {
-                    Some(x) => x.clone(),
-                    None => String::from(""),
-                };
+                let address = self.lock_context().adapter_address.unwrap_or_default();
                 let context = self.lock_context();
                 let adapter_dbus = context.adapter_dbus.as_ref().unwrap();
                 let qa_dbus = context.qa_dbus.as_ref().unwrap();
@@ -503,12 +571,13 @@ impl CommandHandler {
                 let multi_adv_supported = adapter_dbus.is_multi_advertisement_supported();
                 let le_ext_adv_supported = adapter_dbus.is_le_extended_advertising_supported();
                 let wbs_supported = adapter_dbus.is_wbs_supported();
+                let le_audio_supported = adapter_dbus.is_le_audio_supported();
                 let supported_profiles = UuidHelper::get_supported_profiles();
                 let connected_profiles: Vec<(Profile, ProfileConnectionState)> = supported_profiles
                     .iter()
                     .map(|&prof| {
-                        if let Some(uuid) = UuidHelper::get_profile_uuid(&prof) {
-                            (prof, adapter_dbus.get_profile_connection_state(uuid.clone()))
+                        if let Some(&uuid) = UuidHelper::get_profile_uuid(&prof) {
+                            (prof, adapter_dbus.get_profile_connection_state(uuid))
                         } else {
                             (prof, ProfileConnectionState::Disconnected)
                         }
@@ -518,7 +587,7 @@ impl CommandHandler {
                 qa_dbus.fetch_connectable();
                 qa_dbus.fetch_alias();
                 qa_dbus.fetch_discoverable_mode();
-                print_info!("Address: {}", address);
+                print_info!("Address: {}", address.to_string());
                 print_info!("Name: {}", name);
                 print_info!("Modalias: {}", modalias);
                 print_info!("State: {}", if enabled { "enabled" } else { "disabled" });
@@ -529,6 +598,7 @@ impl CommandHandler {
                 print_info!("IsLeExtendedAdvertisingSupported: {}", le_ext_adv_supported);
                 print_info!("Connected profiles: {:?}", connected_profiles);
                 print_info!("IsWbsSupported: {}", wbs_supported);
+                print_info!("IsLeAudioSupported: {}", le_audio_supported);
                 print_info!(
                     "Uuids: {}",
                     DisplayList(
@@ -611,17 +681,17 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_get_address(&mut self, _args: &Vec<String>) -> CommandResult {
+    fn cmd_get_address(&mut self, _args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
 
         let address = self.lock_context().update_adapter_address();
-        print_info!("Local address = {}", &address);
+        print_info!("Local address = {}", address.to_string());
         Ok(())
     }
 
-    fn cmd_discovery(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_discovery(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -641,7 +711,78 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_bond(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_battery(&mut self, args: &[String]) -> CommandResult {
+        if !self.lock_context().adapter_ready {
+            return Err(self.adapter_not_ready());
+        }
+
+        let command = get_arg(args, 0)?;
+        let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
+        let address = addr.to_string();
+
+        match &command[..] {
+            "status" => {
+                match self
+                    .lock_context()
+                    .battery_manager_dbus
+                    .as_ref()
+                    .unwrap()
+                    .get_battery_information(addr)
+                {
+                    None => println!("Battery status for device {} could not be fetched", address),
+                    Some(set) => {
+                        if set.batteries.is_empty() {
+                            println!("Battery set for device {} is empty", set.address.to_string());
+                            return Ok(());
+                        }
+
+                        println!(
+                            "Battery data for '{}' from source '{}' and uuid '{}':",
+                            set.address.to_string(),
+                            set.source_uuid.clone(),
+                            set.source_info.clone()
+                        );
+                        for battery in set.batteries {
+                            println!("   {}%, variant: '{}'", battery.percentage, battery.variant);
+                        }
+                    }
+                }
+            }
+            "track" => {
+                if self.lock_context().battery_address_filter.contains(&address) {
+                    println!("Already tracking {}", address);
+                    return Ok(());
+                }
+                self.lock_context().battery_address_filter.insert(address);
+
+                println!("Currently tracking:");
+                for addr in self.lock_context().battery_address_filter.iter() {
+                    println!("{}", addr);
+                }
+            }
+            "untrack" => {
+                if !self.lock_context().battery_address_filter.remove(&address) {
+                    println!("Not tracking {}", address);
+                    return Ok(());
+                }
+                println!("Stopped tracking {}", address);
+
+                if self.lock_context().battery_address_filter.is_empty() {
+                    println!("No longer tracking any addresses for battery status updates");
+                    return Ok(());
+                }
+
+                println!("Currently tracking:");
+                for addr in self.lock_context().battery_address_filter.iter() {
+                    println!("{}", addr);
+                }
+            }
+            _ => return Err(CommandError::InvalidArgs),
+        }
+        Ok(())
+    }
+
+    fn cmd_bond(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -651,7 +792,7 @@ impl CommandHandler {
         match &command[..] {
             "add" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from("Classic Device"),
                 };
 
@@ -660,25 +801,25 @@ impl CommandHandler {
                 if bonding_attempt.is_some() {
                     return Err(format!(
                         "Already bonding [{}]. Cancel bonding first.",
-                        bonding_attempt.as_ref().unwrap().address,
+                        bonding_attempt.as_ref().unwrap().address.to_string(),
                     )
                     .into());
                 }
 
-                let success = self
+                let status = self
                     .lock_context()
                     .adapter_dbus
                     .as_mut()
                     .unwrap()
                     .create_bond(device.clone(), BtTransport::Auto);
 
-                if success {
+                if status == BtStatus::Success {
                     self.lock_context().bonding_attempt = Some(device);
                 }
             }
             "remove" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from("Classic Device"),
                 };
 
@@ -686,7 +827,7 @@ impl CommandHandler {
             }
             "cancel" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from("Classic Device"),
                 };
 
@@ -700,7 +841,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_device(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_device(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -710,26 +851,26 @@ impl CommandHandler {
         match &command[..] {
             "connect" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from("Classic Device"),
                 };
 
-                let success = self
+                let status = self
                     .lock_context()
                     .adapter_dbus
                     .as_mut()
                     .unwrap()
                     .connect_all_enabled_profiles(device.clone());
 
-                if success {
-                    println!("Connecting to {}", &device.address);
+                if status == BtStatus::Success {
+                    println!("Connecting to {}", &device.address.to_string());
                 } else {
-                    println!("Can't connect to {}", &device.address);
+                    println!("Can't connect to {}", &device.address.to_string());
                 }
             }
             "disconnect" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from("Classic Device"),
                 };
 
@@ -741,14 +882,14 @@ impl CommandHandler {
                     .disconnect_all_enabled_profiles(device.clone());
 
                 if success {
-                    println!("Disconnecting from {}", &device.address);
+                    println!("Disconnecting from {}", &device.address.to_string());
                 } else {
-                    println!("Can't disconnect from {}", &device.address);
+                    println!("Can't disconnect from {}", &device.address.to_string());
                 }
             }
             "info" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from("Classic Device"),
                 };
 
@@ -759,10 +900,12 @@ impl CommandHandler {
                     addr_type,
                     class,
                     appearance,
+                    modalias,
                     bonded,
                     connection_state,
                     uuids,
                     wake_allowed,
+                    dual_mode_audio,
                 ) = {
                     let ctx = self.lock_context();
                     let adapter = ctx.adapter_dbus.as_ref().unwrap();
@@ -773,6 +916,8 @@ impl CommandHandler {
                     let alias = adapter.get_remote_alias(device.clone());
                     let class = adapter.get_remote_class(device.clone());
                     let appearance = adapter.get_remote_appearance(device.clone());
+                    let modalias =
+                        adapter.get_remote_vendor_product_info(device.clone()).to_string();
                     let bonded = adapter.get_bond_state(device.clone());
                     let connection_state = match adapter.get_connection_state(device.clone()) {
                         BtConnectionState::NotConnected => "Not Connected",
@@ -781,6 +926,7 @@ impl CommandHandler {
                     };
                     let uuids = adapter.get_remote_uuids(device.clone());
                     let wake_allowed = adapter.get_remote_wake_allowed(device.clone());
+                    let dual_mode_audio = adapter.is_dual_mode_audio_sink_device(device.clone());
 
                     (
                         name,
@@ -789,23 +935,27 @@ impl CommandHandler {
                         addr_type,
                         class,
                         appearance,
+                        modalias,
                         bonded,
                         connection_state,
                         uuids,
                         wake_allowed,
+                        dual_mode_audio,
                     )
                 };
 
-                print_info!("Address: {}", &device.address);
+                print_info!("Address: {}", &device.address.to_string());
                 print_info!("Name: {}", name);
                 print_info!("Alias: {}", alias);
                 print_info!("Device Type: {:?}", device_type);
                 print_info!("Address Type: {:?}", addr_type);
                 print_info!("Class: {}", class);
                 print_info!("Appearance: {}", appearance);
+                print_info!("Modalias: {}", modalias);
                 print_info!("Wake Allowed: {}", wake_allowed);
                 print_info!("Bond State: {:?}", bonded);
                 print_info!("Connection State: {}", connection_state);
+                print_info!("Dual Mode Audio Device: {}", dual_mode_audio);
                 print_info!(
                     "Uuids: {}",
                     DisplayList(
@@ -819,7 +969,7 @@ impl CommandHandler {
             "set-alias" => {
                 let new_alias = get_arg(args, 2)?;
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from(""),
                 };
                 let old_alias = self
@@ -842,7 +992,7 @@ impl CommandHandler {
             }
             "set-pairing-confirmation" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from(""),
                 };
                 let accept = match &get_arg(args, 2)?[..] {
@@ -861,14 +1011,14 @@ impl CommandHandler {
             }
             "set-pairing-pin" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from(""),
                 };
                 let pin = get_arg(args, 2)?;
 
                 let (accept, pin) = match (&pin[..], pin) {
                     ("reject", _) => (false, vec![]),
-                    (_, p) => (true, p.as_bytes().iter().cloned().collect::<Vec<u8>>()),
+                    (_, p) => (true, p.as_bytes().to_vec()),
                 };
 
                 self.lock_context().adapter_dbus.as_mut().unwrap().set_pin(
@@ -879,7 +1029,7 @@ impl CommandHandler {
             }
             "set-pairing-passkey" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from(""),
                 };
                 let passkey = get_arg(args, 2)?;
@@ -899,7 +1049,7 @@ impl CommandHandler {
             }
             "get-rssi" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from(""),
                 };
 
@@ -926,7 +1076,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_floss(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_floss(&mut self, args: &[String]) -> CommandResult {
         let command = get_arg(args, 0)?;
 
         match &command[..] {
@@ -950,7 +1100,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_gatt(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_gatt(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -980,13 +1130,13 @@ impl CommandHandler {
                     .client_id
                     .ok_or("GATT client is not yet registered.")?;
 
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let is_direct = self.lock_context().gatt_client_context.is_connect_direct;
                 let transport = self.lock_context().gatt_client_context.connect_transport;
                 let oppurtunistic = self.lock_context().gatt_client_context.connect_opportunistic;
                 let phy = self.lock_context().gatt_client_context.connect_phy;
 
-                println!("Initiating GATT client connect. client_id: {}, addr: {}, is_direct: {}, transport: {:?}, oppurtunistic: {}, phy: {:?}", client_id, addr, is_direct, transport, oppurtunistic, phy);
+                println!("Initiating GATT client connect. client_id: {}, addr: {}, is_direct: {}, transport: {:?}, oppurtunistic: {}, phy: {:?}", client_id, addr.to_string(), is_direct, transport, oppurtunistic, phy);
                 self.lock_context().gatt_dbus.as_ref().unwrap().client_connect(
                     client_id,
                     addr,
@@ -1003,7 +1153,7 @@ impl CommandHandler {
                     .client_id
                     .ok_or("GATT client is not yet registered.")?;
 
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 self.lock_context().gatt_dbus.as_ref().unwrap().client_disconnect(client_id, addr);
             }
             "client-read-phy" => {
@@ -1012,7 +1162,7 @@ impl CommandHandler {
                     .gatt_client_context
                     .client_id
                     .ok_or("GATT client is not yet registered.")?;
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 self.lock_context().gatt_dbus.as_mut().unwrap().client_read_phy(client_id, addr);
             }
             "client-discover-services" => {
@@ -1022,7 +1172,7 @@ impl CommandHandler {
                     .client_id
                     .ok_or("GATT client is not yet registered.")?;
 
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 self.lock_context().gatt_dbus.as_ref().unwrap().discover_services(client_id, addr);
             }
             "client-discover-service-by-uuid-pts" => {
@@ -1031,7 +1181,7 @@ impl CommandHandler {
                     .gatt_client_context
                     .client_id
                     .ok_or("GATT client is not yet registered.")?;
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let uuid = String::from(get_arg(args, 2)?);
                 self.lock_context()
                     .gatt_dbus
@@ -1046,7 +1196,7 @@ impl CommandHandler {
                     .client_id
                     .ok_or("GATT client is not yet registered.")?;
 
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let mtu =
                     String::from(get_arg(args, 2)?).parse::<i32>().or(Err("Failed parsing mtu"))?;
 
@@ -1091,7 +1241,7 @@ impl CommandHandler {
             }
             "set-auth-req" => {
                 let flag = match &get_arg(args, 1)?[..] {
-                    "NONE" => AuthReq::NONE,
+                    "NONE" => AuthReq::NoEnc,
                     "EncNoMitm" => AuthReq::EncNoMitm,
                     "EncMitm" => AuthReq::EncMitm,
                     "SignedNoMitm" => AuthReq::SignedNoMitm,
@@ -1105,7 +1255,7 @@ impl CommandHandler {
                 println!("AuthReq: {:?}", self.lock_context().gatt_client_context.get_auth_req());
             }
             "write-characteristic" => {
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let handle = String::from(get_arg(args, 2)?)
                     .parse::<i32>()
                     .or(Err("Failed to parse handle"))?;
@@ -1119,7 +1269,7 @@ impl CommandHandler {
                     }
                 };
 
-                let value = hex::decode(&get_arg(args, 4)?).or(Err("Failed to parse value"))?;
+                let value = hex::decode(get_arg(args, 4)?).or(Err("Failed to parse value"))?;
 
                 let client_id = self
                     .lock_context()
@@ -1131,12 +1281,12 @@ impl CommandHandler {
 
                 self.lock_context()
                     .gatt_dbus
-                    .as_ref()
+                    .as_mut()
                     .unwrap()
                     .write_characteristic(client_id, addr, handle, write_type, auth_req, value);
             }
             "read-characteristic" => {
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let handle = String::from(get_arg(args, 2)?)
                     .parse::<i32>()
                     .or(Err("Failed to parse handle"))?;
@@ -1155,7 +1305,7 @@ impl CommandHandler {
                     .read_characteristic(client_id, addr, handle, auth_req);
             }
             "read-characteristic-by-uuid" => {
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let uuid = String::from(get_arg(args, 2)?);
                 let start_handle = String::from(get_arg(args, 3)?)
                     .parse::<i32>()
@@ -1182,7 +1332,7 @@ impl CommandHandler {
                 );
             }
             "register-notification" => {
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let handle = String::from(get_arg(args, 2)?)
                     .parse::<i32>()
                     .or(Err("Failed to parse handle"))?;
@@ -1223,12 +1373,186 @@ impl CommandHandler {
                     false,
                 );
             }
+            "unregister-server" => {
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed parsing server id"))?;
+
+                self.lock_context().gatt_dbus.as_mut().unwrap().unregister_server(server_id);
+            }
+            "server-connect" => {
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse server_id"))?;
+                let client_addr =
+                    RawAddress::from_string(get_arg(args, 2)?).ok_or("Invalid Address")?;
+                let is_direct = self.lock_context().gatt_server_context.is_connect_direct;
+                let transport = self.lock_context().gatt_server_context.connect_transport;
+
+                if !self.lock_context().gatt_dbus.as_mut().unwrap().server_connect(
+                    server_id,
+                    client_addr,
+                    is_direct,
+                    transport,
+                ) {
+                    return Err("Connection was unsuccessful".into());
+                }
+            }
+            "server-disconnect" => {
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse server_id"))?;
+                let client_addr =
+                    RawAddress::from_string(get_arg(args, 2)?).ok_or("Invalid Address")?;
+
+                if !self
+                    .lock_context()
+                    .gatt_dbus
+                    .as_mut()
+                    .unwrap()
+                    .server_disconnect(server_id, client_addr)
+                {
+                    return Err("Disconnection was unsuccessful".into());
+                }
+            }
+            "server-add-basic-service" => {
+                let service_uuid = Uuid::from_string(BATTERY_SERVICE_UUID).unwrap();
+
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse server_id"))?;
+
+                let service = BluetoothGattService::new(
+                    service_uuid,
+                    0, // libbluetooth assigns this handle once the service is added
+                    GattDbElementType::PrimaryService.into(),
+                );
+
+                self.lock_context().gatt_dbus.as_mut().unwrap().add_service(server_id, service);
+            }
+            "server-add-service" => {
+                let service_uuid = Uuid::from_string(HEART_RATE_SERVICE_UUID).unwrap();
+                let characteristic_uuid = Uuid::from_string(HEART_RATE_MEASUREMENT_UUID).unwrap();
+                let descriptor_uuid = Uuid::from_string(GENERIC_UUID).unwrap();
+                let ccc_descriptor_uuid = Uuid::from_string(CCC_DESCRIPTOR_UUID).unwrap();
+                let included_service_uuid = Uuid::from_string(BATTERY_SERVICE_UUID).unwrap();
+
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse server_id"))?;
+                let included_service_instance_id =
+                    String::from(get_arg(args, 2)?)
+                        .parse::<i32>()
+                        .or(Err("Failed to parse included service instance id"))?;
+
+                let mut service = BluetoothGattService::new(
+                    service_uuid,
+                    0,
+                    GattDbElementType::PrimaryService.into(),
+                );
+                let included_service = BluetoothGattService::new(
+                    included_service_uuid,
+                    included_service_instance_id,
+                    GattDbElementType::IncludedService.into(),
+                );
+                let mut characteristic = BluetoothGattCharacteristic::new(
+                    characteristic_uuid,
+                    0,
+                    BluetoothGattCharacteristic::PROPERTY_READ
+                        | BluetoothGattCharacteristic::PROPERTY_WRITE
+                        | BluetoothGattCharacteristic::PROPERTY_NOTIFY,
+                    BluetoothGattCharacteristic::PERMISSION_READ
+                        | BluetoothGattCharacteristic::PERMISSION_WRITE,
+                );
+                let descriptor = BluetoothGattDescriptor::new(
+                    descriptor_uuid,
+                    0,
+                    BluetoothGattCharacteristic::PERMISSION_READ
+                        | BluetoothGattCharacteristic::PERMISSION_WRITE,
+                );
+                let ccc_descriptor = BluetoothGattDescriptor::new(
+                    ccc_descriptor_uuid,
+                    0,
+                    BluetoothGattCharacteristic::PERMISSION_READ
+                        | BluetoothGattCharacteristic::PERMISSION_WRITE,
+                );
+
+                service.included_services.push(included_service);
+                characteristic.descriptors.push(ccc_descriptor);
+                characteristic.descriptors.push(descriptor);
+                service.characteristics.push(characteristic);
+
+                self.lock_context().gatt_dbus.as_mut().unwrap().add_service(server_id, service);
+            }
+            "server-remove-service" => {
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse server_id"))?;
+                let service_handle = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse service handle"))?;
+
+                self.lock_context()
+                    .gatt_dbus
+                    .as_mut()
+                    .unwrap()
+                    .remove_service(server_id, service_handle);
+            }
+            "server-clear-all-services" => {
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse server_id"))?;
+                self.lock_context().gatt_dbus.as_mut().unwrap().clear_services(server_id);
+            }
+            "server-send-response" => {
+                let server_id = String::from(get_arg(args, 1)?)
+                    .parse::<i32>()
+                    .or(Err("Failed to parse server_id"))?;
+                let status = match String::from(get_arg(args, 2)?).as_str() {
+                    "success" => GattStatus::Success,
+                    "fail" => GattStatus::Error,
+                    _ => return Err("{} is not one of the following: `success`, `fail`".into()),
+                };
+
+                let request = match self.lock_context().pending_gatt_request.clone() {
+                    None => return Err("No pending request to send response to".into()),
+                    Some(r) => r,
+                };
+                self.lock_context().gatt_dbus.as_mut().unwrap().send_response(
+                    server_id,
+                    request.address,
+                    request.id,
+                    status,
+                    request.offset,
+                    request.value.clone(),
+                );
+
+                self.lock_context().pending_gatt_request = None;
+            }
+            "server-set-direct-connect" => {
+                let is_direct = String::from(get_arg(args, 1)?)
+                    .parse::<bool>()
+                    .or(Err("Failed to parse is_direct"))?;
+
+                self.lock_context().gatt_server_context.is_connect_direct = is_direct;
+            }
+            "server-set-connect-transport" => {
+                let transport = match &get_arg(args, 1)?[..] {
+                    "Bredr" => BtTransport::Bredr,
+                    "LE" => BtTransport::Le,
+                    "Auto" => BtTransport::Auto,
+                    _ => {
+                        return Err("Failed to parse transport".into());
+                    }
+                };
+                self.lock_context().gatt_server_context.connect_transport = transport;
+            }
             _ => return Err(CommandError::InvalidArgs),
         }
         Ok(())
     }
 
-    fn cmd_le_scan(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_le_scan(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -1249,7 +1573,7 @@ impl CommandHandler {
                     .unwrap()
                     .register_scanner(scanner_callback_id);
 
-                print_info!("Scanner to be registered with UUID = {}", UuidWrapper(&uuid));
+                print_info!("Scanner to be registered with UUID = {}", uuid);
             }
             "unregister-scanner" => {
                 let scanner_id = String::from(get_arg(args, 1)?)
@@ -1295,16 +1619,16 @@ impl CommandHandler {
 
     // TODO(b/233128828): More options will be implemented to test BLE advertising.
     // Such as setting advertising parameters, starting multiple advertising sets, etc.
-    fn cmd_advertise(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_advertise(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
 
-        if self.lock_context().advertiser_callback_id == None {
+        if self.lock_context().advertiser_callback_id.is_none() {
             return Err("No advertiser callback registered".into());
         }
 
-        let callback_id = self.lock_context().advertiser_callback_id.clone().unwrap();
+        let callback_id = self.lock_context().advertiser_callback_id.unwrap();
 
         let command = get_arg(args, 0)?;
 
@@ -1324,7 +1648,7 @@ impl CommandHandler {
             }
             "set-interval" => {
                 let ms = String::from(get_arg(args, 1)?).parse::<i32>();
-                if !ms.is_ok() {
+                if ms.is_err() {
                     return Err("Failed parsing interval".into());
                 }
                 let interval = ms.unwrap() * 8 / 5; // in 0.625 ms.
@@ -1338,7 +1662,7 @@ impl CommandHandler {
                 let advs: Vec<(_, _)> = context
                     .adv_sets
                     .iter()
-                    .filter_map(|(_, s)| s.adv_id.map(|adv_id| (adv_id.clone(), s.params.clone())))
+                    .filter_map(|(_, s)| s.adv_id.map(|adv_id| (adv_id, s.params.clone())))
                     .collect();
                 for (adv_id, params) in advs {
                     print_info!("Setting advertising parameters for {}", adv_id);
@@ -1393,8 +1717,7 @@ impl CommandHandler {
                     .adv_sets
                     .iter()
                     .filter_map(|(_, s)| {
-                        s.adv_id
-                            .map(|adv_id| (adv_id.clone(), s.params.clone(), s.scan_rsp.clone()))
+                        s.adv_id.map(|adv_id| (adv_id, s.params.clone(), s.scan_rsp.clone()))
                     })
                     .collect();
                 for (adv_id, params, scan_rsp) in advs {
@@ -1412,11 +1735,7 @@ impl CommandHandler {
                     .or(Err("Failed parsing adv_id"))?;
 
                 let mut context = self.context.lock().unwrap();
-                if context
-                    .adv_sets
-                    .iter()
-                    .find(|(_, s)| s.adv_id.map_or(false, |id| id == adv_id))
-                    .is_none()
+                if !context.adv_sets.iter().any(|(_, s)| s.adv_id.map_or(false, |id| id == adv_id))
                 {
                     return Err("Failed to find advertising set".into());
                 }
@@ -1430,7 +1749,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_sdp(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_sdp(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -1440,13 +1759,10 @@ impl CommandHandler {
         match &command[..] {
             "search" => {
                 let device = BluetoothDevice {
-                    address: String::from(get_arg(args, 1)?),
+                    address: RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
                     name: String::from(""),
                 };
-                let uuid = match UuidHelper::parse_string(get_arg(args, 2)?) {
-                    Some(uu) => uu.uu,
-                    None => return Err(CommandError::Failed("Invalid UUID".into())),
-                };
+                let uuid = Uuid::from_string(get_arg(args, 2)?).ok_or("Invalid UUID")?;
                 let success =
                     self.lock_context().adapter_dbus.as_ref().unwrap().sdp_search(device, uuid);
                 if !success {
@@ -1458,12 +1774,12 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_socket(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_socket(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
 
-        let callback_id = match self.lock_context().socket_manager_callback_id.clone() {
+        let callback_id = match self.lock_context().socket_manager_callback_id {
             Some(id) => id,
             None => {
                 return Err("No socket manager callback registered.".into());
@@ -1500,7 +1816,7 @@ impl CommandHandler {
             "send-msc" => {
                 let dlci =
                     String::from(get_arg(args, 1)?).parse::<u8>().or(Err("Failed parsing DLCI"))?;
-                let addr = String::from(get_arg(args, 2)?);
+                let addr = RawAddress::from_string(get_arg(args, 2)?).ok_or("Invalid Address")?;
                 self.context.lock().unwrap().qa_dbus.as_mut().unwrap().rfcomm_send_msc(dlci, addr);
             }
             "listen-rfcomm" => {
@@ -1545,12 +1861,10 @@ impl CommandHandler {
                         } else {
                             proxy.listen_using_l2cap_channel(callback_id)
                         }
+                    } else if is_le {
+                        proxy.listen_using_insecure_l2cap_le_channel(callback_id)
                     } else {
-                        if is_le {
-                            proxy.listen_using_insecure_l2cap_le_channel(callback_id)
-                        } else {
-                            proxy.listen_using_insecure_l2cap_channel(callback_id)
-                        }
+                        proxy.listen_using_insecure_l2cap_channel(callback_id)
                     }
                 };
 
@@ -1567,7 +1881,7 @@ impl CommandHandler {
                 let (addr, sock_type, psm_or_uuid) =
                     (&get_arg(args, 1)?, &get_arg(args, 2)?, &get_arg(args, 3)?);
                 let device = BluetoothDevice {
-                    address: String::from(*addr),
+                    address: RawAddress::from_string(*addr).ok_or("Invalid Address")?,
                     name: String::from("Socket Connect Device"),
                 };
 
@@ -1605,21 +1919,19 @@ impl CommandHandler {
                                 } else {
                                     proxy.create_l2cap_channel(callback_id, device, psm)
                                 }
+                            } else if is_le {
+                                proxy.create_insecure_l2cap_le_channel(callback_id, device, psm)
                             } else {
-                                if is_le {
-                                    proxy.create_insecure_l2cap_le_channel(callback_id, device, psm)
-                                } else {
-                                    proxy.create_insecure_l2cap_channel(callback_id, device, psm)
-                                }
+                                proxy.create_insecure_l2cap_channel(callback_id, device, psm)
                             }
                         }
                         "rfcomm" => {
-                            let uuid = match UuidHelper::parse_string(*psm_or_uuid) {
+                            let uuid = match Uuid::from_string(*psm_or_uuid) {
                                 Some(uu) => uu,
                                 None => {
-                                    return Err(CommandError::Failed(format!(
-                                        "Could not parse given uuid."
-                                    )));
+                                    return Err(CommandError::Failed(
+                                        "Could not parse given uuid.".to_string(),
+                                    ));
                                 }
                             };
 
@@ -1681,7 +1993,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_hid(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_hid(&mut self, args: &[String]) -> CommandResult {
         if !self.context.lock().unwrap().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -1690,7 +2002,7 @@ impl CommandHandler {
 
         match &command[..] {
             "get-report" => {
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let report_type = match &get_arg(args, 2)?[..] {
                     "Input" => BthhReportType::InputReport,
                     "Output" => BthhReportType::OutputReport,
@@ -1710,7 +2022,7 @@ impl CommandHandler {
                 );
             }
             "set-report" => {
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let report_type = match &get_arg(args, 2)?[..] {
                     "Input" => BthhReportType::InputReport,
                     "Output" => BthhReportType::OutputReport,
@@ -1728,10 +2040,20 @@ impl CommandHandler {
                 );
             }
             "send-data" => {
-                let addr = String::from(get_arg(args, 1)?);
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
                 let data = String::from(get_arg(args, 2)?);
 
                 self.context.lock().unwrap().qa_dbus.as_mut().unwrap().send_hid_data(addr, data);
+            }
+            "virtual-unplug" => {
+                let addr = RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?;
+                self.context
+                    .lock()
+                    .unwrap()
+                    .qa_dbus
+                    .as_mut()
+                    .unwrap()
+                    .send_hid_virtual_unplug(addr);
             }
             _ => return Err(CommandError::InvalidArgs),
         };
@@ -1744,7 +2066,7 @@ impl CommandHandler {
         self.command_options.values().flat_map(|cmd| cmd.rules.clone()).collect()
     }
 
-    fn cmd_list_devices(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_list_devices(&mut self, args: &[String]) -> CommandResult {
         if !self.lock_context().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -1757,7 +2079,7 @@ impl CommandHandler {
                 let devices =
                     self.lock_context().adapter_dbus.as_ref().unwrap().get_bonded_devices();
                 for device in devices.iter() {
-                    print_info!("[{:17}] {}", device.address, device.name);
+                    print_info!("[{}] {}", device.address.to_string(), device.name);
                 }
             }
             "found" => {
@@ -1771,7 +2093,7 @@ impl CommandHandler {
                 let devices =
                     self.lock_context().adapter_dbus.as_ref().unwrap().get_connected_devices();
                 for device in devices.iter() {
-                    print_info!("[{:17}] {}", device.address, device.name);
+                    print_info!("[{}] {}", device.address.to_string(), device.name);
                 }
             }
             other => {
@@ -1782,7 +2104,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_telephony(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_telephony(&mut self, args: &[String]) -> CommandResult {
         if !self.context.lock().unwrap().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -1818,7 +2140,7 @@ impl CommandHandler {
                 let strength = String::from(get_arg(args, 1)?)
                     .parse::<i32>()
                     .or(Err("Failed parsing signal strength"))?;
-                if strength < 0 || strength > 5 {
+                if !(0..=5).contains(&strength) {
                     return Err(
                         format!("Invalid signal strength, got {}, want 0 to 5", strength).into()
                     );
@@ -1835,7 +2157,7 @@ impl CommandHandler {
                 let level = String::from(get_arg(args, 1)?)
                     .parse::<i32>()
                     .or(Err("Failed parsing battery level"))?;
-                if level < 0 || level > 5 {
+                if !(0..=5).contains(&level) {
                     return Err(format!("Invalid battery level, got {}, want 0 to 5", level).into());
                 }
                 self.context
@@ -1856,7 +2178,7 @@ impl CommandHandler {
                         .unwrap()
                         .create_sdp_record(BtSdpRecord::Mps(BtSdpMpsRecord::default()));
                     if !success {
-                        return Err(format!("Failed to create SDP record").into());
+                        return Err("Failed to create SDP record".to_string().into());
                     }
                 }
             }
@@ -1866,9 +2188,25 @@ impl CommandHandler {
                 if let Some(handle) = context.mps_sdp_handle.take() {
                     let success = context.adapter_dbus.as_mut().unwrap().remove_sdp_record(handle);
                     if !success {
-                        return Err(format!("Failed to remove SDP record").into());
+                        return Err("Failed to remove SDP record".to_string().into());
                     }
                 }
+            }
+            "set-phone-ops" => {
+                let on_or_off = match &get_arg(args, 1)?[..] {
+                    "on" => true,
+                    "off" => false,
+                    _ => {
+                        return Err("Failed to parse on|off".into());
+                    }
+                };
+                self.context
+                    .lock()
+                    .unwrap()
+                    .telephony_dbus
+                    .as_mut()
+                    .unwrap()
+                    .set_phone_ops_enabled(on_or_off);
             }
             "incoming-call" => {
                 let success = self
@@ -1970,26 +2308,18 @@ impl CommandHandler {
                 }
             }
             "audio-connect" => {
-                let success = self
-                    .context
-                    .lock()
-                    .unwrap()
-                    .telephony_dbus
-                    .as_mut()
-                    .unwrap()
-                    .audio_connect(String::from(get_arg(args, 1)?));
+                let success =
+                    self.context.lock().unwrap().telephony_dbus.as_mut().unwrap().audio_connect(
+                        RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
+                    );
                 if !success {
                     return Err("ConnectAudio failed".into());
                 }
             }
             "audio-disconnect" => {
-                self.context
-                    .lock()
-                    .unwrap()
-                    .telephony_dbus
-                    .as_mut()
-                    .unwrap()
-                    .audio_disconnect(String::from(get_arg(args, 1)?));
+                self.context.lock().unwrap().telephony_dbus.as_mut().unwrap().audio_disconnect(
+                    RawAddress::from_string(get_arg(args, 1)?).ok_or("Invalid Address")?,
+                );
             }
             other => {
                 return Err(format!("Invalid argument '{}'", other).into());
@@ -1998,7 +2328,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_qa(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_qa(&mut self, args: &[String]) -> CommandResult {
         if !self.context.lock().unwrap().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -2025,7 +2355,7 @@ impl CommandHandler {
         Ok(())
     }
 
-    fn cmd_media(&mut self, args: &Vec<String>) -> CommandResult {
+    fn cmd_media(&mut self, args: &[String]) -> CommandResult {
         if !self.context.lock().unwrap().adapter_ready {
             return Err(self.adapter_not_ready());
         }
@@ -2034,6 +2364,51 @@ impl CommandHandler {
             "log" => {
                 self.context.lock().unwrap().media_dbus.as_mut().unwrap().trigger_debug_dump();
             }
+            other => {
+                return Err(format!("Invalid argument '{}'", other).into());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn cmd_dumpsys(&mut self, _args: &[String]) -> CommandResult {
+        if !self.lock_context().adapter_ready {
+            return Err(self.adapter_not_ready());
+        }
+
+        let contents = self.lock_context().adapter_dbus.as_mut().unwrap().get_dumpsys();
+        println!("{}", contents);
+
+        Ok(())
+    }
+
+    fn cmd_log(&mut self, args: &[String]) -> CommandResult {
+        if !self.lock_context().adapter_ready {
+            return Err(self.adapter_not_ready());
+        }
+
+        let command = get_arg(args, 0)?;
+
+        match &command[..] {
+            "set-level" => {
+                let level = match &get_arg(args, 1)?[..] {
+                    "info" => Level::Info,
+                    "debug" => Level::Debug,
+                    "verbose" => Level::Verbose,
+                    _ => {
+                        return Err("Failed to parse log level".into());
+                    }
+                };
+                self.lock_context().logging_dbus.as_mut().unwrap().set_log_level(level);
+            }
+
+            "get-level" => {
+                let level = self.lock_context().logging_dbus.as_ref().unwrap().get_log_level();
+
+                print_info!("log level: {:?}", level);
+            }
+
             other => {
                 return Err(format!("Invalid argument '{}'", other).into());
             }

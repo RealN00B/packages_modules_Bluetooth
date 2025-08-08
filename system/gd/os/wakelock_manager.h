@@ -22,16 +22,13 @@
 #include <mutex>
 #include <string>
 
-#include <flatbuffers/flatbuffers.h>
-
 #include "handler.h"
-#include "wakelock_manager_generated.h"
 
 namespace bluetooth {
 namespace os {
 
 class WakelockManager {
- public:
+public:
   static const std::string kBtWakelockId;
 
   static WakelockManager& Get() {
@@ -39,10 +36,10 @@ class WakelockManager {
     return instance;
   }
 
-  // The set of functions required by GD to grab wake locks. A caller with a custom wakelock implementation should
-  // implement this class and passed into the stack through SetCallouts()
+  // The set of functions required by GD to grab wake locks. A caller with a custom wakelock
+  // implementation should implement this class and passed into the stack through SetCallouts()
   class OsCallouts {
-   public:
+  public:
     virtual ~OsCallouts() = default;
     virtual void AcquireCallout(const std::string& lock_name) = 0;
     virtual void ReleaseCallout(const std::string& lock_name) = 0;
@@ -51,9 +48,10 @@ class WakelockManager {
   // Set the Bluetooth OS callouts to |callouts|.
   //
   // This function should be called when native kernel wakelock are not used directly.
-  // If this function is not called, or |callouts| is nullptr, then native kernel wakelock will be used.
-  // When |callouts| are used, the callbacks are going to be invoked asynchronously to avoid being blocked by upper
-  // layer delays. Therefore, a handler is needed and the callout result will be ignored.
+  // If this function is not called, or |callouts| is nullptr, then native kernel wakelock will be
+  // used. When |callouts| are used, the callbacks are going to be invoked asynchronously to avoid
+  // being blocked by upper layer delays. Therefore, a handler is needed and the callout result will
+  // be ignored.
   //
   // This method must be called before calling Acquire() or Release()
   void SetOsCallouts(OsCallouts* callouts, Handler* handler);
@@ -72,15 +70,16 @@ class WakelockManager {
   // This will NOT clean up the callouts
   void CleanUp();
 
-  // Dump wakelock-related debug info to a flat buffer defined in wakelock_manager.fbs
-  flatbuffers::Offset<WakelockManagerData> GetDumpsysData(flatbuffers::FlatBufferBuilder* fb_builder);
+  /// Write debug information relevant for the wakelock manager
+  /// to the dumpsys output file descriptor.
+  void Dump(int fd) const;
 
   ~WakelockManager();
 
- private:
+private:
   WakelockManager();
 
-  std::recursive_mutex mutex_;
+  mutable std::recursive_mutex mutex_;
   bool initialized_ = false;
   OsCallouts* os_callouts_ = nullptr;
   Handler* os_callouts_handler_ = nullptr;

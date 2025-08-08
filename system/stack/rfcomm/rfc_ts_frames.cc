@@ -24,21 +24,18 @@
 
 #define LOG_TAG "rfcomm"
 
-#include <log/log.h>
+#include <bluetooth/log.h>
 
 #include <cstdint>
-#include <cstring>
 
-#include "bt_target.h"
+#include "os/logging/log_adapter.h"
 #include "osi/include/allocator.h"
-#include "osi/include/log.h"
 #include "stack/include/bt_hdr.h"
-#include "stack/include/l2c_api.h"
 #include "stack/include/rfcdefs.h"
 #include "stack/rfcomm/port_int.h"
 #include "stack/rfcomm/rfc_int.h"
 
-#include <base/logging.h>
+using namespace bluetooth;
 
 /*******************************************************************************
  *
@@ -60,8 +57,7 @@ void rfc_send_sabme(tRFC_MCB* p_mcb, uint8_t dlci) {
   *p_data++ = RFCOMM_SABME | RFCOMM_PF;
   *p_data++ = RFCOMM_EA | 0;
 
-  *p_data =
-      RFCOMM_SABME_FCS((uint8_t*)(p_buf + 1) + L2CAP_MIN_OFFSET, cr, dlci);
+  *p_data = RFCOMM_SABME_FCS((uint8_t*)(p_buf + 1) + L2CAP_MIN_OFFSET, cr, dlci);
 
   p_buf->len = 4;
 
@@ -202,7 +198,12 @@ void rfc_send_buf_uih(tRFC_MCB* p_mcb, uint8_t dlci, BT_HDR* p_buf) {
   if (dlci == RFCOMM_MX_DLCI) {
     rfc_check_send_cmd(p_mcb, p_buf);
   } else {
-    L2CA_DataWrite(p_mcb->lcid, p_buf);
+    uint16_t len = p_buf->len;
+    if (stack::l2cap::get_interface().L2CA_DataWrite(p_mcb->lcid, p_buf) !=
+        tL2CAP_DW_RESULT::SUCCESS) {
+      log::warn("Unable to write L2CAP data peer:{} cid:{} len:{}", p_mcb->bd_addr, p_mcb->lcid,
+                len);
+    }
   }
 }
 
@@ -213,8 +214,8 @@ void rfc_send_buf_uih(tRFC_MCB* p_mcb, uint8_t dlci, BT_HDR* p_buf) {
  * Description      This function sends DLC Parameters Negotiation Frame.
  *
  ******************************************************************************/
-void rfc_send_pn(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command, uint16_t mtu,
-                 uint8_t cl, uint8_t k) {
+void rfc_send_pn(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command, uint16_t mtu, uint8_t cl,
+                 uint8_t k) {
   uint8_t* p_data;
   BT_HDR* p_buf = (BT_HDR*)osi_malloc(RFCOMM_CMD_BUF_SIZE);
 
@@ -228,10 +229,10 @@ void rfc_send_pn(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command, uint16_t mtu,
   *p_data++ = RFCOMM_PN_FRAM_TYPE_UIH | cl;
 
   /* It appeared that we need to reply with the same priority bits as we
-  *received.
-  ** We will use the fact that we reply in the same context so rx_frame can
-  *still be used.
-  */
+   *received.
+   ** We will use the fact that we reply in the same context so rx_frame can
+   *still be used.
+   */
   if (is_command) {
     *p_data++ = RFCOMM_PN_PRIORITY_0;
   } else {
@@ -302,8 +303,7 @@ void rfc_send_fcoff(tRFC_MCB* p_mcb, bool is_command) {
  * Description      This function sends Modem Status Command Frame.
  *
  ******************************************************************************/
-void rfc_send_msc(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
-                  tPORT_CTRL* p_pars) {
+void rfc_send_msc(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command, tPORT_CTRL* p_pars) {
   uint8_t* p_data;
   uint8_t signals;
   uint8_t break_duration;
@@ -316,10 +316,11 @@ void rfc_send_msc(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
   p_buf->offset = L2CAP_MIN_OFFSET + RFCOMM_CTRL_FRAME_LEN;
   p_data = (uint8_t*)(p_buf + 1) + p_buf->offset;
 
-  if (break_duration)
+  if (break_duration) {
     len = RFCOMM_MX_MSC_LEN_WITH_BREAK;
-  else
+  } else {
     len = RFCOMM_MX_MSC_LEN_NO_BREAK;
+  }
 
   *p_data++ = RFCOMM_EA | RFCOMM_I_CR(is_command) | RFCOMM_MX_MSC;
   *p_data++ = RFCOMM_EA | (len << 1);
@@ -332,8 +333,8 @@ void rfc_send_msc(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
               ((signals & MODEM_SIGNAL_DCD) ? RFCOMM_MSC_DV : 0);
 
   if (break_duration) {
-    *p_data++ = RFCOMM_EA | RFCOMM_MSC_BREAK_PRESENT_MASK |
-                (break_duration << RFCOMM_MSC_SHIFT_BREAK);
+    *p_data++ =
+            RFCOMM_EA | RFCOMM_MSC_BREAK_PRESENT_MASK | (break_duration << RFCOMM_MSC_SHIFT_BREAK);
   }
 
   /* Total length is sizeof MSC data + mx header 2 */
@@ -349,8 +350,7 @@ void rfc_send_msc(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
  * Description      This function sends Remote Line Status Command Frame.
  *
  ******************************************************************************/
-void rfc_send_rls(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
-                  uint8_t status) {
+void rfc_send_rls(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command, uint8_t status) {
   uint8_t* p_data;
   BT_HDR* p_buf = (BT_HDR*)osi_malloc(RFCOMM_CMD_BUF_SIZE);
 
@@ -376,7 +376,7 @@ void rfc_send_rls(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
  * Description      This function sends Non Supported Command Response.
  *
  ******************************************************************************/
-void rfc_send_nsc(tRFC_MCB* p_mcb) {
+static void rfc_send_nsc(tRFC_MCB* p_mcb) {
   uint8_t* p_data;
   BT_HDR* p_buf = (BT_HDR*)osi_malloc(RFCOMM_CMD_BUF_SIZE);
 
@@ -386,8 +386,7 @@ void rfc_send_nsc(tRFC_MCB* p_mcb) {
   *p_data++ = RFCOMM_EA | RFCOMM_I_CR(false) | RFCOMM_MX_NSC;
   *p_data++ = RFCOMM_EA | (RFCOMM_MX_NSC_LEN << 1);
 
-  *p_data++ = rfc_cb.rfc.rx_frame.ea |
-              (rfc_cb.rfc.rx_frame.cr << RFCOMM_SHIFT_CR) |
+  *p_data++ = rfc_cb.rfc.rx_frame.ea | (rfc_cb.rfc.rx_frame.cr << RFCOMM_SHIFT_CR) |
               rfc_cb.rfc.rx_frame.type;
 
   /* Total length is sizeof NSC data + mx header 2 */
@@ -403,8 +402,8 @@ void rfc_send_nsc(tRFC_MCB* p_mcb) {
  * Description      This function sends Remote Port Negotiation Command
  *
  ******************************************************************************/
-void rfc_send_rpn(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
-                  tPORT_STATE* p_pars, uint16_t mask) {
+void rfc_send_rpn(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command, PortSettings* p_settings,
+                  uint16_t mask) {
   uint8_t* p_data;
   BT_HDR* p_buf = (BT_HDR*)osi_malloc(RFCOMM_CMD_BUF_SIZE);
 
@@ -413,7 +412,7 @@ void rfc_send_rpn(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
 
   *p_data++ = RFCOMM_EA | RFCOMM_I_CR(is_command) | RFCOMM_MX_RPN;
 
-  if (!p_pars) {
+  if (!p_settings) {
     *p_data++ = RFCOMM_EA | (RFCOMM_MX_RPN_REQ_LEN << 1);
 
     *p_data++ = RFCOMM_EA | RFCOMM_CR_MASK | (dlci << RFCOMM_SHIFT_DLCI);
@@ -423,14 +422,14 @@ void rfc_send_rpn(tRFC_MCB* p_mcb, uint8_t dlci, bool is_command,
     *p_data++ = RFCOMM_EA | (RFCOMM_MX_RPN_LEN << 1);
 
     *p_data++ = RFCOMM_EA | RFCOMM_CR_MASK | (dlci << RFCOMM_SHIFT_DLCI);
-    *p_data++ = p_pars->baud_rate;
-    *p_data++ = (p_pars->byte_size << RFCOMM_RPN_BITS_SHIFT) |
-                (p_pars->stop_bits << RFCOMM_RPN_STOP_BITS_SHIFT) |
-                (p_pars->parity << RFCOMM_RPN_PARITY_SHIFT) |
-                (p_pars->parity_type << RFCOMM_RPN_PARITY_TYPE_SHIFT);
-    *p_data++ = p_pars->fc_type;
-    *p_data++ = p_pars->xon_char;
-    *p_data++ = p_pars->xoff_char;
+    *p_data++ = p_settings->baud_rate;
+    *p_data++ = (p_settings->byte_size << RFCOMM_RPN_BITS_SHIFT) |
+                (p_settings->stop_bits << RFCOMM_RPN_STOP_BITS_SHIFT) |
+                (p_settings->parity << RFCOMM_RPN_PARITY_SHIFT) |
+                (p_settings->parity_type << RFCOMM_RPN_PARITY_TYPE_SHIFT);
+    *p_data++ = p_settings->fc_type;
+    *p_data++ = p_settings->xon_char;
+    *p_data++ = p_settings->xoff_char;
     *p_data++ = (mask & 0xFF);
     *p_data++ = (mask >> 8);
 
@@ -452,17 +451,17 @@ void rfc_send_test(tRFC_MCB* p_mcb, bool is_command, BT_HDR* p_buf) {
   /* Shift buffer to give space for header */
   if (p_buf->offset < (L2CAP_MIN_OFFSET + RFCOMM_MIN_OFFSET + 2)) {
     uint8_t* p_src = (uint8_t*)(p_buf + 1) + p_buf->offset + p_buf->len - 1;
-    BT_HDR* p_new_buf =
-        (BT_HDR*)osi_malloc(p_buf->len + (L2CAP_MIN_OFFSET + RFCOMM_MIN_OFFSET +
-                                          2 + sizeof(BT_HDR) + 1));
+    BT_HDR* p_new_buf = (BT_HDR*)osi_malloc(
+            p_buf->len + (L2CAP_MIN_OFFSET + RFCOMM_MIN_OFFSET + 2 + sizeof(BT_HDR) + 1));
 
     p_new_buf->offset = L2CAP_MIN_OFFSET + RFCOMM_MIN_OFFSET + 2;
     p_new_buf->len = p_buf->len;
 
-    uint8_t* p_dest =
-        (uint8_t*)(p_new_buf + 1) + p_new_buf->offset + p_new_buf->len - 1;
+    uint8_t* p_dest = (uint8_t*)(p_new_buf + 1) + p_new_buf->offset + p_new_buf->len - 1;
 
-    for (uint16_t xx = 0; xx < p_buf->len; xx++) *p_dest-- = *p_src--;
+    for (uint16_t xx = 0; xx < p_buf->len; xx++) {
+      *p_dest-- = *p_src--;
+    }
 
     osi_free(p_buf);
     p_buf = p_new_buf;
@@ -520,14 +519,14 @@ tRFC_EVENT rfc_parse_data(tRFC_MCB* p_mcb, MX_FRAME* p_frame, BT_HDR* p_buf) {
   uint16_t len;
 
   if (p_buf->len < RFCOMM_CTRL_FRAME_LEN) {
-    LOG_ERROR("Bad Length1: %d", p_buf->len);
-    return (RFC_EVENT_BAD_FRAME);
+    log::error("Bad Length1: {}", p_buf->len);
+    return RFC_EVENT_BAD_FRAME;
   }
 
   RFCOMM_PARSE_CTRL_FIELD(ead, p_frame->cr, p_frame->dlci, p_data);
   if (!ead) {
-    LOG_ERROR("Bad Address(EA must be 1)");
-    return (RFC_EVENT_BAD_FRAME);
+    log::error("Bad Address(EA must be 1)");
+    return RFC_EVENT_BAD_FRAME;
   }
   RFCOMM_PARSE_TYPE_FIELD(p_frame->type, p_frame->pf, p_data);
 
@@ -536,12 +535,12 @@ tRFC_EVENT rfc_parse_data(tRFC_MCB* p_mcb, MX_FRAME* p_frame, BT_HDR* p_buf) {
   if (eal == 0 && p_buf->len > RFCOMM_CTRL_FRAME_LEN) {
     len += (*(p_data)++ << RFCOMM_SHIFT_LENGTH2);
   } else if (eal == 0) {
-    LOG_ERROR("Bad Length when EAL = 0: %d", p_buf->len);
+    log::error("Bad Length when EAL = 0: {}", p_buf->len);
     return RFC_EVENT_BAD_FRAME;
   }
 
   if (p_buf->len < (3 + !ead + !eal + 1)) {
-    LOG_ERROR("Bad Length: %d", p_buf->len);
+    log::error("Bad Length: {}", p_buf->len);
     return RFC_EVENT_BAD_FRAME;
   }
   p_buf->len -= (3 + !ead + !eal + 1); /* Additional 1 for FCS */
@@ -551,7 +550,7 @@ tRFC_EVENT rfc_parse_data(tRFC_MCB* p_mcb, MX_FRAME* p_frame, BT_HDR* p_buf) {
   if ((p_mcb->flow == PORT_FC_CREDIT) && (p_frame->type == RFCOMM_UIH) &&
       (p_frame->dlci != RFCOMM_MX_DLCI) && (p_frame->pf == 1)) {
     if (p_buf->len < sizeof(uint8_t)) {
-      LOG_ERROR("Bad Length in flow control: %d", p_buf->len);
+      log::error("Bad Length in flow control: {}", p_buf->len);
       return RFC_EVENT_BAD_FRAME;
     }
     p_frame->credit = *p_data++;
@@ -562,8 +561,8 @@ tRFC_EVENT rfc_parse_data(tRFC_MCB* p_mcb, MX_FRAME* p_frame, BT_HDR* p_buf) {
   }
 
   if (p_buf->len != len) {
-    LOG_ERROR("Bad Length2 %d %d", p_buf->len, len);
-    return (RFC_EVENT_BAD_FRAME);
+    log::error("Bad Length2 {} {}", p_buf->len, len);
+    return RFC_EVENT_BAD_FRAME;
   }
 
   fcs = *(p_data + len);
@@ -574,58 +573,62 @@ tRFC_EVENT rfc_parse_data(tRFC_MCB* p_mcb, MX_FRAME* p_frame, BT_HDR* p_buf) {
   /* notification to the sender */
   switch (p_frame->type) {
     case RFCOMM_SABME:
-      if (RFCOMM_FRAME_IS_RSP(p_mcb->is_initiator, p_frame->cr) ||
-          !p_frame->pf || len || !RFCOMM_VALID_DLCI(p_frame->dlci) ||
+      if (RFCOMM_FRAME_IS_RSP(p_mcb->is_initiator, p_frame->cr) || !p_frame->pf || len ||
+          !RFCOMM_VALID_DLCI(p_frame->dlci) ||
           !rfc_check_fcs(RFCOMM_CTRL_FRAME_LEN, p_start, fcs)) {
-        LOG_ERROR("Bad SABME");
-        return (RFC_EVENT_BAD_FRAME);
-      } else
-        return (RFC_EVENT_SABME);
+        log::error("Bad SABME");
+        return RFC_EVENT_BAD_FRAME;
+      } else {
+        return RFC_EVENT_SABME;
+      }
 
     case RFCOMM_UA:
-      if (RFCOMM_FRAME_IS_CMD(p_mcb->is_initiator, p_frame->cr) ||
-          !p_frame->pf || len || !RFCOMM_VALID_DLCI(p_frame->dlci) ||
+      if (RFCOMM_FRAME_IS_CMD(p_mcb->is_initiator, p_frame->cr) || !p_frame->pf || len ||
+          !RFCOMM_VALID_DLCI(p_frame->dlci) ||
           !rfc_check_fcs(RFCOMM_CTRL_FRAME_LEN, p_start, fcs)) {
-        LOG_ERROR("Bad UA");
-        return (RFC_EVENT_BAD_FRAME);
-      } else
-        return (RFC_EVENT_UA);
+        log::error("Bad UA");
+        return RFC_EVENT_BAD_FRAME;
+      } else {
+        return RFC_EVENT_UA;
+      }
 
     case RFCOMM_DM:
       if (RFCOMM_FRAME_IS_CMD(p_mcb->is_initiator, p_frame->cr) || len ||
           !RFCOMM_VALID_DLCI(p_frame->dlci) ||
           !rfc_check_fcs(RFCOMM_CTRL_FRAME_LEN, p_start, fcs)) {
-        LOG_ERROR("Bad DM");
-        return (RFC_EVENT_BAD_FRAME);
-      } else
-        return (RFC_EVENT_DM);
+        log::error("Bad DM");
+        return RFC_EVENT_BAD_FRAME;
+      } else {
+        return RFC_EVENT_DM;
+      }
 
     case RFCOMM_DISC:
-      if (RFCOMM_FRAME_IS_RSP(p_mcb->is_initiator, p_frame->cr) ||
-          !p_frame->pf || len || !RFCOMM_VALID_DLCI(p_frame->dlci) ||
+      if (RFCOMM_FRAME_IS_RSP(p_mcb->is_initiator, p_frame->cr) || !p_frame->pf || len ||
+          !RFCOMM_VALID_DLCI(p_frame->dlci) ||
           !rfc_check_fcs(RFCOMM_CTRL_FRAME_LEN, p_start, fcs)) {
-        LOG_ERROR("Bad DISC");
-        return (RFC_EVENT_BAD_FRAME);
-      } else
-        return (RFC_EVENT_DISC);
+        log::error("Bad DISC");
+        return RFC_EVENT_BAD_FRAME;
+      } else {
+        return RFC_EVENT_DISC;
+      }
 
     case RFCOMM_UIH:
       if (!RFCOMM_VALID_DLCI(p_frame->dlci)) {
-        LOG_ERROR("Bad UIH - invalid DLCI");
-        return (RFC_EVENT_BAD_FRAME);
+        log::error("Bad UIH - invalid DLCI");
+        return RFC_EVENT_BAD_FRAME;
       } else if (!rfc_check_fcs(2, p_start, fcs)) {
-        LOG_ERROR("Bad UIH - FCS");
-        return (RFC_EVENT_BAD_FRAME);
+        log::error("Bad UIH - FCS");
+        return RFC_EVENT_BAD_FRAME;
       } else if (RFCOMM_FRAME_IS_RSP(p_mcb->is_initiator, p_frame->cr)) {
         /* we assume that this is ok to allow bad implementations to work */
-        LOG_ERROR("Bad UIH - response");
-        return (RFC_EVENT_UIH);
+        log::error("Bad UIH - response");
+        return RFC_EVENT_UIH;
       } else {
-        return (RFC_EVENT_UIH);
+        return RFC_EVENT_UIH;
       }
   }
 
-  return (RFC_EVENT_BAD_FRAME);
+  return RFC_EVENT_BAD_FRAME;
 }
 
 /*******************************************************************************
@@ -643,8 +646,7 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
   uint8_t ea, cr, mx_len;
 
   if (length < 2) {
-    LOG_ERROR("%s: Illegal MX Frame len when reading EA, C/R. len:%d < 2",
-              __func__, length);
+    log::error("Illegal MX Frame len when reading EA, C/R. len:{} < 2", length);
     osi_free(p_buf);
     return;
   }
@@ -653,9 +655,8 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
   p_rx_frame->type = *p_data++ & ~(RFCOMM_CR_MASK | RFCOMM_EA_MASK);
 
   if (!p_rx_frame->ea || !length) {
-    LOG(ERROR) << __func__
-               << ": Invalid MX frame ea=" << std::to_string(p_rx_frame->ea)
-               << ", len=" << length << ", bd_addr=" << p_mcb->bd_addr;
+    log::error("Invalid MX frame ea={}, len={}, bd_addr={}", p_rx_frame->ea, length,
+               p_mcb->bd_addr);
     osi_free(p_buf);
     return;
   }
@@ -671,8 +672,7 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
 
   if (!ea) {
     if (length < 1) {
-      LOG_ERROR("%s: Illegal MX Frame when EA = 0. len:%d < 1", __func__,
-                length);
+      log::error("Illegal MX Frame when EA = 0. len:{} < 1", length);
       osi_free(p_buf);
       return;
     }
@@ -681,19 +681,17 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
   }
 
   if (mx_len != length) {
-    LOG(ERROR) << __func__ << ": Bad MX frame, p_mcb=" << p_mcb
-               << ", bd_addr=" << p_mcb->bd_addr;
+    log::error("Bad MX frame, p_mcb={}, bd_addr={}", std::format_ptr(p_mcb), p_mcb->bd_addr);
     osi_free(p_buf);
     return;
   }
 
-  LOG_VERBOSE("%s: type=0x%02x, bd_addr=%s", __func__, p_rx_frame->type,
-              ADDRESS_TO_LOGGABLE_CSTR(p_mcb->bd_addr));
+  log::verbose("type=0x{:02x}, bd_addr={}", p_rx_frame->type, p_mcb->bd_addr);
   switch (p_rx_frame->type) {
     case RFCOMM_MX_PN:
       if (length != RFCOMM_MX_PN_LEN) {
-        LOG(ERROR) << __func__ << ": Invalid PN length, p_mcb=" << p_mcb
-                   << ", bd_addr=" << p_mcb->bd_addr;
+        log::error("Invalid PN length, p_mcb={}, bd_addr={}", std::format_ptr(p_mcb),
+                   p_mcb->bd_addr);
         break;
       }
 
@@ -708,10 +706,8 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       p_rx_frame->u.pn.k = *p_data++ & RFCOMM_PN_K_MASK;
 
       if (!p_rx_frame->dlci || !RFCOMM_VALID_DLCI(p_rx_frame->dlci) ||
-          (p_rx_frame->u.pn.mtu < RFCOMM_MIN_MTU) ||
-          (p_rx_frame->u.pn.mtu > RFCOMM_MAX_MTU)) {
-        LOG(ERROR) << __func__ << ": Bad PN frame, p_mcb=" << p_mcb
-                   << ", bd_addr=" << p_mcb->bd_addr;
+          (p_rx_frame->u.pn.mtu < RFCOMM_MIN_MTU) || (p_rx_frame->u.pn.mtu > RFCOMM_MAX_MTU)) {
+        log::error("Bad PN frame, p_mcb={}, bd_addr={}", std::format_ptr(p_mcb), p_mcb->bd_addr);
         break;
       }
 
@@ -721,7 +717,9 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       return;
 
     case RFCOMM_MX_TEST:
-      if (!length) break;
+      if (!length) {
+        break;
+      }
 
       p_rx_frame->u.test.p_data = p_data;
       p_rx_frame->u.test.data_len = length;
@@ -729,14 +727,17 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       p_buf->offset += 2;
       p_buf->len -= 2;
 
-      if (is_command)
+      if (is_command) {
         rfc_send_test(p_mcb, false, p_buf);
-      else
+      } else {
         rfc_process_test_rsp(p_mcb, p_buf);
+      }
       return;
 
     case RFCOMM_MX_FCON:
-      if (length != RFCOMM_MX_FCON_LEN) break;
+      if (length != RFCOMM_MX_FCON_LEN) {
+        break;
+      }
 
       osi_free(p_buf);
 
@@ -744,7 +745,9 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       return;
 
     case RFCOMM_MX_FCOFF:
-      if (length != RFCOMM_MX_FCOFF_LEN) break;
+      if (length != RFCOMM_MX_FCOFF_LEN) {
+        break;
+      }
 
       osi_free(p_buf);
 
@@ -752,9 +755,8 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       return;
 
     case RFCOMM_MX_MSC:
-      if (length != RFCOMM_MX_MSC_LEN_WITH_BREAK &&
-          length != RFCOMM_MX_MSC_LEN_NO_BREAK) {
-        LOG_ERROR("%s: Illegal MX MSC Frame len:%d", __func__, length);
+      if (length != RFCOMM_MX_MSC_LEN_WITH_BREAK && length != RFCOMM_MX_MSC_LEN_NO_BREAK) {
+        log::error("Illegal MX MSC Frame len:{}", length);
         osi_free(p_buf);
         return;
       }
@@ -762,19 +764,17 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       cr = (*p_data & RFCOMM_CR_MASK) >> RFCOMM_SHIFT_CR;
       p_rx_frame->dlci = *p_data++ >> RFCOMM_SHIFT_DLCI;
 
-      if (!ea || !cr || !p_rx_frame->dlci ||
-          !RFCOMM_VALID_DLCI(p_rx_frame->dlci)) {
-        LOG_ERROR("Bad MSC frame");
+      if (!ea || !cr || !p_rx_frame->dlci || !RFCOMM_VALID_DLCI(p_rx_frame->dlci)) {
+        log::error("Bad MSC frame");
         break;
       }
 
       p_rx_frame->u.msc.signals = *p_data++;
 
       if (mx_len == RFCOMM_MX_MSC_LEN_WITH_BREAK) {
-        p_rx_frame->u.msc.break_present =
-            *p_data & RFCOMM_MSC_BREAK_PRESENT_MASK;
+        p_rx_frame->u.msc.break_present = *p_data & RFCOMM_MSC_BREAK_PRESENT_MASK;
         p_rx_frame->u.msc.break_duration =
-            (*p_data & RFCOMM_MSC_BREAK_MASK) >> RFCOMM_MSC_SHIFT_BREAK;
+                (*p_data & RFCOMM_MSC_BREAK_MASK) >> RFCOMM_MSC_SHIFT_BREAK;
       } else {
         p_rx_frame->u.msc.break_present = false;
         p_rx_frame->u.msc.break_duration = 0;
@@ -785,7 +785,9 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       return;
 
     case RFCOMM_MX_NSC:
-      if ((length != RFCOMM_MX_NSC_LEN) || !is_command) break;
+      if ((length != RFCOMM_MX_NSC_LEN) || !is_command) {
+        break;
+      }
 
       p_rx_frame->u.nsc.ea = *p_data & RFCOMM_EA;
       p_rx_frame->u.nsc.cr = (*p_data & RFCOMM_CR_MASK) >> RFCOMM_SHIFT_CR;
@@ -797,16 +799,16 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       return;
 
     case RFCOMM_MX_RPN:
-      if ((length != RFCOMM_MX_RPN_REQ_LEN) && (length != RFCOMM_MX_RPN_LEN))
+      if ((length != RFCOMM_MX_RPN_REQ_LEN) && (length != RFCOMM_MX_RPN_LEN)) {
         break;
+      }
 
       ea = *p_data & RFCOMM_EA;
       cr = (*p_data & RFCOMM_CR_MASK) >> RFCOMM_SHIFT_CR;
       p_rx_frame->dlci = *p_data++ >> RFCOMM_SHIFT_DLCI;
 
-      if (!ea || !cr || !p_rx_frame->dlci ||
-          !RFCOMM_VALID_DLCI(p_rx_frame->dlci)) {
-        LOG_ERROR("Bad RPN frame");
+      if (!ea || !cr || !p_rx_frame->dlci || !RFCOMM_VALID_DLCI(p_rx_frame->dlci)) {
+        log::error("Bad RPN frame");
         break;
       }
 
@@ -814,30 +816,27 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
 
       if (!p_rx_frame->u.rpn.is_request) {
         p_rx_frame->u.rpn.baud_rate = *p_data++;
-        p_rx_frame->u.rpn.byte_size =
-            (*p_data >> RFCOMM_RPN_BITS_SHIFT) & RFCOMM_RPN_BITS_MASK;
+        p_rx_frame->u.rpn.byte_size = (*p_data >> RFCOMM_RPN_BITS_SHIFT) & RFCOMM_RPN_BITS_MASK;
         p_rx_frame->u.rpn.stop_bits =
-            (*p_data >> RFCOMM_RPN_STOP_BITS_SHIFT) & RFCOMM_RPN_STOP_BITS_MASK;
-        p_rx_frame->u.rpn.parity =
-            (*p_data >> RFCOMM_RPN_PARITY_SHIFT) & RFCOMM_RPN_PARITY_MASK;
+                (*p_data >> RFCOMM_RPN_STOP_BITS_SHIFT) & RFCOMM_RPN_STOP_BITS_MASK;
+        p_rx_frame->u.rpn.parity = (*p_data >> RFCOMM_RPN_PARITY_SHIFT) & RFCOMM_RPN_PARITY_MASK;
         p_rx_frame->u.rpn.parity_type =
-            (*p_data++ >> RFCOMM_RPN_PARITY_TYPE_SHIFT) &
-            RFCOMM_RPN_PARITY_TYPE_MASK;
+                (*p_data++ >> RFCOMM_RPN_PARITY_TYPE_SHIFT) & RFCOMM_RPN_PARITY_TYPE_MASK;
 
         p_rx_frame->u.rpn.fc_type = *p_data++ & RFCOMM_FC_MASK;
         p_rx_frame->u.rpn.xon_char = *p_data++;
         p_rx_frame->u.rpn.xoff_char = *p_data++;
-        p_rx_frame->u.rpn.param_mask =
-            (*p_data + (*(p_data + 1) << 8)) & RFCOMM_RPN_PM_MASK;
+        p_rx_frame->u.rpn.param_mask = (*p_data + (*(p_data + 1) << 8)) & RFCOMM_RPN_PM_MASK;
       }
       osi_free(p_buf);
 
-      rfc_process_rpn(p_mcb, is_command, p_rx_frame->u.rpn.is_request,
-                      p_rx_frame);
+      rfc_process_rpn(p_mcb, is_command, p_rx_frame->u.rpn.is_request, p_rx_frame);
       return;
 
     case RFCOMM_MX_RLS:
-      if (length != RFCOMM_MX_RLS_LEN) break;
+      if (length != RFCOMM_MX_RLS_LEN) {
+        break;
+      }
 
       ea = *p_data & RFCOMM_EA;
       cr = (*p_data & RFCOMM_CR_MASK) >> RFCOMM_SHIFT_CR;
@@ -845,9 +844,8 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
       p_rx_frame->dlci = *p_data++ >> RFCOMM_SHIFT_DLCI;
       p_rx_frame->u.rls.line_status = (*p_data & ~0x01);
 
-      if (!ea || !cr || !p_rx_frame->dlci ||
-          !RFCOMM_VALID_DLCI(p_rx_frame->dlci)) {
-        LOG_ERROR("Bad RPN frame");
+      if (!ea || !cr || !p_rx_frame->dlci || !RFCOMM_VALID_DLCI(p_rx_frame->dlci)) {
+        log::error("Bad RPN frame");
         break;
       }
 
@@ -859,5 +857,7 @@ void rfc_process_mx_message(tRFC_MCB* p_mcb, BT_HDR* p_buf) {
 
   osi_free(p_buf);
 
-  if (is_command) rfc_send_nsc(p_mcb);
+  if (is_command) {
+    rfc_send_nsc(p_mcb);
+  }
 }

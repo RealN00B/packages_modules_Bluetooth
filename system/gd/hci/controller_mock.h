@@ -15,16 +15,14 @@
  */
 #pragma once
 
+#include <gmock/gmock.h>
+
 #include <cstdint>
 
-#include "common/contextual_callback.h"
 #include "hci/address.h"
 #include "hci/controller.h"
 #include "hci/hci_packets.h"
-#include "module.h"
-#include "os/handler.h"
-
-#include <gmock/gmock.h>
+#include "hci/le_rand_callback.h"
 
 // Unit test interfaces
 namespace bluetooth {
@@ -32,7 +30,7 @@ namespace hci {
 namespace testing {
 
 class MockController : public Controller {
- public:
+public:
   MOCK_METHOD(void, RegisterCompletedAclPacketsCallback, (CompletedAclPacketsCallback cb));
   MOCK_METHOD(void, UnregisterCompletedAclPacketsCallback, ());
   MOCK_METHOD(void, RegisterCompletedMonitorAclPacketsCallback, (CompletedAclPacketsCallback cb));
@@ -68,22 +66,49 @@ class MockController : public Controller {
   MOCK_METHOD(bool, SupportsSniffSubrating, (), (const));
   MOCK_METHOD(bool, SupportsEncryptionPause, (), (const));
   MOCK_METHOD(bool, SupportsBle, (), (const));
-  MOCK_METHOD(bool, SupportsBlePrivacy, (), (const));
-  MOCK_METHOD(bool, SupportsBlePacketExtension, (), (const));
+
+  MOCK_METHOD(bool, SupportsBleEncryption, (), (const));
   MOCK_METHOD(bool, SupportsBleConnectionParametersRequest, (), (const));
+  MOCK_METHOD(bool, SupportsBleExtendedReject, (), (const));
+  MOCK_METHOD(bool, SupportsBlePeripheralInitiatedFeaturesExchange, (), (const));
+  MOCK_METHOD(bool, SupportsBlePing, (), (const));
+  MOCK_METHOD(bool, SupportsBleDataPacketLengthExtension, (), (const));
+  MOCK_METHOD(bool, SupportsBlePrivacy, (), (const));
+  MOCK_METHOD(bool, SupportsBleExtendedScannerFilterPolicies, (), (const));
   MOCK_METHOD(bool, SupportsBle2mPhy, (), (const));
+  MOCK_METHOD(bool, SupportsBleStableModulationIndexTx, (), (const));
+  MOCK_METHOD(bool, SupportsBleStableModulationIndexRx, (), (const));
   MOCK_METHOD(bool, SupportsBleCodedPhy, (), (const));
   MOCK_METHOD(bool, SupportsBleExtendedAdvertising, (), (const));
   MOCK_METHOD(bool, SupportsBlePeriodicAdvertising, (), (const));
-  MOCK_METHOD(bool, SupportsBlePeripheralInitiatedFeatureExchange, (), (const));
   MOCK_METHOD(bool, SupportsBleConnectionParameterRequest, (), (const));
+  MOCK_METHOD(bool, SupportsBleChannelSelectionAlgorithm2, (), (const));
+  MOCK_METHOD(bool, SupportsBlePowerClass1, (), (const));
+  MOCK_METHOD(bool, SupportsBleMinimumUsedChannels, (), (const));
+  MOCK_METHOD(bool, SupportsBleConnectionCteRequest, (), (const));
+  MOCK_METHOD(bool, SupportsBleConnectionCteResponse, (), (const));
+  MOCK_METHOD(bool, SupportsBleConnectionlessCteTransmitter, (), (const));
+  MOCK_METHOD(bool, SupportsBleConnectionlessCteReceiver, (), (const));
+  MOCK_METHOD(bool, SupportsBleAntennaSwitchingDuringCteTx, (), (const));
+  MOCK_METHOD(bool, SupportsBleAntennaSwitchingDuringCteRx, (), (const));
+  MOCK_METHOD(bool, SupportsBleReceivingConstantToneExtensions, (), (const));
   MOCK_METHOD(bool, SupportsBlePeriodicAdvertisingSyncTransferSender, (), (const));
   MOCK_METHOD(bool, SupportsBlePeriodicAdvertisingSyncTransferRecipient, (), (const));
+  MOCK_METHOD(bool, SupportsBleSleepClockAccuracyUpdates, (), (const));
+  MOCK_METHOD(bool, SupportsBleRemotePublicKeyValidation, (), (const));
   MOCK_METHOD(bool, SupportsBleConnectedIsochronousStreamCentral, (), (const));
   MOCK_METHOD(bool, SupportsBleConnectedIsochronousStreamPeripheral, (), (const));
   MOCK_METHOD(bool, SupportsBleIsochronousBroadcaster, (), (const));
   MOCK_METHOD(bool, SupportsBleSynchronizedReceiver, (), (const));
+  MOCK_METHOD(bool, SupportsBlePowerChannelHostSupport, (), (const));
+  MOCK_METHOD(bool, SupportsBleIsochronousChannelsHostSupport, (), (const));
+  MOCK_METHOD(bool, SupportsBlePowerControlRequest, (), (const));
+  MOCK_METHOD(bool, SupportsBlePowerChangeIndication, (), (const));
+  MOCK_METHOD(bool, SupportsBlePathLossMonitoring, (), (const));
   MOCK_METHOD(bool, SupportsBlePeriodicAdvertisingAdi, (), (const));
+  MOCK_METHOD(bool, SupportsBleConnectionSubrating, (), (const));
+  MOCK_METHOD(bool, SupportsBleConnectionSubratingHost, (), (const));
+  MOCK_METHOD(bool, SupportsBleChannelSounding, (), (const));
   MOCK_METHOD(uint16_t, GetAclPacketLength, (), (const));
   MOCK_METHOD(uint16_t, GetNumAclPacketBuffers, (), (const));
   MOCK_METHOD(uint8_t, GetScoPacketLength, (), (const));
@@ -91,27 +116,23 @@ class MockController : public Controller {
   MOCK_METHOD(Address, GetMacAddress, (), (const));
   MOCK_METHOD(void, SetEventMask, (uint64_t event_mask));
   MOCK_METHOD(void, Reset, ());
+  MOCK_METHOD(void, LeRand, (LeRandCallback cb));
   MOCK_METHOD(void, SetEventFilterClearAll, ());
   MOCK_METHOD(void, SetEventFilterInquiryResultAllDevices, ());
-  MOCK_METHOD(
-      void,
-      SetEventFilterInquiryResultClassOfDevice,
-      (ClassOfDevice class_of_device, ClassOfDevice class_of_device_mask));
+  MOCK_METHOD(void, SetEventFilterInquiryResultClassOfDevice,
+              (ClassOfDevice class_of_device, ClassOfDevice class_of_device_mask));
   MOCK_METHOD(void, SetEventFilterInquiryResultAddress, (Address address));
   MOCK_METHOD(void, SetEventFilterConnectionSetupAllDevices, (AutoAcceptFlag auto_accept_flag));
-  MOCK_METHOD(
-      void,
-      SetEventFilterConnectionSetupClassOfDevice,
-      (ClassOfDevice class_of_device, ClassOfDevice class_of_device_mask, AutoAcceptFlag auto_accept_flag));
-  MOCK_METHOD(void, SetEventFilterConnectionSetupAddress, (Address address, AutoAcceptFlag auto_accept_flag));
+  MOCK_METHOD(void, SetEventFilterConnectionSetupClassOfDevice,
+              (ClassOfDevice class_of_device, ClassOfDevice class_of_device_mask,
+               AutoAcceptFlag auto_accept_flag));
+  MOCK_METHOD(void, SetEventFilterConnectionSetupAddress,
+              (Address address, AutoAcceptFlag auto_accept_flag));
   MOCK_METHOD(void, WriteLocalName, (std::string local_name));
-  MOCK_METHOD(
-      void,
-      HostBufferSize,
-      (uint16_t host_acl_data_packet_length,
-       uint8_t host_synchronous_data_packet_length,
-       uint16_t host_total_num_acl_data_packets,
-       uint16_t host_total_num_synchronous_data_packets));
+  MOCK_METHOD(void, HostBufferSize,
+              (uint16_t host_acl_data_packet_length, uint8_t host_synchronous_data_packet_length,
+               uint16_t host_total_num_acl_data_packets,
+               uint16_t host_total_num_synchronous_data_packets));
   // LE controller commands
   MOCK_METHOD(void, LeSetEventMask, (uint64_t le_event_mask));
   MOCK_METHOD(LeBufferSize, GetLeBufferSize, (), (const));
@@ -125,10 +146,15 @@ class MockController : public Controller {
   MOCK_METHOD(uint16_t, GetLeSuggestedDefaultDataLength, (), (const));
   MOCK_METHOD(uint8_t, GetLeNumberOfSupportedAdverisingSets, (), (const));
   MOCK_METHOD(uint8_t, GetLePeriodicAdvertiserListSize, (), (const));
+  MOCK_METHOD(std::vector<uint8_t>, GetLocalSupportedBrEdrCodecIds, (), (const));
   MOCK_METHOD(VendorCapabilities, GetVendorCapabilities, (), (const));
   MOCK_METHOD(bool, IsSupported, (OpCode op_code), (const));
-  MOCK_METHOD(void, LeRand, (LeRandCallback cb));
-  MOCK_METHOD(void, AllowWakeByHid, ());
+  MOCK_METHOD(bool, IsRpaGenerationSupported, (), (const));
+
+  MOCK_METHOD(uint32_t, GetDabSupportedCodecs, (), (const));
+  MOCK_METHOD((const std::array<DynamicAudioBufferCodecCapability, 32>&), GetDabCodecCapabilities,
+              (), (const));
+  MOCK_METHOD(void, SetDabAudioBufferTime, (uint16_t buffer_time_ms));
 };
 
 }  // namespace testing

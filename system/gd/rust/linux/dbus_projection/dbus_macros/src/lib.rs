@@ -31,7 +31,7 @@ fn debug_output_to_file(gen: &proc_macro2::TokenStream, filename: String) {
         .to_string();
 
     let path = Path::new(&filepath);
-    let mut file = File::create(&path).unwrap();
+    let mut file = File::create(path).unwrap();
     file.write_all(gen.to_string().as_bytes()).unwrap();
 }
 
@@ -125,16 +125,21 @@ pub fn generate_dbus_exporter(attr: TokenStream, item: TokenStream) -> TokenStre
 
     for item in ast.items {
         if let ImplItem::Method(method) = item {
-            if method.attrs.len() != 1 {
+            // Find the #[dbus_method] attribute
+            let mut dbus_method_attr = None;
+            for attr in &method.attrs {
+                if attr.path.get_ident().unwrap().to_string().eq("dbus_method") {
+                    dbus_method_attr = Some(attr);
+                    break;
+                }
+            }
+
+            // Skip the method is not marked with #[dbus_method].
+            if dbus_method_attr.is_none() {
                 continue;
             }
 
-            let attr = &method.attrs[0];
-            if !attr.path.get_ident().unwrap().to_string().eq("dbus_method") {
-                continue;
-            }
-
-            let meta_list = match attr.parse_meta().unwrap() {
+            let meta_list = match dbus_method_attr.unwrap().parse_meta().unwrap() {
                 Meta::List(meta_list) => meta_list,
                 _ => continue,
             };
@@ -166,7 +171,7 @@ pub fn generate_dbus_exporter(attr: TokenStream, item: TokenStream) -> TokenStre
                     if let Pat::Ident(pat_ident) = &*typed.pat {
                         let ident = pat_ident.ident.clone();
                         let mut dbus_input_ident = ident.to_string();
-                        dbus_input_ident.push_str("_");
+                        dbus_input_ident.push('_');
                         let dbus_input_arg = format_ident!("{}", dbus_input_ident);
                         let ident_string = ident.to_string();
 
@@ -210,10 +215,10 @@ pub fn generate_dbus_exporter(attr: TokenStream, item: TokenStream) -> TokenStre
                             <#arg_type as DBusArg>::log(&#ident),
                         };
 
-                        if args_debug_format.len() != 0 {
+                        if !args_debug_format.is_empty() {
                             args_debug_format.push_str(", ");
                         }
-                        args_debug_format.push_str("{:?}");
+                        args_debug_format.push_str("|{}|");
                     }
                 }
             }
@@ -293,7 +298,7 @@ pub fn generate_dbus_exporter(attr: TokenStream, item: TokenStream) -> TokenStre
         }
     };
 
-    debug_output_to_file(&gen, format!("out-{}.rs", fn_ident.to_string()));
+    debug_output_to_file(&gen, format!("out-{}.rs", fn_ident));
 
     gen.into()
 }
@@ -333,9 +338,17 @@ pub fn generate_dbus_interface_client(attr: TokenStream, item: TokenStream) -> T
     // Iterate on every methods of a trait impl
     for item in ast.items {
         if let ImplItem::Method(method) = item {
-            // If the method is not marked with #[dbus_method], just copy the
-            // original method body.
-            if method.attrs.len() != 1 {
+            // Find the #[dbus_method] attribute
+            let mut dbus_method_attr = None;
+            for attr in &method.attrs {
+                if attr.path.get_ident().unwrap().to_string().eq("dbus_method") {
+                    dbus_method_attr = Some(attr);
+                    break;
+                }
+            }
+
+            // If the method is not marked with #[dbus_method], just copy the original method body.
+            if dbus_method_attr.is_none() {
                 methods = quote! {
                     #methods
 
@@ -344,15 +357,9 @@ pub fn generate_dbus_interface_client(attr: TokenStream, item: TokenStream) -> T
                 continue;
             }
 
-            let attr = &method.attrs[0];
-            if !attr.path.get_ident().unwrap().to_string().eq("dbus_method") {
-                continue;
-            }
-
-            let sig = &method.sig;
-
             // For RPC-friendly method, copy the original signature but add public, async, and wrap
             // the return with Result.
+            let sig = &method.sig;
             let mut rpc_sig = sig.clone();
             rpc_sig.asyncness = Some(<syn::Token![async]>::default());
             rpc_sig.output = match rpc_sig.output {
@@ -367,11 +374,12 @@ pub fn generate_dbus_interface_client(attr: TokenStream, item: TokenStream) -> T
                 pub #rpc_sig
             };
 
-            let dbus_method_name = if let Meta::List(meta_list) = attr.parse_meta().unwrap() {
-                Some(meta_list.nested[0].clone())
-            } else {
-                None
-            };
+            let dbus_method_name =
+                if let Meta::List(meta_list) = dbus_method_attr.unwrap().parse_meta().unwrap() {
+                    Some(meta_list.nested[0].clone())
+                } else {
+                    None
+                };
 
             if dbus_method_name.is_none() {
                 continue;
@@ -390,11 +398,7 @@ pub fn generate_dbus_interface_client(attr: TokenStream, item: TokenStream) -> T
                         let ident = pat_ident.ident.clone();
 
                         let is_box = if let Type::Path(type_path) = &**arg_type {
-                            if type_path.path.segments[0].ident.to_string().eq("Box") {
-                                true
-                            } else {
-                                false
-                            }
+                            type_path.path.segments[0].ident.to_string().eq("Box")
                         } else {
                             false
                         };
@@ -614,14 +618,14 @@ pub fn dbus_propmap(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut field_idents = quote! {};
 
     let mut insert_map_fields = quote! {};
+
+    let mut log_format = String::new();
+    let mut log_args = quote! {};
+
     for field in ast.fields {
-        let field_ident = field.ident;
+        let Some(field_ident) = field.ident else { continue };
 
-        if field_ident.is_none() {
-            continue;
-        }
-
-        let field_str = field_ident.as_ref().unwrap().clone().to_string();
+        let field_str = field_ident.to_string();
 
         let field_type = if let Type::Path(t) = field.ty {
             t
@@ -638,16 +642,17 @@ pub fn dbus_propmap(attr: TokenStream, item: TokenStream) -> TokenStream {
             match #field_ident.arg_type() {
                 dbus::arg::ArgType::Variant => {}
                 _ => {
-                    return Err(Box::new(DBusArgError::new(String::from(format!(
+                    return Err(Box::new(DBusArgError::new(format!(
                         "{}.{} must be a variant",
                         #struct_str, #field_str
-                    )))));
+                    ))));
                 }
             };
             let #field_ident = <<#field_type as DBusArg>::DBusType as RefArgToRust>::ref_arg_to_rust(
                 #field_ident.as_static_inner(0).unwrap(),
                 format!("{}.{}", #struct_str, #field_str),
             )?;
+            #[allow(non_camel_case_types)]
             type #field_type_name = #field_type;
             let #field_ident = #field_type_name::from_dbus(
                 #field_ident,
@@ -663,10 +668,10 @@ pub fn dbus_propmap(attr: TokenStream, item: TokenStream) -> TokenStream {
             let #field_ident = match data__.get(#field_str) {
                 Some(data) => data,
                 None => {
-                    return Err(Box::new(DBusArgError::new(String::from(format!(
+                    return Err(Box::new(DBusArgError::new(format!(
                         "{}.{} is required",
                         #struct_str, #field_str
-                    )))));
+                    ))));
                 }
             };
             #make_field
@@ -677,7 +682,26 @@ pub fn dbus_propmap(attr: TokenStream, item: TokenStream) -> TokenStream {
             let field_data__ = DBusArg::to_dbus(data__.#field_ident)?;
             map__.insert(String::from(#field_str), dbus::arg::Variant(Box::new(field_data__)));
         };
+
+        if !log_format.is_empty() {
+            log_format.push_str(", ");
+        }
+        log_format.push_str(field_str.as_str());
+        log_format.push_str(": {}");
+
+        log_args = quote! {
+            #log_args
+            <#field_type as DBusArg>::log(&data__.#field_ident),
+        };
     }
+
+    // Give an example type: struct BluetoothDevice { address: RawAddress, name: String }
+    // At this point the |log_format| would be: "address: {}, name: {}"
+    // Now, wrap it with curly braces and prepend the structure name so it becomes:
+    //     "BluetoothDevice { address: {}, name: {} }"
+    log_format.insert_str(0, " {{ ");
+    log_format.push_str(" }}");
+    log_format.insert_str(0, struct_ident.to_string().as_str());
 
     let gen = quote! {
         #[allow(dead_code)]
@@ -705,13 +729,13 @@ pub fn dbus_propmap(attr: TokenStream, item: TokenStream) -> TokenStream {
                 return Ok(map__);
             }
 
-            fn log(data: &#struct_ident) -> String {
-                String::from(format!("{:?}", data))
+            fn log(data__: &#struct_ident) -> String {
+                format!(#log_format, #log_args)
             }
         }
     };
 
-    debug_output_to_file(&gen, format!("out-{}.rs", struct_ident.to_string()));
+    debug_output_to_file(&gen, format!("out-{}.rs", struct_ident));
 
     gen.into()
 }
@@ -753,9 +777,17 @@ pub fn dbus_proxy_obj(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     for item in ast.items {
         if let ImplItem::Method(method) = item {
-            // If the method is not marked with #[dbus_method], just copy the
-            // original method body.
-            if method.attrs.len() != 1 {
+            // Find the #[dbus_method] attribute
+            let mut dbus_method_attr = None;
+            for attr in &method.attrs {
+                if attr.path.get_ident().unwrap().to_string().eq("dbus_method") {
+                    dbus_method_attr = Some(attr);
+                    break;
+                }
+            }
+
+            // If the method is not marked with #[dbus_method], just copy the original method body.
+            if dbus_method_attr.is_none() {
                 method_impls = quote! {
                     #method_impls
                     #method
@@ -763,12 +795,7 @@ pub fn dbus_proxy_obj(attr: TokenStream, item: TokenStream) -> TokenStream {
                 continue;
             }
 
-            let attr = &method.attrs[0];
-            if !attr.path.get_ident().unwrap().to_string().eq("dbus_method") {
-                continue;
-            }
-
-            let meta_list = match attr.parse_meta().unwrap() {
+            let meta_list = match dbus_method_attr.unwrap().parse_meta().unwrap() {
                 Meta::List(meta_list) => meta_list,
                 _ => continue,
             };
@@ -791,6 +818,7 @@ pub fn dbus_proxy_obj(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             for input in method.sig.inputs {
                 if let FnArg::Typed(ref typed) = input {
+                    let arg_type = &typed.ty;
                     if let Pat::Ident(pat_ident) = &*typed.pat {
                         let ident = pat_ident.ident.clone();
 
@@ -799,13 +827,14 @@ pub fn dbus_proxy_obj(attr: TokenStream, item: TokenStream) -> TokenStream {
                         };
 
                         args_debug = quote! {
-                            #args_debug &#ident,
+                            #args_debug
+                            <#arg_type as DBusArg>::log(&#ident),
                         };
 
-                        if args_debug_format.len() != 0 {
+                        if !args_debug_format.is_empty() {
                             args_debug_format.push_str(", ");
                         }
-                        args_debug_format.push_str("{:?}");
+                        args_debug_format.push_str("|{}|");
                     }
                 }
             }
@@ -975,12 +1004,12 @@ pub fn dbus_proxy_obj(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             fn log(_data: &Box<dyn #trait_ + Send>) -> String {
-                String::from(format!("Box<dyn>"))
+                format!("Box<dyn>")
             }
         }
     };
 
-    debug_output_to_file(&gen, format!("out-{}.rs", struct_ident.to_string()));
+    debug_output_to_file(&gen, format!("out-{}.rs", struct_ident));
 
     gen.into()
 }
@@ -1054,12 +1083,12 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
             ) -> Result<Self::RustType, Box<dyn Error>> {
                 let any = arg.as_any();
                 if !any.is::<<Self as DBusArg>::DBusType>() {
-                    return Err(Box::new(DBusArgError::new(String::from(format!(
+                    return Err(Box::new(DBusArgError::new(format!(
                         "{} type does not match: expected {}, found {}",
                         name,
                         std::any::type_name::<<Self as DBusArg>::DBusType>(),
                         arg.arg_type().as_str(),
-                    )))));
+                    ))));
                 }
                 let arg = (*any.downcast_ref::<<Self as DBusArg>::DBusType>().unwrap()).clone();
                 return Ok(arg);
@@ -1075,16 +1104,16 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
             ) -> Result<Self::RustType, Box<dyn Error>> {
                 let any = arg.as_any();
                 if !any.is::<<Self as DBusArg>::DBusType>() {
-                    return Err(Box::new(DBusArgError::new(String::from(format!(
+                    return Err(Box::new(DBusArgError::new(format!(
                         "{} type does not match: expected {}, found {}",
                         name,
                         std::any::type_name::<<Self as DBusArg>::DBusType>(),
                         arg.arg_type().as_str(),
-                    )))));
+                    ))));
                 }
                 let arg = match (*any.downcast_ref::<<Self as DBusArg>::DBusType>().unwrap()).try_clone() {
-                    Ok(foo) => foo,
-                    Err(_) => return Err(Box::new(DBusArgError::new(String::from(format!("{} cannot clone file.", name))))),
+                    Ok(arg) => arg,
+                    Err(_) => return Err(Box::new(DBusArgError::new(format!("{} cannot clone file.", name)))),
                 };
 
                 return Ok(arg);
@@ -1100,10 +1129,10 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
                 let mut map: dbus::arg::PropMap = std::collections::HashMap::new();
                 let mut iter = match arg.as_iter() {
                     None => {
-                        return Err(Box::new(DBusArgError::new(String::from(format!(
+                        return Err(Box::new(DBusArgError::new(format!(
                             "{} is not iterable",
                             name,
-                        )))))
+                        ))))
                     }
                     Some(item) => item,
                 };
@@ -1115,10 +1144,10 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
                     let v = dbus::arg::Variant(
                         val_clone
                             .as_static_inner(0)
-                            .ok_or(Box::new(DBusArgError::new(String::from(format!(
+                            .ok_or(Box::new(DBusArgError::new(format!(
                                 "{}.{} is not a variant",
                                 name, k
-                            )))))?
+                            ))))?
                             .box_clone(),
                     );
                     map.insert(k, v);
@@ -1195,6 +1224,10 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
         /// When implementing this trait for Rust container types (i.e. Option<T>),
         /// you must first select the D-Bus container type used (i.e. array, property map, etc) and
         /// then implement the `from_dbus`, `to_dbus`, and `log` functions.
+        ///
+        /// Note that when implementing `log` function for a container type, avoid using the "{:?}"
+        /// Debug format because the `log` function could be recursively called and generate many
+        /// backslashes.
         pub(crate) trait DBusArg {
             type DBusType;
 
@@ -1213,7 +1246,7 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
         }
 
         // Types that implement dbus::arg::Append do not need any conversion.
-        pub(crate) trait DirectDBus: Clone + std::fmt::Display {}
+        pub(crate) trait DirectDBus: Clone + std::fmt::Debug {}
         impl DirectDBus for bool {}
         impl DirectDBus for i32 {}
         impl DirectDBus for u32 {}
@@ -1241,7 +1274,7 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
             }
 
             fn log(data: &T) -> String {
-                String::from(format!("{}", data))
+                format!("{:?}", data)
             }
         }
 
@@ -1265,11 +1298,11 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
             }
 
             fn log(data: &std::fs::File) -> String {
-                String::from(format!("{:?}", data))
+                format!("{:?}", data)
             }
         }
 
-        impl<T: DBusArg> DBusArg for Vec<T> where T: std::fmt::Debug {
+        impl<T: DBusArg> DBusArg for Vec<T> {
             type DBusType = Vec<T::DBusType>;
 
             fn from_dbus(
@@ -1301,7 +1334,14 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
             }
 
             fn log(data: &Vec<T>) -> String {
-                String::from(format!("{:?}", data))
+                format!(
+                    "[{}]",
+                    data
+                        .iter()
+                        .map(|d| <T as DBusArg>::log(d))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
             }
         }
 
@@ -1310,7 +1350,6 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
                 <T as DBusArg>::DBusType: dbus::arg::RefArg
                     + 'static
                     + RefArgToRust<RustType = <T as DBusArg>::DBusType>,
-                T: std::fmt::Debug
         {
             type DBusType = dbus::arg::PropMap;
 
@@ -1335,7 +1374,7 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
                 match prop_value.arg_type() {
                     dbus::arg::ArgType::Variant => (),
                     _ => {
-                        return Err(Box::new(DBusArgError::new(String::from(format!("{} must be a variant", OPTION_KEY)))));
+                        return Err(Box::new(DBusArgError::new(format!("{} must be a variant", OPTION_KEY))));
                     }
                 };
 
@@ -1367,7 +1406,11 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
             }
 
             fn log(data: &Option<T>) -> String {
-                String::from(format!("{:?}", data))
+                if let Some(d) = data.as_ref() {
+                    format!("Some({})", <T as DBusArg>::log(d))
+                } else {
+                    String::from("None")
+                }
             }
         }
 
@@ -1378,8 +1421,6 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
                     + Hash
                     + dbus::arg::RefArg
                     + RefArgToRust<RustType = <K as DBusArg>::DBusType>,
-                K: std::fmt::Debug,
-                V: std::fmt::Debug,
         {
             type DBusType = std::collections::HashMap<K::DBusType, V::DBusType>;
 
@@ -1423,12 +1464,22 @@ pub fn generate_dbus_arg(_item: TokenStream) -> TokenStream {
             }
 
             fn log(data: &std::collections::HashMap<K, V>) -> String {
-                String::from(format!("{:?}", data))
+                format!(
+                    "{{{}}}",
+                    data.iter()
+                        .map(|(k, v)| format!(
+                            "{}: {}",
+                            <K as DBusArg>::log(k),
+                            <V as DBusArg>::log(v),
+                        ))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
             }
         }
     };
 
-    debug_output_to_file(&gen, format!("out-generate_dbus_arg.rs"));
+    debug_output_to_file(&gen, "out-generate_dbus_arg.rs".into());
 
     gen.into()
 }

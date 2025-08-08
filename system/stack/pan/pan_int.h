@@ -25,8 +25,11 @@
 #ifndef PAN_INT_H
 #define PAN_INT_H
 
+#include <bluetooth/log.h>
+
 #include <cstdint>
 
+#include "internal_include/bt_target.h"
 #include "stack/include/bt_hdr.h"
 #include "stack/include/pan_api.h"
 #include "types/bluetooth/uuid.h"
@@ -71,7 +74,6 @@ typedef struct {
     size_t errors{0};
     size_t drops{0};
   } write, read;
-
 } tPAN_CONN;
 
 /*  The main PAN control block
@@ -86,10 +88,8 @@ typedef struct {
   tPAN_BRIDGE_REQ_CB* pan_bridge_req_cb;
   tPAN_DATA_IND_CB* pan_data_ind_cb;
   tPAN_DATA_BUF_IND_CB* pan_data_buf_ind_cb;
-  tPAN_FILTER_IND_CB*
-      pan_pfilt_ind_cb; /* protocol filter indication callback */
-  tPAN_MFILTER_IND_CB*
-      pan_mfilt_ind_cb; /* multicast filter indication callback */
+  tPAN_FILTER_IND_CB* pan_pfilt_ind_cb;  /* protocol filter indication callback */
+  tPAN_MFILTER_IND_CB* pan_mfilt_ind_cb; /* multicast filter indication callback */
   tPAN_TX_DATA_FLOW_CB* pan_tx_data_flow_cb;
 
   char* user_service_name;
@@ -107,23 +107,18 @@ extern tPAN_CB pan_cb;
 
 /******************************************************************************/
 void pan_register_with_bnep(void);
-void pan_conn_ind_cb(uint16_t handle, const RawAddress& p_bda,
-                     const bluetooth::Uuid& remote_uuid,
+void pan_conn_ind_cb(uint16_t handle, const RawAddress& p_bda, const bluetooth::Uuid& remote_uuid,
                      const bluetooth::Uuid& local_uuid, bool is_role_change);
-void pan_connect_state_cb(uint16_t handle, const RawAddress& rem_bda,
-                          tBNEP_RESULT result, bool is_role_change);
-void pan_data_buf_ind_cb(uint16_t handle, const RawAddress& src,
-                         const RawAddress& dst, uint16_t protocol,
-                         BT_HDR* p_buf, bool ext);
+void pan_connect_state_cb(uint16_t handle, const RawAddress& rem_bda, tBNEP_RESULT result,
+                          bool is_role_change);
+void pan_data_buf_ind_cb(uint16_t handle, const RawAddress& src, const RawAddress& dst,
+                         uint16_t protocol, BT_HDR* p_buf, bool ext);
 void pan_tx_data_flow_cb(uint16_t handle, tBNEP_RESULT event);
-void pan_proto_filt_ind_cb(uint16_t handle, bool indication,
-                           tBNEP_RESULT result, uint16_t num_filters,
-                           uint8_t* p_filters);
-void pan_mcast_filt_ind_cb(uint16_t handle, bool indication,
-                           tBNEP_RESULT result, uint16_t num_filters,
-                           uint8_t* p_filters);
-uint32_t pan_register_with_sdp(uint16_t uuid, const char* p_name,
-                               const char* p_desc);
+void pan_proto_filt_ind_cb(uint16_t handle, bool indication, tBNEP_RESULT result,
+                           uint16_t num_filters, uint8_t* p_filters);
+void pan_mcast_filt_ind_cb(uint16_t handle, bool indication, tBNEP_RESULT result,
+                           uint16_t num_filters, uint8_t* p_filters);
+uint32_t pan_register_with_sdp(uint16_t uuid, const char* p_name, const char* p_desc);
 tPAN_CONN* pan_allocate_pcb(const RawAddress& p_bda, uint16_t handle);
 tPAN_CONN* pan_get_pcb_by_handle(uint16_t handle);
 tPAN_CONN* pan_get_pcb_by_addr(const RawAddress& p_bda);
@@ -132,5 +127,10 @@ void pan_release_pcb(tPAN_CONN* p_pcb);
 void pan_dump_status(void);
 
 /******************************************************************************/
+
+namespace std {
+template <>
+struct formatter<tPAN_STATE> : enum_formatter<tPAN_STATE> {};
+}  // namespace std
 
 #endif

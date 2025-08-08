@@ -24,12 +24,6 @@ final class StackEvent {
     static final int EVENT_TYPE_AUDIO_STATE_CHANGED = 2;
     static final int EVENT_TYPE_AUDIO_CONFIG_CHANGED = 3;
 
-    // match up with btav_connection_state_t enum of bt_av.h
-    static final int CONNECTION_STATE_DISCONNECTED = 0;
-    static final int CONNECTION_STATE_CONNECTING = 1;
-    static final int CONNECTION_STATE_CONNECTED = 2;
-    static final int CONNECTION_STATE_DISCONNECTING = 3;
-
     // match up with btav_audio_state_t enum of bt_av.h
     static final int AUDIO_STATE_REMOTE_SUSPEND = 0;
     static final int AUDIO_STATE_STOPPED = 1;
@@ -47,24 +41,26 @@ final class StackEvent {
 
     @Override
     public String toString() {
-        String s = "StackEvent<device=" + mDevice + ", type =";
+        StringBuilder sb = new StringBuilder("StackEvent<device=" + mDevice + ", type =");
         switch (mType) {
             case EVENT_TYPE_CONNECTION_STATE_CHANGED:
-                s += "EVENT_TYPE_CONNECTION_STATE_CHANGED, state=" + mState;
+                sb.append("EVENT_TYPE_CONNECTION_STATE_CHANGED, state=").append(mState);
                 break;
             case EVENT_TYPE_AUDIO_STATE_CHANGED:
-                s += "EVENT_TYPE_AUDIO_STATE_CHANGED, state=" + mState;
+                sb.append("EVENT_TYPE_AUDIO_STATE_CHANGED, state=").append(mState);
                 break;
             case EVENT_TYPE_AUDIO_CONFIG_CHANGED:
-                s += "EVENT_TYPE_AUDIO_CONFIG_CHANGED, sampleRate=" + mSampleRate
-                        + ", channelCount=" + mChannelCount;
+                sb.append("EVENT_TYPE_AUDIO_CONFIG_CHANGED, sampleRate=")
+                        .append(mSampleRate)
+                        .append(", channelCount=")
+                        .append(mChannelCount);
                 break;
             default:
-                s += "Unknown";
+                sb.append("Unknown");
                 break;
         }
-        s += ">";
-        return s;
+        sb.append(">");
+        return sb.toString();
     }
 
     static StackEvent connectionStateChanged(BluetoothDevice device, int state) {
@@ -81,8 +77,7 @@ final class StackEvent {
         return event;
     }
 
-    static StackEvent audioConfigChanged(BluetoothDevice device, int sampleRate,
-            int channelCount) {
+    static StackEvent audioConfigChanged(BluetoothDevice device, int sampleRate, int channelCount) {
         StackEvent event = new StackEvent(StackEvent.EVENT_TYPE_AUDIO_CONFIG_CHANGED);
         event.mDevice = device;
         event.mSampleRate = sampleRate;

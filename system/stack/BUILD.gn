@@ -34,27 +34,28 @@ source_set("nonstandard_codecs") {
       "//bt/system/bta/include",
       "//bt/system/btif/include",
       "//bt/system/include",
-      "//bt/system/internal_include",
       "//bt/system/stack",
       "//bt/system/stack/include",
       "//bt/system/utils/include",
     ]
 
     deps = [
-      "//bt/system/gd/rust/shim:init_flags_bridge_header",
       "//bt/system/stack/mmc",
     ]
 
     configs += [
       "//bt/system:target_defaults",
+      "//bt/system/log:log_defaults",
     ]
   }
 }
 
 source_set("stack") {
   sources = [
+    "ais/ais_ble.cc",
     "a2dp/a2dp_api.cc",
     "a2dp/a2dp_codec_config.cc",
+    "a2dp/a2dp_ext.cc",
     "a2dp/a2dp_sbc.cc",
     "a2dp/a2dp_sbc_decoder.cc",
     "a2dp/a2dp_sbc_encoder.cc",
@@ -62,7 +63,6 @@ source_set("stack") {
     "acl/acl.cc",
     "acl/ble_acl.cc",
     "acl/btm_acl.cc",
-    "acl/btm_ble_connection_establishment.cc",
     "acl/btm_pm.cc",
     "arbiter/acl_arbiter.cc",
     "avct/avct_api.cc",
@@ -91,13 +91,10 @@ source_set("stack") {
     "bnep/bnep_api.cc",
     "bnep/bnep_main.cc",
     "bnep/bnep_utils.cc",
-    "btm/ble_advertiser_hci_interface.cc",
     "btm/ble_scanner_hci_interface.cc",
     "btm/btm_ble.cc",
     "btm/btm_ble_addr.cc",
     "btm/btm_ble_adv_filter.cc",
-    "btm/btm_ble_batchscan.cc",
-    "btm/btm_ble_bgconn.cc",
     "btm/btm_ble_cont_energy.cc",
     "btm/btm_ble_gap.cc",
     "btm/btm_ble_privacy.cc",
@@ -116,18 +113,18 @@ source_set("stack") {
     "btm/btm_sec.cc",
     "btm/btm_sec_cb.cc",
     "btm/btm_security_client_interface.cc",
+    "btm/security_event_parser.cc",
     "btm/hfp_lc3_encoder_linux.cc",
     "btm/hfp_lc3_decoder_linux.cc",
     "btm/hfp_msbc_encoder.cc",
     "btm/hfp_msbc_decoder.cc",
-    "btu/btu_event.cc",
     "btu/btu_hcif.cc",
     "btu/main_thread.cc",
     "eatt/eatt.cc",
     "gap/gap_ble.cc",
     "gap/gap_conn.cc",
     "gatt/att_protocol.cc",
-    "gatt/connection_manager.cc",
+    "connection_manager/connection_manager.cc",
     "gatt/gatt_api.cc",
     "gatt/gatt_attr.cc",
     "gatt/gatt_auth.cc",
@@ -145,11 +142,13 @@ source_set("stack") {
     "hid/hidh_conn.cc",
     "l2cap/l2c_api.cc",
     "l2cap/l2c_ble.cc",
+    "l2cap/l2c_ble_conn_params.cc",
     "l2cap/l2c_csm.cc",
     "l2cap/l2c_fcr.cc",
     "l2cap/l2c_link.cc",
     "l2cap/l2c_main.cc",
     "l2cap/l2c_utils.cc",
+    "l2cap/l2cap_api.cc",
     "metrics/stack_metrics_logging.cc",
     "pan/pan_api.cc",
     "pan/pan_main.cc",
@@ -163,6 +162,7 @@ source_set("stack") {
     "rfcomm/rfc_port_if.cc",
     "rfcomm/rfc_ts_frames.cc",
     "rfcomm/rfc_utils.cc",
+    "rnr/remote_name_request.cc",
     "sdp/sdp_api.cc",
     "sdp/sdp_db.cc",
     "sdp/sdp_discovery.cc",
@@ -186,6 +186,7 @@ source_set("stack") {
   include_dirs = [
     ".",
     "include",
+    "ais",
     "avct",
     "btm",
     "avrc",
@@ -208,36 +209,77 @@ source_set("stack") {
     "//bt/system/ctrlr/include",
     "//bt/system/gd",
     "//bt/system/hcis",
-    "//bt/system/internal_include",
     "//bt/system/linux_include",
     "//bt/system/rpc/include",
-    "//bt/system/types",
     "//bt/system/udrv/include",
     "//bt/system/vnd/ble",
     "//bt/system/vnd/include",
   ]
 
   deps = [
+    "//bt/sysprop:libcom.android.sysprop.bluetooth",
     "//bt/system/gd/crypto_toolbox:crypto_toolbox",
+    "//bt/system/gd/rust/topshim:cxxlibheader",
     ":nonstandard_codecs",
     "//bt/system:libbt-platform-protos-lite",
-    "//bt/system/gd/rust/shim:init_flags_bridge_header",
     "//bt/system/stack/mmc",
     "//bt/system/types",
-    "//bt/system/types",
   ]
+  if (use.test) {
+    deps += [
+      ":sco_hci_linux_test",
+    ]
+  }
 
   configs += [
     "//bt/system:target_defaults",
+    "//bt/system/log:log_defaults",
   ]
 }
 
 if (use.test) {
+  executable("sco_hci_linux_test") {
+    sources = [
+      "btm/btm_sco_hci.cc",
+      "test/btm/sco_hci_linux_test.cc",
+      "//bt/system/test/common/core_interface.cc",
+      "//bt/system/test/common/mock_functions.cc",
+      "//bt/system/test/fake/fake_osi.cc",
+      "//bt/system/test/mock/mock_bluetooth_interface.cc",
+      "//bt/system/test/mock/mock_btif_stack_manager.cc",
+      "//bt/system/test/mock/mock_osi_alarm.cc",
+      "//bt/system/test/mock/mock_osi_allocator.cc",
+      "//bt/system/test/mock/mock_osi_fixed_queue.cc",
+      "//bt/system/test/mock/mock_osi_list.cc",
+      "//bt/system/test/mock/mock_stack_rnr_interface.cc",
+      "//bt/system/test/mock/mock_udrv_ulinux_uipc.cc",
+    ]
+
+    include_dirs = [
+      "btm",
+      "include",
+      "test/common",
+    ]
+    libs = [
+      "fmt",
+    ]
+    deps = [
+      "//bt/system/log:libbluetooth_log",
+      "//bt/system/common",
+      "//bt/system/osi",
+      "//bt/system/types",
+    ]
+    configs += [
+      "//bt/system:external_gmock_main",
+      "//bt/system:target_defaults",
+      "//bt/system/log:log_defaults",
+    ]
+  }
+
   executable("net_test_btm_iso") {
     sources = [
       "btm/btm_iso.cc",
       "test/btm_iso_test.cc",
-      "test/common/mock_controller.cc",
       "test/common/mock_gatt_layer.cc",
       "test/common/mock_hcic_layer.cc",
     ]
@@ -246,7 +288,6 @@ if (use.test) {
       "btm",
       "include",
       "test/common",
-      "//bt/system/internal_include",
       "//bt/system/packet/tests",
     ]
 
@@ -276,7 +317,6 @@ if (defined(use.android) && use.android) {
       "//bt/system/bta/include",
       "//bt/system/bta/sys",
       "//bt/system/embdrv/sbc/encoder/include",
-      "//bt/system/internal_include",
       "//bt/system/stack/a2dp",
       "//bt/system/stack/btm",
       "//bt/system/stack/include",
@@ -286,6 +326,7 @@ if (defined(use.android) && use.android) {
 
     libs = [
       "dl",
+      "fmt",
       "pthread",
       "resolv",
       "rt",
@@ -326,11 +367,9 @@ if (defined(use.android) && use.android) {
     include_dirs = [
       "//bt/system/",
       "//bt/system/linux_include",
-      "//bt/system/internal_include",
       "//bt/system/bta/include",
       "//bt/system/bta/sys",
       "//bt/system/embdrv/sbc/encoder/include",
-      "//bt/system/internal_include",
       "//bt/system/stack/a2dp",
       "//bt/system/stack/l2cap",
       "//bt/system/stack/btm",
@@ -341,6 +380,7 @@ if (defined(use.android) && use.android) {
 
     libs = [
       "dl",
+      "fmt",
       "pthread",
       "resolv",
       "rt",

@@ -16,16 +16,18 @@
  *
  ******************************************************************************/
 
-#include <base/logging.h>
 #include <base/strings/string_number_conversions.h>
+#include <bluetooth/log.h>
 
 #include <list>
 
 #include "crypto_toolbox/crypto_toolbox.h"
 #include "gatt_int.h"
+#include "stack/include/bt_types.h"
 #include "types/bluetooth/uuid.h"
 
 using bluetooth::Uuid;
+using namespace bluetooth;
 
 static size_t calculate_database_info_size(std::list<tGATT_SRV_LIST_ELEM>* lst_ptr) {
   size_t len = 0;
@@ -38,7 +40,7 @@ static size_t calculate_database_info_size(std::list<tGATT_SRV_LIST_ELEM>* lst_p
           attr_it->uuid == Uuid::From16Bit(GATT_UUID_SEC_SERVICE)) {
         // Service declaration (Handle + Type + Value)
         len += 4 + gatt_build_uuid_to_stream_len(attr_it->p_value->uuid);
-      } else if (attr_it->uuid == Uuid::From16Bit(GATT_UUID_INCLUDE_SERVICE)){
+      } else if (attr_it->uuid == Uuid::From16Bit(GATT_UUID_INCLUDE_SERVICE)) {
         // Included service declaration (Handle + Type + Value)
         len += 8 + gatt_build_uuid_to_stream_len(attr_it->p_value->incl_handle.service_type);
       } else if (attr_it->uuid == Uuid::From16Bit(GATT_UUID_CHAR_DECLARE)) {
@@ -78,7 +80,7 @@ static void fill_database_info(std::list<tGATT_SRV_LIST_ELEM>* lst_ptr, uint8_t*
         }
 
         gatt_build_uuid_to_stream(&p_data, attr_it->p_value->uuid);
-      } else if (attr_it->uuid == Uuid::From16Bit(GATT_UUID_INCLUDE_SERVICE)){
+      } else if (attr_it->uuid == Uuid::From16Bit(GATT_UUID_INCLUDE_SERVICE)) {
         // Included service declaration
         UINT16_TO_STREAM(p_data, attr_it->handle);
         UINT16_TO_STREAM(p_data, GATT_UUID_INCLUDE_SERVICE);
@@ -107,9 +109,7 @@ static void fill_database_info(std::list<tGATT_SRV_LIST_ELEM>* lst_ptr, uint8_t*
         // Descriptor
         UINT16_TO_STREAM(p_data, attr_it->handle);
         UINT16_TO_STREAM(p_data, attr_it->uuid.As16Bit());
-        UINT16_TO_STREAM(p_data, attr_it->p_value
-                                     ? attr_it->p_value->char_ext_prop
-                                     : 0x0000);
+        UINT16_TO_STREAM(p_data, attr_it->p_value ? attr_it->p_value->char_ext_prop : 0x0000);
       }
     }
   }
@@ -122,10 +122,8 @@ Octet16 gatts_calculate_database_hash(std::list<tGATT_SRV_LIST_ELEM>* lst_ptr) {
   fill_database_info(lst_ptr, serialized.data());
 
   std::reverse(serialized.begin(), serialized.end());
-  Octet16 db_hash = crypto_toolbox::aes_cmac(Octet16{0}, serialized.data(),
-                                  serialized.size());
-  LOG(INFO) << __func__ << ": hash="
-           << base::HexEncode(db_hash.data(), db_hash.size());
+  Octet16 db_hash = crypto_toolbox::aes_cmac(Octet16{0}, serialized.data(), serialized.size());
+  log::info("hash={}", base::HexEncode(db_hash.data(), db_hash.size()));
 
   return db_hash;
 }

@@ -24,11 +24,17 @@
  ******************************************************************************/
 #include <frameworks/proto_logging/stats/enums/bluetooth/enums.pb.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 
-// BTA_HD_INCLUDED
-#include "bt_target.h"  // Must be first to define build configuration
+#include "bta_hd_api.h"
+#include "bta_sys.h"
+#include "hiddefs.h"
+#include "internal_include/bt_target.h"
 #if defined(BTA_HD_INCLUDED) && (BTA_HD_INCLUDED == TRUE)
+
+#include <bluetooth/log.h>
 
 #include "bta/hd/bta_hd_int.h"
 #include "include/hardware/bt_hd.h"
@@ -41,12 +47,11 @@
 #include "types/raw_address.h"
 
 using namespace bluetooth::legacy::stack::sdp;
+using namespace bluetooth;
 
-static void bta_hd_cback(const RawAddress& bd_addr, uint8_t event,
-                         uint32_t data, BT_HDR* pdata);
+static void bta_hd_cback(const RawAddress& bd_addr, uint8_t event, uint32_t data, BT_HDR* pdata);
 
-static bool check_descriptor(uint8_t* data, uint16_t length,
-                             bool* has_report_id) {
+static bool check_descriptor(uint8_t* data, uint16_t length, bool* has_report_id) {
   uint8_t* ptr = data;
 
   *has_report_id = FALSE;
@@ -72,7 +77,7 @@ static bool check_descriptor(uint8_t* data, uint16_t length,
     }
   }
 
-  return (ptr == data + length);
+  return ptr == data + length;
 }
 
 /*******************************************************************************
@@ -88,7 +93,7 @@ void bta_hd_api_enable(tBTA_HD_DATA* p_data) {
   tBTA_HD_STATUS status = BTA_HD_ERROR;
   tHID_STATUS ret;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   HID_DevInit();
 
@@ -101,7 +106,7 @@ void bta_hd_api_enable(tBTA_HD_DATA* p_data) {
   if (ret == HID_SUCCESS) {
     status = BTA_HD_OK;
   } else {
-    LOG_ERROR("%s: Failed to register HID device (%d)", __func__, ret);
+    log::error("Failed to register HID device ({})", ret);
   }
 
   /* signal BTA call back event */
@@ -123,14 +128,18 @@ void bta_hd_api_disable(void) {
   tBTA_HD_STATUS status = BTA_HD_ERROR;
   tHID_STATUS ret;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   /* service is not enabled */
-  if (bta_hd_cb.p_cback == NULL) return;
+  if (bta_hd_cb.p_cback == NULL) {
+    return;
+  }
 
   /* Remove service record */
   if (bta_hd_cb.sdp_handle != 0) {
-    get_legacy_stack_sdp_api()->handle.SDP_DeleteRecord(bta_hd_cb.sdp_handle);
+    if (!get_legacy_stack_sdp_api()->handle.SDP_DeleteRecord(bta_hd_cb.sdp_handle)) {
+      log::warn("Unable to delete SDP record handle:{}", bta_hd_cb.sdp_handle);
+    };
     bta_sys_remove_uuid(UUID_SERVCLASS_HUMAN_INTERFACE);
   }
 
@@ -139,8 +148,7 @@ void bta_hd_api_disable(void) {
   if (ret == HID_SUCCESS) {
     status = BTA_HD_OK;
   } else {
-    LOG_ERROR("%s: Failed to deregister HID device (%s)", __func__,
-              hid_status_text(ret).c_str());
+    log::error("Failed to deregister HID device ({})", hid_status_text(ret));
   }
 
   tBTA_HD bta_hd;
@@ -164,7 +172,7 @@ void bta_hd_register_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_REGISTER_APP* p_app_data = (tBTA_HD_REGISTER_APP*)p_data;
   bool use_report_id = FALSE;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   ret.reg_status.in_use = FALSE;
 
@@ -172,15 +180,12 @@ void bta_hd_register_act(tBTA_HD_DATA* p_data) {
    * itself is well-formed. Also check if descriptor has Report Id item so we
    * know if report will have prefix or not. */
   if (p_app_data->d_len > BTA_HD_APP_DESCRIPTOR_LEN ||
-      !check_descriptor(p_app_data->d_data, p_app_data->d_len,
-                        &use_report_id)) {
-    LOG_ERROR("%s: Descriptor is too long or malformed", __func__);
+      !check_descriptor(p_app_data->d_data, p_app_data->d_len, &use_report_id)) {
+    log::error("Descriptor is too long or malformed");
     ret.reg_status.status = BTA_HD_ERROR;
     (*bta_hd_cb.p_cback)(BTA_HD_REGISTER_APP_EVT, &ret);
     bluetooth::shim::CountCounterMetrics(
-        android::bluetooth::CodePathCounterKeyEnum::
-            HIDD_REGISTER_DESCRIPTOR_MALFORMED,
-        1);
+            android::bluetooth::CodePathCounterKeyEnum::HIDD_REGISTER_DESCRIPTOR_MALFORMED, 1);
     return;
   }
 
@@ -188,25 +193,25 @@ void bta_hd_register_act(tBTA_HD_DATA* p_data) {
 
   /* Remove old record if for some reason it's already registered */
   if (bta_hd_cb.sdp_handle != 0) {
-    get_legacy_stack_sdp_api()->handle.SDP_DeleteRecord(bta_hd_cb.sdp_handle);
+    if (!get_legacy_stack_sdp_api()->handle.SDP_DeleteRecord(bta_hd_cb.sdp_handle)) {
+      log::warn("Unable to delete SDP record handle:{}", bta_hd_cb.sdp_handle);
+    }
   }
 
   bta_hd_cb.use_report_id = use_report_id;
   bta_hd_cb.sdp_handle = get_legacy_stack_sdp_api()->handle.SDP_CreateRecord();
-  HID_DevAddRecord(bta_hd_cb.sdp_handle, p_app_data->name,
-                   p_app_data->description, p_app_data->provider,
-                   p_app_data->subclass, p_app_data->d_len, p_app_data->d_data);
+  HID_DevAddRecord(bta_hd_cb.sdp_handle, p_app_data->name, p_app_data->description,
+                   p_app_data->provider, p_app_data->subclass, p_app_data->d_len,
+                   p_app_data->d_data);
   bta_sys_add_uuid(UUID_SERVCLASS_HUMAN_INTERFACE);
 
-  HID_DevSetIncomingQos(
-      p_app_data->in_qos.service_type, p_app_data->in_qos.token_rate,
-      p_app_data->in_qos.token_bucket_size, p_app_data->in_qos.peak_bandwidth,
-      p_app_data->in_qos.access_latency, p_app_data->in_qos.delay_variation);
+  HID_DevSetIncomingQos(p_app_data->in_qos.service_type, p_app_data->in_qos.token_rate,
+                        p_app_data->in_qos.token_bucket_size, p_app_data->in_qos.peak_bandwidth,
+                        p_app_data->in_qos.access_latency, p_app_data->in_qos.delay_variation);
 
-  HID_DevSetOutgoingQos(
-      p_app_data->out_qos.service_type, p_app_data->out_qos.token_rate,
-      p_app_data->out_qos.token_bucket_size, p_app_data->out_qos.peak_bandwidth,
-      p_app_data->out_qos.access_latency, p_app_data->out_qos.delay_variation);
+  HID_DevSetOutgoingQos(p_app_data->out_qos.service_type, p_app_data->out_qos.token_rate,
+                        p_app_data->out_qos.token_bucket_size, p_app_data->out_qos.peak_bandwidth,
+                        p_app_data->out_qos.access_latency, p_app_data->out_qos.delay_variation);
 
   // application is registered so we can accept incoming connections
   HID_DevSetIncomingPolicy(TRUE);
@@ -230,13 +235,15 @@ void bta_hd_register_act(tBTA_HD_DATA* p_data) {
 void bta_hd_unregister_act() {
   tBTA_HD_STATUS status = BTA_HD_OK;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   // application is no longer registered so we do not want incoming connections
   HID_DevSetIncomingPolicy(FALSE);
 
   if (bta_hd_cb.sdp_handle != 0) {
-    get_legacy_stack_sdp_api()->handle.SDP_DeleteRecord(bta_hd_cb.sdp_handle);
+    if (!get_legacy_stack_sdp_api()->handle.SDP_DeleteRecord(bta_hd_cb.sdp_handle)) {
+      log::warn("Unable to delete SDP record handle:{}", bta_hd_cb.sdp_handle);
+    }
   }
 
   bta_hd_cb.sdp_handle = 0;
@@ -257,7 +264,7 @@ void bta_hd_unregister_act() {
  *
  ******************************************************************************/
 void bta_hd_unregister2_act(tBTA_HD_DATA* p_data) {
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   // close first
   bta_hd_close_act(p_data);
@@ -284,17 +291,17 @@ void bta_hd_connect_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_DEVICE_CTRL* p_ctrl = (tBTA_HD_DEVICE_CTRL*)p_data;
   tBTA_HD cback_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   ret = HID_DevPlugDevice(p_ctrl->addr);
   if (ret != HID_SUCCESS) {
-    LOG_WARN("%s: HID_DevPlugDevice returned %d", __func__, ret);
+    log::warn("HID_DevPlugDevice returned {}", ret);
     return;
   }
 
   ret = HID_DevConnect();
   if (ret != HID_SUCCESS) {
-    LOG_WARN("%s: HID_DevConnect returned %d", __func__, ret);
+    log::warn("HID_DevConnect returned {}", ret);
     return;
   }
 
@@ -317,12 +324,12 @@ void bta_hd_disconnect_act() {
   tHID_STATUS ret;
   tBTA_HD cback_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   ret = HID_DevDisconnect();
 
   if (ret != HID_SUCCESS) {
-    LOG_WARN("%s: HID_DevDisconnect returned %d", __func__, ret);
+    log::warn("HID_DevDisconnect returned {}", ret);
     return;
   }
 
@@ -344,7 +351,7 @@ void bta_hd_disconnect_act() {
 void bta_hd_add_device_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_DEVICE_CTRL* p_ctrl = (tBTA_HD_DEVICE_CTRL*)p_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   HID_DevPlugDevice(p_ctrl->addr);
 }
@@ -361,7 +368,7 @@ void bta_hd_add_device_act(tBTA_HD_DATA* p_data) {
 void bta_hd_remove_device_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_DEVICE_CTRL* p_ctrl = (tBTA_HD_DEVICE_CTRL*)p_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   HID_DevUnplugDevice(p_ctrl->addr);
 }
@@ -380,14 +387,12 @@ void bta_hd_send_report_act(tBTA_HD_DATA* p_data) {
   uint8_t channel;
   uint8_t report_id;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   channel = p_report->use_intr ? HID_CHANNEL_INTR : HID_CHANNEL_CTRL;
-  report_id =
-      (bta_hd_cb.use_report_id || bta_hd_cb.boot_mode) ? p_report->id : 0x00;
+  report_id = (bta_hd_cb.use_report_id || bta_hd_cb.boot_mode) ? p_report->id : 0x00;
 
-  HID_DevSendReport(channel, p_report->type, report_id, p_report->len,
-                    p_report->data);
+  HID_DevSendReport(channel, p_report->type, report_id, p_report->len, p_report->data);
 
   /* trigger PM */
   bta_sys_busy(BTA_ID_HD, 1, bta_hd_cb.bd_addr);
@@ -407,12 +412,12 @@ void bta_hd_report_error_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_REPORT_ERR* p_report = (tBTA_HD_REPORT_ERR*)p_data;
   tHID_STATUS ret;
 
-  LOG_VERBOSE("%s: error = %d", __func__, p_report->error);
+  log::verbose("error = {}", p_report->error);
 
   ret = HID_DevReportError(p_report->error);
 
   if (ret != HID_SUCCESS) {
-    LOG_WARN("%s: HID_DevReportError returned %d", __func__, ret);
+    log::warn("HID_DevReportError returned {}", ret);
   }
 }
 
@@ -428,14 +433,14 @@ void bta_hd_report_error_act(tBTA_HD_DATA* p_data) {
 void bta_hd_vc_unplug_act() {
   tHID_STATUS ret;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   bta_hd_cb.vc_unplug = TRUE;
 
   ret = HID_DevVirtualCableUnplug();
 
   if (ret != HID_SUCCESS) {
-    LOG_WARN("%s: HID_DevVirtualCableUnplug returned %d", __func__, ret);
+    log::warn("HID_DevVirtualCableUnplug returned {}", ret);
   }
 
   /* trigger PM */
@@ -456,7 +461,7 @@ void bta_hd_open_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_CBACK_DATA* p_cback = (tBTA_HD_CBACK_DATA*)p_data;
   tBTA_HD cback_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   HID_DevPlugDevice(p_cback->addr);
   bta_sys_conn_open(BTA_ID_HD, 1, p_cback->addr);
@@ -481,7 +486,7 @@ void bta_hd_close_act(tBTA_HD_DATA* p_data) {
   tBTA_HD cback_data;
   tBTA_HD_EVT cback_event = BTA_HD_CLOSE_EVT;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   bta_sys_conn_close(BTA_ID_HD, 1, p_cback->addr);
 
@@ -513,7 +518,7 @@ void bta_hd_intr_data_act(tBTA_HD_DATA* p_data) {
   uint8_t* p_buf = (uint8_t*)(p_msg + 1) + p_msg->offset;
   tBTA_HD_INTR_DATA ret;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   if (bta_hd_cb.use_report_id || bta_hd_cb.boot_mode) {
     if (len < 1) {
@@ -551,7 +556,7 @@ void bta_hd_get_report_act(tBTA_HD_DATA* p_data) {
   uint8_t* p_buf = (uint8_t*)(p_msg + 1) + p_msg->offset;
   tBTA_HD_GET_REPORT ret = {0, 0, 0};
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   uint16_t remaining_len = p_msg->len;
   if (remaining_len < 1) {
@@ -599,7 +604,7 @@ void bta_hd_set_report_act(tBTA_HD_DATA* p_data) {
   uint8_t* p_buf = (uint8_t*)(p_msg + 1) + p_msg->offset;
   tBTA_HD_SET_REPORT ret = {0, 0, 0, NULL};
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   if (len < 1) {
     return;
@@ -641,7 +646,7 @@ void bta_hd_set_protocol_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_CBACK_DATA* p_cback = (tBTA_HD_CBACK_DATA*)p_data;
   tBTA_HD cback_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   bta_hd_cb.boot_mode = (p_cback->data == HID_PAR_PROTOCOL_BOOT_MODE);
   cback_data.set_protocol = p_cback->data;
@@ -662,7 +667,7 @@ void bta_hd_vc_unplug_done_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_CBACK_DATA* p_cback = (tBTA_HD_CBACK_DATA*)p_data;
   tBTA_HD cback_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   bta_sys_conn_close(BTA_ID_HD, 1, p_cback->addr);
 
@@ -686,7 +691,7 @@ void bta_hd_vc_unplug_done_act(tBTA_HD_DATA* p_data) {
 void bta_hd_suspend_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_CBACK_DATA* p_cback = (tBTA_HD_CBACK_DATA*)p_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   bta_sys_idle(BTA_ID_HD, 1, p_cback->addr);
 }
@@ -703,7 +708,7 @@ void bta_hd_suspend_act(tBTA_HD_DATA* p_data) {
 void bta_hd_exit_suspend_act(tBTA_HD_DATA* p_data) {
   tBTA_HD_CBACK_DATA* p_cback = (tBTA_HD_CBACK_DATA*)p_data;
 
-  LOG_VERBOSE("%s", __func__);
+  log::verbose("");
 
   bta_sys_busy(BTA_ID_HD, 1, p_cback->addr);
   bta_sys_idle(BTA_ID_HD, 1, p_cback->addr);
@@ -718,12 +723,11 @@ void bta_hd_exit_suspend_act(tBTA_HD_DATA* p_data) {
  * Returns          void
  *
  ******************************************************************************/
-static void bta_hd_cback(const RawAddress& bd_addr, uint8_t event,
-                         uint32_t data, BT_HDR* pdata) {
+static void bta_hd_cback(const RawAddress& bd_addr, uint8_t event, uint32_t data, BT_HDR* pdata) {
   tBTA_HD_CBACK_DATA* p_buf = NULL;
   uint16_t sm_event = BTA_HD_INVALID_EVT;
 
-  LOG_VERBOSE("%s: event=%d", __func__, event);
+  log::verbose("event={}", event);
 
   switch (event) {
     case HID_DHOST_EVT_OPEN:
@@ -764,8 +768,8 @@ static void bta_hd_cback(const RawAddress& bd_addr, uint8_t event,
   }
 
   if (sm_event != BTA_HD_INVALID_EVT &&
-      (p_buf = (tBTA_HD_CBACK_DATA*)osi_malloc(sizeof(tBTA_HD_CBACK_DATA) +
-                                               sizeof(BT_HDR))) != NULL) {
+      (p_buf = (tBTA_HD_CBACK_DATA*)osi_malloc(sizeof(tBTA_HD_CBACK_DATA) + sizeof(BT_HDR))) !=
+              NULL) {
     p_buf->hdr.event = sm_event;
     p_buf->addr = bd_addr;
     p_buf->data = data;

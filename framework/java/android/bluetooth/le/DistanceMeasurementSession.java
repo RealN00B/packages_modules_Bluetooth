@@ -16,7 +16,11 @@
 
 package android.bluetooth.le;
 
-import static android.bluetooth.le.BluetoothLeUtils.getSyncTimeout;
+import static android.Manifest.permission.BLUETOOTH_CONNECT;
+import static android.Manifest.permission.BLUETOOTH_PRIVILEGED;
+import static android.bluetooth.BluetoothUtils.executeFromBinder;
+
+import static java.util.Objects.requireNonNull;
 
 import android.annotation.IntDef;
 import android.annotation.NonNull;
@@ -25,33 +29,30 @@ import android.annotation.SystemApi;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothStatusCodes;
 import android.bluetooth.IBluetoothGatt;
+import android.bluetooth.annotations.RequiresBluetoothConnectPermission;
 import android.content.AttributionSource;
-import android.os.Binder;
 import android.os.ParcelUuid;
 import android.os.RemoteException;
 import android.util.Log;
 
-import com.android.modules.utils.SynchronousResultReceiver;
-
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.util.Objects;
 import java.util.concurrent.Executor;
-import java.util.concurrent.TimeoutException;
 
 /**
  * This class provides a way to control an active distance measurement session.
+ *
  * <p>It also defines the required {@link DistanceMeasurementSession.Callback} that must be
  * implemented in order to be notified of distance measurement results and status events related to
  * the {@link DistanceMeasurementSession}.
  *
- * <p>To get an instance of {@link DistanceMeasurementSession}, first use
- * {@link DistanceMeasurementManager#startMeasurementSession(DistanceMeasurementParams, Executor,
+ * <p>To get an instance of {@link DistanceMeasurementSession}, first use {@link
+ * DistanceMeasurementManager#startMeasurementSession(DistanceMeasurementParams, Executor,
  * DistanceMeasurementSession.Callback)} to request to start a session. Once the session is started,
- * a {@link DistanceMeasurementSession} object is provided through
- * {@link DistanceMeasurementSession.Callback#onStarted(DistanceMeasurementSession)}.
- * If starting a session fails, the failure is reported through
- * {@link DistanceMeasurementSession.Callback#onStartFail(int)} with the failure reason.
+ * a {@link DistanceMeasurementSession} object is provided through {@link
+ * DistanceMeasurementSession.Callback#onStarted(DistanceMeasurementSession)}. If starting a session
+ * fails, the failure is reported through {@link
+ * DistanceMeasurementSession.Callback#onStartFail(int)} with the failure reason.
  *
  * @hide
  */
@@ -68,99 +69,70 @@ public final class DistanceMeasurementSession {
 
     /** @hide */
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef(value = {
-            BluetoothStatusCodes.SUCCESS,
-            BluetoothStatusCodes.ERROR_BLUETOOTH_NOT_ENABLED,
-            BluetoothStatusCodes.ERROR_DISTANCE_MEASUREMENT_INTERNAL,
-    })
-    public @interface StopSessionReturnValues{}
+    @IntDef(
+            value = {
+                BluetoothStatusCodes.SUCCESS,
+                BluetoothStatusCodes.ERROR_BLUETOOTH_NOT_ENABLED,
+                BluetoothStatusCodes.ERROR_DISTANCE_MEASUREMENT_INTERNAL,
+            })
+    public @interface StopSessionReturnValues {}
 
-    /**
-     * @hide
-     */
-    public DistanceMeasurementSession(IBluetoothGatt gatt, ParcelUuid uuid,
-            DistanceMeasurementParams params, Executor executor,
-            AttributionSource attributionSource, Callback callback) {
-        Objects.requireNonNull(gatt, "gatt is null");
-        Objects.requireNonNull(params, "params is null");
-        Objects.requireNonNull(executor, "executor is null");
-        Objects.requireNonNull(callback, "callback is null");
-        mGatt = gatt;
+    /** @hide */
+    public DistanceMeasurementSession(
+            IBluetoothGatt gatt,
+            ParcelUuid uuid,
+            DistanceMeasurementParams params,
+            Executor executor,
+            AttributionSource attributionSource,
+            Callback callback) {
+        mGatt = requireNonNull(gatt);
+        mDistanceMeasurementParams = requireNonNull(params);
+        mExecutor = requireNonNull(executor);
+        mCallback = requireNonNull(callback);
         mUuid = uuid;
-        mDistanceMeasurementParams = params;
-        mExecutor = executor;
         mAttributionSource = attributionSource;
-        mCallback = callback;
     }
 
     /**
      * Stops actively ranging, {@link Callback#onStopped} will be invoked if this succeeds.
      *
      * @return whether successfully stop or not
-     *
      * @hide
      */
     @SystemApi
-    @RequiresPermission(allOf = {
-            android.Manifest.permission.BLUETOOTH_CONNECT,
-            android.Manifest.permission.BLUETOOTH_PRIVILEGED,
-    })
+    @RequiresBluetoothConnectPermission
+    @RequiresPermission(allOf = {BLUETOOTH_CONNECT, BLUETOOTH_PRIVILEGED})
     public @StopSessionReturnValues int stopSession() {
-        final int defaultValue = BluetoothStatusCodes.ERROR_TIMEOUT;
         try {
-            final SynchronousResultReceiver<Integer> recv = SynchronousResultReceiver.get();
-            mGatt.stopDistanceMeasurement(mUuid, mDistanceMeasurementParams.getDevice(),
-                    mDistanceMeasurementParams.getMethodId(), mAttributionSource, recv);
-            return recv.awaitResultNoInterrupt(getSyncTimeout()).getValue(defaultValue);
-        } catch (TimeoutException e) {
-            Log.e(TAG, e.toString() + "\n" + Log.getStackTraceString(new Throwable()));
+            return mGatt.stopDistanceMeasurement(
+                    mUuid,
+                    mDistanceMeasurementParams.getDevice(),
+                    mDistanceMeasurementParams.getMethodId(),
+                    mAttributionSource);
         } catch (RemoteException e) {
-            throw e.rethrowAsRuntimeException();
+            Log.e(TAG, e.toString() + "\n" + Log.getStackTraceString(new Throwable()));
+            return BluetoothStatusCodes.ERROR_BLUETOOTH_NOT_ENABLED;
         }
-        return defaultValue;
     }
 
-    /**
-     * @hide
-     */
+    /** @hide */
     void onStarted() {
-        executeCallback(() -> mCallback.onStarted(this));
+        executeFromBinder(mExecutor, () -> mCallback.onStarted(this));
     }
 
-    /**
-     * @hide
-     */
+    /** @hide */
     void onStartFail(int reason) {
-        executeCallback(() -> mCallback.onStartFail(reason));
+        executeFromBinder(mExecutor, () -> mCallback.onStartFail(reason));
     }
 
-
-    /**
-     * @hide
-     */
+    /** @hide */
     void onStopped(int reason) {
-        executeCallback(() -> mCallback.onStopped(this, reason));
+        executeFromBinder(mExecutor, () -> mCallback.onStopped(this, reason));
     }
 
-    /**
-     * @hide
-     */
-    void onResult(@NonNull BluetoothDevice device,
-            @NonNull DistanceMeasurementResult result) {
-        executeCallback(() -> mCallback.onResult(device, result));
-    }
-
-
-    /**
-     * @hide
-     */
-    private void executeCallback(@NonNull Runnable runnable) {
-        final long identity = Binder.clearCallingIdentity();
-        try {
-            mExecutor.execute(runnable);
-        } finally {
-            Binder.restoreCallingIdentity(identity);
-        }
+    /** @hide */
+    void onResult(@NonNull BluetoothDevice device, @NonNull DistanceMeasurementResult result) {
+        executeFromBinder(mExecutor, () -> mCallback.onResult(device, result));
     }
 
     /**
@@ -170,22 +142,21 @@ public final class DistanceMeasurementSession {
      */
     @SystemApi
     public interface Callback {
-        /**
-         * @hide
-         */
+        /** @hide */
         @Retention(RetentionPolicy.SOURCE)
-        @IntDef(value = {
-                BluetoothStatusCodes.ERROR_UNKNOWN,
-                BluetoothStatusCodes.FEATURE_NOT_SUPPORTED,
-                BluetoothStatusCodes.ERROR_REMOTE_OPERATION_NOT_SUPPORTED,
-                BluetoothStatusCodes.REASON_LOCAL_APP_REQUEST,
-                BluetoothStatusCodes.REASON_LOCAL_STACK_REQUEST,
-                BluetoothStatusCodes.REASON_REMOTE_REQUEST,
-                BluetoothStatusCodes.ERROR_TIMEOUT,
-                BluetoothStatusCodes.ERROR_NO_LE_CONNECTION,
-                BluetoothStatusCodes.ERROR_BAD_PARAMETERS,
-                BluetoothStatusCodes.ERROR_DISTANCE_MEASUREMENT_INTERNAL,
-        })
+        @IntDef(
+                value = {
+                    BluetoothStatusCodes.ERROR_UNKNOWN,
+                    BluetoothStatusCodes.FEATURE_NOT_SUPPORTED,
+                    BluetoothStatusCodes.ERROR_REMOTE_OPERATION_NOT_SUPPORTED,
+                    BluetoothStatusCodes.REASON_LOCAL_APP_REQUEST,
+                    BluetoothStatusCodes.REASON_LOCAL_STACK_REQUEST,
+                    BluetoothStatusCodes.REASON_REMOTE_REQUEST,
+                    BluetoothStatusCodes.ERROR_TIMEOUT,
+                    BluetoothStatusCodes.ERROR_NO_LE_CONNECTION,
+                    BluetoothStatusCodes.ERROR_BAD_PARAMETERS,
+                    BluetoothStatusCodes.ERROR_DISTANCE_MEASUREMENT_INTERNAL,
+                })
         @interface Reason {}
 
         /**
@@ -193,43 +164,38 @@ public final class DistanceMeasurementSession {
          * DistanceMeasurementParams, Executor, DistanceMeasurementSession.Callback)} is successful.
          *
          * @param session the started {@link DistanceMeasurementSession}
-         *
          * @hide
          */
         @SystemApi
         void onStarted(@NonNull DistanceMeasurementSession session);
 
-         /**
+        /**
          * Invoked if {@link DistanceMeasurementManager#startMeasurementSession(
          * DistanceMeasurementParams, Executor, DistanceMeasurementSession.Callback)} fails.
          *
          * @param reason the failure reason
-         *
          * @hide
          */
         @SystemApi
-        void onStartFail(@NonNull @Reason int reason);
+        void onStartFail(@Reason int reason);
 
         /**
          * Invoked when a distance measurement session stopped.
          *
          * @param reason reason for the session stop
-         *
          * @hide
          */
         @SystemApi
-        void onStopped(@NonNull DistanceMeasurementSession session, @NonNull @Reason int reason);
+        void onStopped(@NonNull DistanceMeasurementSession session, @Reason int reason);
 
         /**
          * Invoked when get distance measurement result.
          *
          * @param device remote device
          * @param result {@link DistanceMeasurementResult} for this device
-         *
          * @hide
          */
         @SystemApi
-        void onResult(@NonNull BluetoothDevice device,
-                @NonNull DistanceMeasurementResult result);
+        void onResult(@NonNull BluetoothDevice device, @NonNull DistanceMeasurementResult result);
     }
 }

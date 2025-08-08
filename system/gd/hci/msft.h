@@ -25,14 +25,14 @@ namespace bluetooth {
 namespace hci {
 
 class MsftExtensionManager : public bluetooth::Module {
- public:
+public:
   MsftExtensionManager();
 
   MsftExtensionManager(const MsftExtensionManager&) = delete;
   MsftExtensionManager& operator=(const MsftExtensionManager&) = delete;
 
   using MsftAdvMonitorAddCallback =
-      base::Callback<void(uint8_t /* monitor_handle */, ErrorCode /* status */)>;
+          base::Callback<void(uint8_t /* monitor_handle */, ErrorCode /* status */)>;
   using MsftAdvMonitorRemoveCallback = base::Callback<void(ErrorCode /* status */)>;
   using MsftAdvMonitorEnableCallback = base::Callback<void(ErrorCode /* status */)>;
 
@@ -44,7 +44,7 @@ class MsftExtensionManager : public bluetooth::Module {
 
   static const ModuleFactory Factory;
 
- protected:
+protected:
   void ListDependencies(ModuleList* list) const override;
 
   void Start() override;
@@ -53,7 +53,7 @@ class MsftExtensionManager : public bluetooth::Module {
 
   std::string ToString() const override;
 
- private:
+private:
   struct impl;
   std::unique_ptr<impl> pimpl_;
 };

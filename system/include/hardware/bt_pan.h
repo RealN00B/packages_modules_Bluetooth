@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef ANDROID_INCLUDE_BT_PAN_H
-#define ANDROID_INCLUDE_BT_PAN_H
-#include <raw_address.h>
+#pragma once
 
-__BEGIN_DECLS
+#include <bluetooth/log.h>
+
+#include "hardware/bluetooth.h"
+#include "types/raw_address.h"
 
 #define BTPAN_ROLE_NONE 0
 #define BTPAN_ROLE_PANNAP 1
@@ -31,22 +32,16 @@ typedef enum {
   BTPAN_STATE_DISCONNECTING = 3
 } btpan_connection_state_t;
 
-typedef enum {
-  BTPAN_STATE_ENABLED = 0,
-  BTPAN_STATE_DISABLED = 1
-} btpan_control_state_t;
+typedef enum { BTPAN_STATE_ENABLED = 0, BTPAN_STATE_DISABLED = 1 } btpan_control_state_t;
 
 /**
  * Callback for pan connection state
  */
-typedef void (*btpan_connection_state_callback)(btpan_connection_state_t state,
-                                                bt_status_t error,
-                                                const RawAddress* bd_addr,
-                                                int local_role,
+typedef void (*btpan_connection_state_callback)(btpan_connection_state_t state, bt_status_t error,
+                                                const RawAddress* bd_addr, int local_role,
                                                 int remote_role);
-typedef void (*btpan_control_state_callback)(btpan_control_state_t state,
-                                             int local_role, bt_status_t error,
-                                             const char* ifname);
+typedef void (*btpan_control_state_callback)(btpan_control_state_t state, int local_role,
+                                             bt_status_t error, const char* ifname);
 
 typedef struct {
   size_t size;
@@ -75,8 +70,7 @@ typedef struct {
    * start bluetooth pan connection to the remote device by specified pan role.
    * The result state will be returned by btpan_connection_state_callback
    */
-  bt_status_t (*connect)(const RawAddress* bd_addr, int local_role,
-                         int remote_role);
+  bt_status_t (*connect)(const RawAddress* bd_addr, int local_role, int remote_role);
   /**
    * stop bluetooth pan connection. The result state will be returned by
    * btpan_connection_state_callback
@@ -87,9 +81,12 @@ typedef struct {
    * Cleanup the pan interface
    */
   void (*cleanup)(void);
-
 } btpan_interface_t;
 
-__END_DECLS
+namespace std {
+template <>
+struct formatter<btpan_connection_state_t> : enum_formatter<btpan_connection_state_t> {};
 
-#endif /* ANDROID_INCLUDE_BT_PAN_H */
+template <>
+struct formatter<btpan_control_state_t> : enum_formatter<btpan_control_state_t> {};
+}  // namespace std

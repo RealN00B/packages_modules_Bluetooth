@@ -26,8 +26,9 @@
 #define AVCT_API_H
 
 #include <cstdint>
+#include <string>
 
-#include "bt_target.h"
+#include "include/macros.h"
 #include "stack/include/bt_hdr.h"
 #include "types/raw_address.h"
 
@@ -41,10 +42,6 @@
 #define AVCT_BAD_HANDLE 2   /* Bad handle */
 #define AVCT_PID_IN_USE 3   /* PID already in use */
 #define AVCT_NOT_OPEN 4     /* Connection not open */
-
-/* PSM for AVCT. */
-#define AVCT_PSM 0x0017
-#define AVCT_BR_PSM 0x001B
 
 /* Protocol revision numbers */
 #define AVCT_REV_1_0 0x0100
@@ -64,13 +61,23 @@
 
 /* Message offset.  The number of bytes needed by the protocol stack for the
  * protocol headers of an AVCTP message packet.
-*/
+ */
 #define AVCT_MSG_OFFSET 15
 #define AVCT_BROWSE_OFFSET 17 /* the default offset for browsing channel */
 
 /* Connection role. */
-#define AVCT_INT 0 /* Initiator connection */
-#define AVCT_ACP 1 /* Acceptor connection */
+typedef enum {
+  AVCT_ROLE_INITIATOR = 0, /* Initiator connection */
+  AVCT_ROLE_ACCEPTOR = 1,  /* Acceptor connection */
+} tAVCT_ROLE;
+
+inline std::string avct_role_text(const tAVCT_ROLE& role) {
+  switch (role) {
+    CASE_RETURN_TEXT(AVCT_ROLE_INITIATOR);
+    CASE_RETURN_TEXT(AVCT_ROLE_ACCEPTOR);
+  }
+  RETURN_UNKNOWN_TYPE_STRING(tAVCT_ROLE, role);
+}
 
 /* Control role. */
 #define AVCT_TARGET 1  /* target  */
@@ -109,15 +116,14 @@ typedef void(tAVCT_CTRL_CBACK)(uint8_t handle, uint8_t event, uint16_t result,
 
 /* Message callback function */
 /* p_pkt->layer_specific is AVCT_DATA_CTRL or AVCT_DATA_BROWSE */
-typedef void(tAVCT_MSG_CBACK)(uint8_t handle, uint8_t label, uint8_t cr,
-                              BT_HDR* p_pkt);
+typedef void(tAVCT_MSG_CBACK)(uint8_t handle, uint8_t label, uint8_t cr, BT_HDR* p_pkt);
 
 /* Structure used by AVCT_CreateConn. */
 typedef struct {
   tAVCT_CTRL_CBACK* p_ctrl_cback; /* Control callback */
   tAVCT_MSG_CBACK* p_msg_cback;   /* Message callback */
   uint16_t pid;                   /* Profile ID */
-  uint8_t role;                   /* Initiator/acceptor role */
+  tAVCT_ROLE role;                /* Initiator/acceptor role */
   uint8_t control;                /* Control role (Control/Target) */
 } tAVCT_CC;
 
@@ -174,8 +180,7 @@ void AVCT_Deregister(void);
  * Returns          AVCT_SUCCESS if successful, otherwise error.
  *
  ******************************************************************************/
-uint16_t AVCT_CreateConn(uint8_t* p_handle, tAVCT_CC* p_cc,
-                         const RawAddress& peer_addr);
+uint16_t AVCT_CreateConn(uint8_t* p_handle, tAVCT_CC* p_cc, const RawAddress& peer_addr);
 
 /*******************************************************************************
  *
@@ -209,7 +214,7 @@ uint16_t AVCT_RemoveConn(uint8_t handle);
  * Returns          AVCT_SUCCESS if successful, otherwise error.
  *
  ******************************************************************************/
-uint16_t AVCT_CreateBrowse(uint8_t handle, uint8_t role);
+uint16_t AVCT_CreateBrowse(uint8_t handle, tAVCT_ROLE role);
 
 /*******************************************************************************
  *
@@ -274,5 +279,19 @@ uint16_t AVCT_GetPeerMtu(uint8_t handle);
  *
  ******************************************************************************/
 uint16_t AVCT_MsgReq(uint8_t handle, uint8_t label, uint8_t cr, BT_HDR* p_msg);
+
+/*******************************************************************************
+**
+** Function         AVCT_Dumpsys
+**
+** Description      This function provides dumpsys data during the dumpsys
+**                  procedure.
+**
+** Parameters:      fd: Descriptor used to write the AVCT internals
+**
+** Returns          void
+**
+*******************************************************************************/
+void AVCT_Dumpsys(int fd);
 
 #endif /* AVCT_API_H */

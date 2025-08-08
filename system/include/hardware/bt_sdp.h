@@ -16,10 +16,9 @@
 
 #pragma once
 
-#include <bluetooth/uuid.h>
-#include <raw_address.h>
-
 #include "bluetooth.h"
+#include "types/bluetooth/uuid.h"
+#include "types/raw_address.h"
 
 #define SDP_OPP_SUPPORTED_FORMATS_MAX_LENGTH 15
 
@@ -132,10 +131,8 @@ typedef union {
 } bluetooth_sdp_record;
 
 /** Callback for SDP search */
-typedef void (*btsdp_search_callback)(bt_status_t status,
-                                      const RawAddress& bd_addr,
-                                      const bluetooth::Uuid& uuid,
-                                      int num_records,
+typedef void (*btsdp_search_callback)(bt_status_t status, const RawAddress& bd_addr,
+                                      const bluetooth::Uuid& uuid, int num_records,
                                       bluetooth_sdp_record* records);
 
 typedef struct {
@@ -170,11 +167,20 @@ typedef struct {
    * record_handle    (out)The corresponding record handle will be written to
    * this pointer.
    */
-  bt_status_t (*create_sdp_record)(bluetooth_sdp_record* record,
-                                   int* record_handle);
+  bt_status_t (*create_sdp_record)(bluetooth_sdp_record* record, int* record_handle);
 
   /** Remove a SDP record created by createSdpRecord */
   bt_status_t (*remove_sdp_record)(int sdp_handle);
 } btsdp_interface_t;
 
 __END_DECLS
+
+#if __has_include(<bluetooth/log.h>)
+#include <bluetooth/log.h>
+
+namespace std {
+template <>
+struct formatter<bluetooth_sdp_types> : enum_formatter<bluetooth_sdp_types> {};
+}  // namespace std
+
+#endif  // __has_include(<bluetooth/log.h>)

@@ -42,7 +42,7 @@ import android.util.Log;
 import com.android.bluetooth.BluetoothStatsLog;
 import com.android.bluetooth.Utils;
 import com.android.bluetooth.btservice.AdapterService;
-import com.android.bluetooth.flags.FeatureFlags;
+import com.android.bluetooth.flags.Flags;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 
@@ -61,22 +61,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * The active device manager is responsible to handle a Room database
- * for Bluetooth persistent data.
+ * The active device manager is responsible to handle a Room database for Bluetooth persistent data.
  */
 public class DatabaseManager {
     private static final String TAG = "BluetoothDatabase";
 
     private final AdapterService mAdapterService;
-    private final FeatureFlags mFeatureFlags;
     private HandlerThread mHandlerThread = null;
     private Handler mHandler = null;
     private final Object mDatabaseLock = new Object();
     private @GuardedBy("mDatabaseLock") MetadataDatabase mDatabase = null;
     private boolean mMigratedFromSettingsGlobal = false;
 
-    @VisibleForTesting
-    final Map<String, Metadata> mMetadataCache = new HashMap<>();
+    @VisibleForTesting final Map<String, Metadata> mMetadataCache = new HashMap<>();
     private final Semaphore mSemaphore = new Semaphore(1);
     private static final int METADATA_CHANGED_LOG_MAX_SIZE = 20;
     private final EvictingQueue<String> mMetadataChangedLog;
@@ -88,35 +85,28 @@ public class DatabaseManager {
     private static final int MSG_CLEAR_DATABASE = 100;
     private static final String LOCAL_STORAGE = "LocalStorage";
 
-    private static final String
-            LEGACY_HEADSET_PRIORITY_PREFIX = "bluetooth_headset_priority_";
-    private static final String
-            LEGACY_A2DP_SINK_PRIORITY_PREFIX = "bluetooth_a2dp_sink_priority_";
-    private static final String
-            LEGACY_A2DP_SRC_PRIORITY_PREFIX = "bluetooth_a2dp_src_priority_";
+    private static final String LEGACY_HEADSET_PRIORITY_PREFIX = "bluetooth_headset_priority_";
+    private static final String LEGACY_A2DP_SINK_PRIORITY_PREFIX = "bluetooth_a2dp_sink_priority_";
+    private static final String LEGACY_A2DP_SRC_PRIORITY_PREFIX = "bluetooth_a2dp_src_priority_";
     private static final String LEGACY_A2DP_SUPPORTS_OPTIONAL_CODECS_PREFIX =
             "bluetooth_a2dp_supports_optional_codecs_";
     private static final String LEGACY_A2DP_OPTIONAL_CODECS_ENABLED_PREFIX =
             "bluetooth_a2dp_optional_codecs_enabled_";
-    private static final String
-            LEGACY_INPUT_DEVICE_PRIORITY_PREFIX = "bluetooth_input_device_priority_";
-    private static final String
-            LEGACY_MAP_PRIORITY_PREFIX = "bluetooth_map_priority_";
-    private static final String
-            LEGACY_MAP_CLIENT_PRIORITY_PREFIX = "bluetooth_map_client_priority_";
-    private static final String
-            LEGACY_PBAP_CLIENT_PRIORITY_PREFIX = "bluetooth_pbap_client_priority_";
-    private static final String
-            LEGACY_SAP_PRIORITY_PREFIX = "bluetooth_sap_priority_";
-    private static final String
-            LEGACY_PAN_PRIORITY_PREFIX = "bluetooth_pan_priority_";
-    private static final String
-            LEGACY_HEARING_AID_PRIORITY_PREFIX = "bluetooth_hearing_aid_priority_";
+    private static final String LEGACY_INPUT_DEVICE_PRIORITY_PREFIX =
+            "bluetooth_input_device_priority_";
+    private static final String LEGACY_MAP_PRIORITY_PREFIX = "bluetooth_map_priority_";
+    private static final String LEGACY_MAP_CLIENT_PRIORITY_PREFIX =
+            "bluetooth_map_client_priority_";
+    private static final String LEGACY_PBAP_CLIENT_PRIORITY_PREFIX =
+            "bluetooth_pbap_client_priority_";
+    private static final String LEGACY_SAP_PRIORITY_PREFIX = "bluetooth_sap_priority_";
+    private static final String LEGACY_PAN_PRIORITY_PREFIX = "bluetooth_pan_priority_";
+    private static final String LEGACY_HEARING_AID_PRIORITY_PREFIX =
+            "bluetooth_hearing_aid_priority_";
 
     /** Constructor of the DatabaseManager */
-    public DatabaseManager(AdapterService service, FeatureFlags featureFlags) {
+    public DatabaseManager(AdapterService service) {
         mAdapterService = Objects.requireNonNull(service, "Adapter service cannot be null");
-        mFeatureFlags = Objects.requireNonNull(featureFlags, "Feature Flags cannot be null");
         mMetadataChangedLog = EvictingQueue.create(METADATA_CHANGED_LOG_MAX_SIZE);
     }
 
@@ -128,67 +118,76 @@ public class DatabaseManager {
         @Override
         public void handleMessage(Message msg) {
             switch (msg.what) {
-                case MSG_LOAD_DATABASE: {
-                    synchronized (mDatabaseLock) {
-                        List<Metadata> list;
-                        try {
-                            list = mDatabase.load();
-                        } catch (IllegalStateException e) {
-                            Log.e(TAG, "Unable to open database: " + e);
-                            mDatabase = MetadataDatabase
-                                    .createDatabaseWithoutMigration(mAdapterService);
-                            list = mDatabase.load();
+                case MSG_LOAD_DATABASE:
+                    {
+                        synchronized (mDatabaseLock) {
+                            List<Metadata> list;
+                            try {
+                                list = mDatabase.load();
+                            } catch (IllegalStateException e) {
+                                Log.e(TAG, "Unable to open database: " + e);
+                                mDatabase =
+                                        MetadataDatabase.createDatabaseWithoutMigration(
+                                                mAdapterService);
+                                list = mDatabase.load();
+                            }
+                            compactLastConnectionTime(list);
+                            cacheMetadata(list);
                         }
-                        compactLastConnectionTime(list);
-                        cacheMetadata(list);
+                        break;
                     }
-                    break;
-                }
-                case MSG_UPDATE_DATABASE: {
-                    Metadata data = (Metadata) msg.obj;
-                    synchronized (mDatabaseLock) {
-                        mDatabase.insert(data);
+                case MSG_UPDATE_DATABASE:
+                    {
+                        Metadata data = (Metadata) msg.obj;
+                        synchronized (mDatabaseLock) {
+                            mDatabase.insert(data);
+                        }
+                        break;
                     }
-                    break;
-                }
-                case MSG_DELETE_DATABASE: {
-                    String address = (String) msg.obj;
-                    synchronized (mDatabaseLock) {
-                        mDatabase.delete(address);
+                case MSG_DELETE_DATABASE:
+                    {
+                        String address = (String) msg.obj;
+                        synchronized (mDatabaseLock) {
+                            mDatabase.delete(address);
+                        }
+                        break;
                     }
-                    break;
-                }
-                case MSG_CLEAR_DATABASE: {
-                    synchronized (mDatabaseLock) {
-                        mDatabase.deleteAll();
+                case MSG_CLEAR_DATABASE:
+                    {
+                        synchronized (mDatabaseLock) {
+                            mDatabase.deleteAll();
+                        }
+                        break;
                     }
-                    break;
-                }
             }
         }
     }
 
-    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-            if (action == null) {
-                Log.e(TAG, "Received intent with null action");
-                return;
-            }
-            switch (action) {
-                case BluetoothAdapter.ACTION_STATE_CHANGED: {
-                    int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE,
-                            BluetoothAdapter.STATE_OFF);
-                    if (!mMigratedFromSettingsGlobal
-                            && state == BluetoothAdapter.STATE_TURNING_ON) {
-                        migrateSettingsGlobal();
+    private final BroadcastReceiver mReceiver =
+            new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    String action = intent.getAction();
+                    if (action == null) {
+                        Log.e(TAG, "Received intent with null action");
+                        return;
                     }
-                    break;
+                    switch (action) {
+                        case BluetoothAdapter.ACTION_STATE_CHANGED:
+                            {
+                                int state =
+                                        intent.getIntExtra(
+                                                BluetoothAdapter.EXTRA_STATE,
+                                                BluetoothAdapter.STATE_OFF);
+                                if (!mMigratedFromSettingsGlobal
+                                        && state == BluetoothAdapter.STATE_TURNING_ON) {
+                                    migrateSettingsGlobal();
+                                }
+                                break;
+                            }
+                    }
                 }
-            }
-        }
-    };
+            };
 
     /** Process a change in the bonding state for a device */
     public void handleBondStateChanged(BluetoothDevice device, int fromState, int toState) {
@@ -225,9 +224,7 @@ public class DatabaseManager {
         return false;
     }
 
-    /**
-     * Set customized metadata to database with requested key
-     */
+    /** Set customized metadata to database with requested key */
     @VisibleForTesting
     public boolean setCustomMeta(BluetoothDevice device, int key, byte[] newValue) {
         if (device == null) {
@@ -247,7 +244,7 @@ public class DatabaseManager {
             Metadata data = mMetadataCache.get(address);
             byte[] oldValue = data.getCustomizedMeta(key);
             if (oldValue != null && Arrays.equals(oldValue, newValue)) {
-                Log.v(TAG, "setCustomMeta: metadata not changed.");
+                Log.d(TAG, "setCustomMeta: metadata not changed.");
                 return true;
             }
             logManufacturerInfo(device, key, newValue);
@@ -256,13 +253,11 @@ public class DatabaseManager {
 
             updateDatabase(data);
         }
-        mAdapterService.metadataChanged(address, key, newValue);
+        mAdapterService.onMetadataChanged(device, key, newValue);
         return true;
     }
 
-    /**
-     * Get customized metadata from database with requested key
-     */
+    /** Get customized metadata from database with requested key */
     public byte[] getCustomMeta(BluetoothDevice device, int key) {
         if (device == null) {
             Log.e(TAG, "getCustomMeta: device is null");
@@ -286,12 +281,10 @@ public class DatabaseManager {
         }
     }
 
-    /**
-     * Set audio policy metadata to database with requested key
-     */
+    /** Set audio policy metadata to database with requested key */
     @VisibleForTesting
-    public boolean setAudioPolicyMetadata(BluetoothDevice device,
-            BluetoothSinkAudioPolicy policies) {
+    public boolean setAudioPolicyMetadata(
+            BluetoothDevice device, BluetoothSinkAudioPolicy policies) {
         if (device == null) {
             Log.e(TAG, "setAudioPolicyMetadata: device is null");
             return false;
@@ -313,9 +306,7 @@ public class DatabaseManager {
         }
     }
 
-    /**
-     * Get audio policy metadata from database with requested key
-     */
+    /** Get audio policy metadata from database with requested key */
     @VisibleForTesting
     public BluetoothSinkAudioPolicy getAudioPolicyMetadata(BluetoothDevice device) {
         if (device == null) {
@@ -344,23 +335,22 @@ public class DatabaseManager {
      * Set the device profile connection policy
      *
      * @param device {@link BluetoothDevice} wish to set
-     * @param profile The Bluetooth profile; one of {@link BluetoothProfile#HEADSET},
-     * {@link BluetoothProfile#HEADSET_CLIENT}, {@link BluetoothProfile#A2DP},
-     * {@link BluetoothProfile#A2DP_SINK}, {@link BluetoothProfile#HID_HOST},
-     * {@link BluetoothProfile#PAN}, {@link BluetoothProfile#PBAP},
-     * {@link BluetoothProfile#PBAP_CLIENT}, {@link BluetoothProfile#MAP},
-     * {@link BluetoothProfile#MAP_CLIENT}, {@link BluetoothProfile#SAP},
-     * {@link BluetoothProfile#HEARING_AID}, {@link BluetoothProfile#LE_AUDIO},
-     * {@link BluetoothProfile#VOLUME_CONTROL}, {@link BluetoothProfile#CSIP_SET_COORDINATOR},
-     * {@link BluetoothProfile#LE_AUDIO_BROADCAST_ASSISTANT},
-     * @param newConnectionPolicy the connectionPolicy to set; one of
-     * {@link BluetoothProfile.CONNECTION_POLICY_UNKNOWN},
-     * {@link BluetoothProfile.CONNECTION_POLICY_FORBIDDEN},
-     * {@link BluetoothProfile.CONNECTION_POLICY_ALLOWED}
+     * @param profile The Bluetooth profile; one of {@link BluetoothProfile#HEADSET}, {@link
+     *     BluetoothProfile#HEADSET_CLIENT}, {@link BluetoothProfile#A2DP}, {@link
+     *     BluetoothProfile#A2DP_SINK}, {@link BluetoothProfile#HID_HOST}, {@link
+     *     BluetoothProfile#PAN}, {@link BluetoothProfile#PBAP}, {@link
+     *     BluetoothProfile#PBAP_CLIENT}, {@link BluetoothProfile#MAP}, {@link
+     *     BluetoothProfile#MAP_CLIENT}, {@link BluetoothProfile#SAP}, {@link
+     *     BluetoothProfile#HEARING_AID}, {@link BluetoothProfile#LE_AUDIO}, {@link
+     *     BluetoothProfile#VOLUME_CONTROL}, {@link BluetoothProfile#CSIP_SET_COORDINATOR}, {@link
+     *     BluetoothProfile#LE_AUDIO_BROADCAST_ASSISTANT},
+     * @param newConnectionPolicy the connectionPolicy to set; one of {@link
+     *     BluetoothProfile.CONNECTION_POLICY_UNKNOWN}, {@link
+     *     BluetoothProfile.CONNECTION_POLICY_FORBIDDEN}, {@link
+     *     BluetoothProfile.CONNECTION_POLICY_ALLOWED}
      */
-    @VisibleForTesting
-    public boolean setProfileConnectionPolicy(BluetoothDevice device, int profile,
-            int newConnectionPolicy) {
+    public boolean setProfileConnectionPolicy(
+            BluetoothDevice device, int profile, int newConnectionPolicy) {
         if (device == null) {
             Log.e(TAG, "setProfileConnectionPolicy: device is null");
             return false;
@@ -391,11 +381,20 @@ public class DatabaseManager {
                 return true;
             }
             String profileStr = BluetoothProfile.getProfileName(profile);
-            logMetadataChange(data, profileStr + " connection policy changed: "
-                                    + oldConnectionPolicy + " -> " + newConnectionPolicy);
+            logMetadataChange(
+                    data,
+                    profileStr
+                            + " connection policy changed: "
+                            + oldConnectionPolicy
+                            + " -> "
+                            + newConnectionPolicy);
 
-            Log.v(TAG, "setProfileConnectionPolicy: device " + device.getAnonymizedAddress()
-                    + " profile=" + profileStr + ", connectionPolicy=" + newConnectionPolicy);
+            Log.v(
+                    TAG,
+                    "setProfileConnectionPolicy:"
+                            + (" device=" + device)
+                            + (" profile=" + profileStr)
+                            + (" connectionPolicy=" + newConnectionPolicy));
 
             data.setProfileConnectionPolicy(profile, newConnectionPolicy);
             updateDatabase(data);
@@ -407,19 +406,19 @@ public class DatabaseManager {
      * Get the device profile connection policy
      *
      * @param device {@link BluetoothDevice} wish to get
-     * @param profile The Bluetooth profile; one of {@link BluetoothProfile#HEADSET},
-     * {@link BluetoothProfile#HEADSET_CLIENT}, {@link BluetoothProfile#A2DP},
-     * {@link BluetoothProfile#A2DP_SINK}, {@link BluetoothProfile#HID_HOST},
-     * {@link BluetoothProfile#PAN}, {@link BluetoothProfile#PBAP},
-     * {@link BluetoothProfile#PBAP_CLIENT}, {@link BluetoothProfile#MAP},
-     * {@link BluetoothProfile#MAP_CLIENT}, {@link BluetoothProfile#SAP},
-     * {@link BluetoothProfile#HEARING_AID}, {@link BluetoothProfile#LE_AUDIO},
-     * {@link BluetoothProfile#VOLUME_CONTROL}, {@link BluetoothProfile#CSIP_SET_COORDINATOR},
-     * {@link BluetoothProfile#LE_AUDIO_BROADCAST_ASSISTANT},
-     * @return the profile connection policy of the device; one of
-     * {@link BluetoothProfile.CONNECTION_POLICY_UNKNOWN},
-     * {@link BluetoothProfile.CONNECTION_POLICY_FORBIDDEN},
-     * {@link BluetoothProfile.CONNECTION_POLICY_ALLOWED}
+     * @param profile The Bluetooth profile; one of {@link BluetoothProfile#HEADSET}, {@link
+     *     BluetoothProfile#HEADSET_CLIENT}, {@link BluetoothProfile#A2DP}, {@link
+     *     BluetoothProfile#A2DP_SINK}, {@link BluetoothProfile#HID_HOST}, {@link
+     *     BluetoothProfile#PAN}, {@link BluetoothProfile#PBAP}, {@link
+     *     BluetoothProfile#PBAP_CLIENT}, {@link BluetoothProfile#MAP}, {@link
+     *     BluetoothProfile#MAP_CLIENT}, {@link BluetoothProfile#SAP}, {@link
+     *     BluetoothProfile#HEARING_AID}, {@link BluetoothProfile#LE_AUDIO}, {@link
+     *     BluetoothProfile#VOLUME_CONTROL}, {@link BluetoothProfile#CSIP_SET_COORDINATOR}, {@link
+     *     BluetoothProfile#LE_AUDIO_BROADCAST_ASSISTANT},
+     * @return the profile connection policy of the device; one of {@link
+     *     BluetoothProfile.CONNECTION_POLICY_UNKNOWN}, {@link
+     *     BluetoothProfile.CONNECTION_POLICY_FORBIDDEN}, {@link
+     *     BluetoothProfile.CONNECTION_POLICY_ALLOWED}
      */
     public int getProfileConnectionPolicy(BluetoothDevice device, int profile) {
         if (device == null) {
@@ -431,17 +430,19 @@ public class DatabaseManager {
 
         synchronized (mMetadataCache) {
             if (!mMetadataCache.containsKey(address)) {
-                Log.d(TAG, "getProfileConnectionPolicy: device " + device.getAnonymizedAddress()
-                        + " is not in cache");
+                Log.d(TAG, "getProfileConnectionPolicy: device=" + device + " is not in cache");
                 return BluetoothProfile.CONNECTION_POLICY_UNKNOWN;
             }
 
             Metadata data = mMetadataCache.get(address);
             int connectionPolicy = data.getProfileConnectionPolicy(profile);
 
-            Log.v(TAG, "getProfileConnectionPolicy: device " + device.getAnonymizedAddress()
-                    + " profile=" + BluetoothProfile.getProfileName(profile)
-                    + ", connectionPolicy=" + connectionPolicy);
+            Log.v(
+                    TAG,
+                    "getProfileConnectionPolicy:"
+                            + (" device=" + device)
+                            + (" profile=" + BluetoothProfile.getProfileName(profile))
+                            + (" connectionPolicy=" + connectionPolicy));
             return connectionPolicy;
         }
     }
@@ -450,10 +451,10 @@ public class DatabaseManager {
      * Set the A2DP optional coedc support value
      *
      * @param device {@link BluetoothDevice} wish to set
-     * @param newValue the new A2DP optional coedc support value, one of
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_SUPPORT_UNKNOWN},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_NOT_SUPPORTED},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_SUPPORTED}
+     * @param newValue the new A2DP optional coedc support value, one of {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_SUPPORT_UNKNOWN}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_NOT_SUPPORTED}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_SUPPORTED}
      */
     @VisibleForTesting
     public void setA2dpSupportsOptionalCodecs(BluetoothDevice device, int newValue) {
@@ -479,8 +480,8 @@ public class DatabaseManager {
             if (oldValue == newValue) {
                 return;
             }
-            logMetadataChange(data, "Supports optional codec changed: "
-                                    + oldValue + " -> " + newValue);
+            logMetadataChange(
+                    data, "Supports optional codec changed: " + oldValue + " -> " + newValue);
 
             data.a2dpSupportsOptionalCodecs = newValue;
             updateDatabase(data);
@@ -491,10 +492,10 @@ public class DatabaseManager {
      * Get the A2DP optional coedc support value
      *
      * @param device {@link BluetoothDevice} wish to get
-     * @return the A2DP optional coedc support value, one of
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_SUPPORT_UNKNOWN},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_NOT_SUPPORTED},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_SUPPORTED},
+     * @return the A2DP optional coedc support value, one of {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_SUPPORT_UNKNOWN}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_NOT_SUPPORTED}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_SUPPORTED},
      */
     @VisibleForTesting
     @OptionalCodecsSupportStatus
@@ -521,10 +522,10 @@ public class DatabaseManager {
      * Set the A2DP optional coedc enabled value
      *
      * @param device {@link BluetoothDevice} wish to set
-     * @param newValue the new A2DP optional coedc enabled value, one of
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_PREF_UNKNOWN},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_PREF_DISABLED},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_PREF_ENABLED}
+     * @param newValue the new A2DP optional coedc enabled value, one of {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_PREF_UNKNOWN}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_PREF_DISABLED}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_PREF_ENABLED}
      */
     @VisibleForTesting
     public void setA2dpOptionalCodecsEnabled(BluetoothDevice device, int newValue) {
@@ -550,8 +551,8 @@ public class DatabaseManager {
             if (oldValue == newValue) {
                 return;
             }
-            logMetadataChange(data, "Enable optional codec changed: "
-                                     + oldValue + " -> " + newValue);
+            logMetadataChange(
+                    data, "Enable optional codec changed: " + oldValue + " -> " + newValue);
 
             data.a2dpOptionalCodecsEnabled = newValue;
             updateDatabase(data);
@@ -562,10 +563,10 @@ public class DatabaseManager {
      * Get the A2DP optional coedc enabled value
      *
      * @param device {@link BluetoothDevice} wish to get
-     * @return the A2DP optional coedc enabled value, one of
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_PREF_UNKNOWN},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_PREF_DISABLED},
-     * {@link BluetoothA2dp#OPTIONAL_CODECS_PREF_ENABLED}
+     * @return the A2DP optional coedc enabled value, one of {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_PREF_UNKNOWN}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_PREF_DISABLED}, {@link
+     *     BluetoothA2dp#OPTIONAL_CODECS_PREF_ENABLED}
      */
     @VisibleForTesting
     @OptionalCodecsPreferenceStatus
@@ -588,6 +589,7 @@ public class DatabaseManager {
     }
 
     @GuardedBy("mMetadataCache")
+    @SuppressWarnings("LockOnNonEnclosingClassLiteral")
     private void setConnection(BluetoothDevice device, boolean isActiveA2dp, boolean isActiveHfp) {
         if (device == null) {
             Log.e(TAG, "setConnection: device is null");
@@ -648,7 +650,7 @@ public class DatabaseManager {
             if (isA2dpDevice) {
                 resetActiveA2dpDevice();
             }
-            if (isHfpDevice && !mFeatureFlags.autoConnectOnMultipleHfpWhenNoA2dpDevice()) {
+            if (isHfpDevice && !Flags.autoConnectOnMultipleHfpWhenNoA2dpDevice()) {
                 resetActiveHfpDevice();
             }
 
@@ -742,8 +744,8 @@ public class DatabaseManager {
      * Gets the most recently connected bluetooth devices in order with most recently connected
      * first and least recently connected last
      *
-     * @return a {@link List} of {@link BluetoothDevice} representing connected bluetooth devices
-     * in order of most recently connected
+     * @return a {@link List} of {@link BluetoothDevice} representing connected bluetooth devices in
+     *     order of most recently connected
      */
     public List<BluetoothDevice> getMostRecentlyConnectedDevices() {
         List<BluetoothDevice> mostRecentlyConnectedDevices = new ArrayList<>();
@@ -752,11 +754,14 @@ public class DatabaseManager {
             sortedMetadata.sort((o1, o2) -> Long.compare(o2.last_active_time, o1.last_active_time));
             for (Metadata metadata : sortedMetadata) {
                 try {
-                    mostRecentlyConnectedDevices.add(BluetoothAdapter.getDefaultAdapter()
-                            .getRemoteDevice(metadata.getAddress()));
+                    mostRecentlyConnectedDevices.add(
+                            BluetoothAdapter.getDefaultAdapter()
+                                    .getRemoteDevice(metadata.getAddress()));
                 } catch (IllegalArgumentException ex) {
-                    Log.d(TAG, "getBondedDevicesOrdered: Invalid address for "
-                               + "device " + metadata.getAnonymizedAddress());
+                    Log.d(
+                            TAG,
+                            "getBondedDevicesOrdered: Invalid address for device "
+                                    + metadata.getAnonymizedAddress());
                 }
             }
         }
@@ -767,10 +772,8 @@ public class DatabaseManager {
      * Gets the most recently connected bluetooth device in a given list.
      *
      * @param devicesList the list of {@link BluetoothDevice} to search in
-     * @return the most recently connected {@link BluetoothDevice} in the given
-     *         {@code devicesList}, or null if an error occurred
-     *
-     * @hide
+     * @return the most recently connected {@link BluetoothDevice} in the given {@code devicesList},
+     *     or null if an error occurred
      */
     public BluetoothDevice getMostRecentlyConnectedDevicesInList(
             List<BluetoothDevice> devicesList) {
@@ -784,8 +787,9 @@ public class DatabaseManager {
             for (BluetoothDevice device : devicesList) {
                 String address = device.getAddress();
                 Metadata metadata = mMetadataCache.get(address);
-                if (metadata != null && (mostRecentLastActiveTime == -1
-                            || mostRecentLastActiveTime < metadata.last_active_time)) {
+                if (metadata != null
+                        && (mostRecentLastActiveTime == -1
+                                || mostRecentLastActiveTime < metadata.last_active_time)) {
                     mostRecentLastActiveTime = metadata.last_active_time;
                     mostRecentDevice = device;
                 }
@@ -805,11 +809,13 @@ public class DatabaseManager {
                 Metadata metadata = entry.getValue();
                 if (metadata.is_active_a2dp_device) {
                     try {
-                        return BluetoothAdapter.getDefaultAdapter().getRemoteDevice(
-                                metadata.getAddress());
+                        return BluetoothAdapter.getDefaultAdapter()
+                                .getRemoteDevice(metadata.getAddress());
                     } catch (IllegalArgumentException ex) {
-                        Log.d(TAG, "getMostRecentlyConnectedA2dpDevice: Invalid address for "
-                                   + "device " + metadata.getAnonymizedAddress());
+                        Log.d(
+                                TAG,
+                                "getMostRecentlyConnectedA2dpDevice: Invalid address for device "
+                                        + metadata.getAnonymizedAddress());
                     }
                 }
             }
@@ -838,8 +844,7 @@ public class DatabaseManager {
             } catch (IllegalArgumentException ex) {
                 Log.d(
                         TAG,
-                        "getMostRecentlyActiveHfpDevice: Invalid address for "
-                                + "device "
+                        "getMostRecentlyActiveHfpDevice: Invalid address for device "
                                 + entry.getValue().getAnonymizedAddress());
             }
         }
@@ -861,9 +866,9 @@ public class DatabaseManager {
     }
 
     /**
-     *
      * @param metadataList is the list of metadata
      */
+    @SuppressWarnings("LockOnNonEnclosingClassLiteral")
     private void compactLastConnectionTime(List<Metadata> metadataList) {
         Log.d(TAG, "compactLastConnectionTime: Compacting metadata after load");
         synchronized (MetadataDatabase.class) {
@@ -872,9 +877,14 @@ public class DatabaseManager {
             for (int index = metadataList.size() - 1; index >= 0; index--) {
                 Metadata metadata = metadataList.get(index);
                 if (metadata.last_active_time != MetadataDatabase.sCurrentConnectionNumber) {
-                    Log.d(TAG, "compactLastConnectionTime: Setting last_active_item for device: "
-                            + metadata.getAnonymizedAddress() + " from " + metadata.last_active_time
-                            + " to " + MetadataDatabase.sCurrentConnectionNumber);
+                    Log.d(
+                            TAG,
+                            "compactLastConnectionTime: Setting last_active_item for device: "
+                                    + metadata.getAnonymizedAddress()
+                                    + " from "
+                                    + metadata.last_active_time
+                                    + " to "
+                                    + MetadataDatabase.sCurrentConnectionNumber);
                     metadata.last_active_time = MetadataDatabase.sCurrentConnectionNumber;
                     updateDatabase(metadata);
                     MetadataDatabase.sCurrentConnectionNumber++;
@@ -903,8 +913,7 @@ public class DatabaseManager {
         if (groupDevices.isEmpty()) {
             throw new IllegalArgumentException("groupDevices cannot be empty");
         }
-        int outputProfile = modeToProfileBundle.getInt(
-                BluetoothAdapter.AUDIO_MODE_OUTPUT_ONLY);
+        int outputProfile = modeToProfileBundle.getInt(BluetoothAdapter.AUDIO_MODE_OUTPUT_ONLY);
         int duplexProfile = modeToProfileBundle.getInt(BluetoothAdapter.AUDIO_MODE_DUPLEX);
         boolean isPreferenceSet = false;
 
@@ -923,20 +932,28 @@ public class DatabaseManager {
 
                 // Finds the device in the group which stores the group's preferences
                 Metadata metadata = mMetadataCache.get(address);
-                if (outputProfile != 0 && (metadata.preferred_output_only_profile != 0
-                        || metadata.preferred_duplex_profile != 0)) {
-                    Log.i(TAG, "setPreferredAudioProfiles: Updating OUTPUT_ONLY audio profile for "
-                            + "device: " + device + " to "
-                            + BluetoothProfile.getProfileName(outputProfile));
+                if (outputProfile != 0
+                        && (metadata.preferred_output_only_profile != 0
+                                || metadata.preferred_duplex_profile != 0)) {
+                    Log.i(
+                            TAG,
+                            "setPreferredAudioProfiles: Updating OUTPUT_ONLY audio profile for "
+                                    + "device: "
+                                    + device
+                                    + " to "
+                                    + BluetoothProfile.getProfileName(outputProfile));
                     metadata.preferred_output_only_profile = outputProfile;
                     isPreferenceSet = true;
                 }
-                if (duplexProfile != 0 && (metadata.preferred_output_only_profile != 0
-                        || metadata.preferred_duplex_profile != 0)) {
-                    Log.i(TAG,
+                if (duplexProfile != 0
+                        && (metadata.preferred_output_only_profile != 0
+                                || metadata.preferred_duplex_profile != 0)) {
+                    Log.i(
+                            TAG,
                             "setPreferredAudioProfiles: Updating DUPLEX audio profile for device: "
-                                    + device + " to " + BluetoothProfile.getProfileName(
-                                    duplexProfile));
+                                    + device
+                                    + " to "
+                                    + BluetoothProfile.getProfileName(duplexProfile));
                     metadata.preferred_duplex_profile = duplexProfile;
                     isPreferenceSet = true;
                 }
@@ -951,16 +968,22 @@ public class DatabaseManager {
                 // Updates preferred audio profiles for the device
                 Metadata metadata = mMetadataCache.get(firstGroupDevice.getAddress());
                 if (outputProfile != 0) {
-                    Log.i(TAG, "setPreferredAudioProfiles: Updating output only audio profile for "
-                            + "device: " + firstGroupDevice + " to "
-                            + BluetoothProfile.getProfileName(outputProfile));
+                    Log.i(
+                            TAG,
+                            "setPreferredAudioProfiles: Updating output only audio profile for "
+                                    + "device: "
+                                    + firstGroupDevice
+                                    + " to "
+                                    + BluetoothProfile.getProfileName(outputProfile));
                     metadata.preferred_output_only_profile = outputProfile;
                 }
                 if (duplexProfile != 0) {
-                    Log.i(TAG,
+                    Log.i(
+                            TAG,
                             "setPreferredAudioProfiles: Updating duplex audio profile for device: "
-                                    + firstGroupDevice + " to " + BluetoothProfile.getProfileName(
-                                    duplexProfile));
+                                    + firstGroupDevice
+                                    + " to "
+                                    + BluetoothProfile.getProfileName(duplexProfile));
                     metadata.preferred_duplex_profile = duplexProfile;
                 }
 
@@ -971,8 +994,8 @@ public class DatabaseManager {
     }
 
     /**
-     * Sets the preferred profile for the supplied audio modes. See
-     * {@link BluetoothAdapter#getPreferredAudioProfiles(BluetoothDevice)} for more details.
+     * Sets the preferred profile for the supplied audio modes. See {@link
+     * BluetoothAdapter#getPreferredAudioProfiles(BluetoothDevice)} for more details.
      *
      * @param device is the device for which we want to get the preferred audio profiles
      * @return a Bundle containing the preferred audio profiles
@@ -1015,8 +1038,111 @@ public class DatabaseManager {
     }
 
     /**
-     * Get the {@link Looper} for the handler thread. This is used in testing and helper
-     * objects
+     * Set the device active audio policy. See {@link
+     * BluetoothDevice#setActiveAudioDevicePolicy(activeAudioDevicePolicy)} for more details.
+     *
+     * @param device is the remote device for which we are setting the active audio device policy.
+     * @param activeAudioDevicePolicy active audio device policy.
+     * @return whether the policy was set properly
+     */
+    public int setActiveAudioDevicePolicy(BluetoothDevice device, int activeAudioDevicePolicy) {
+        synchronized (mMetadataCache) {
+            String address = device.getAddress();
+
+            if (!mMetadataCache.containsKey(address)) {
+                Log.e(TAG, "device is not bonded");
+                return BluetoothStatusCodes.ERROR_DEVICE_NOT_BONDED;
+            }
+
+            Metadata metadata = mMetadataCache.get(address);
+            Log.i(
+                    TAG,
+                    "Updating active_audio_device_policy setting for "
+                            + "device "
+                            + device
+                            + " to: "
+                            + activeAudioDevicePolicy);
+            metadata.active_audio_device_policy = activeAudioDevicePolicy;
+
+            updateDatabase(metadata);
+        }
+        return BluetoothStatusCodes.SUCCESS;
+    }
+
+    /**
+     * Get the active audio device policy for this device. See {@link
+     * BluetoothDevice#getActiveAudioDevicePolicy()} for more details.
+     *
+     * @param device is the device for which we want to get the policy
+     * @return active audio device policy for this device
+     */
+    public int getActiveAudioDevicePolicy(BluetoothDevice device) {
+        synchronized (mMetadataCache) {
+            String address = device.getAddress();
+
+            if (!mMetadataCache.containsKey(address)) {
+                Log.e(TAG, "device is not bonded");
+                return BluetoothDevice.ACTIVE_AUDIO_DEVICE_POLICY_DEFAULT;
+            }
+
+            Metadata metadata = mMetadataCache.get(address);
+
+            return metadata.active_audio_device_policy;
+        }
+    }
+
+    /**
+     * Sets the preferred microphone for calls enable status for this device. See {@link
+     * BluetoothDevice#setMicrophonePreferredForCalls()} for more details.
+     *
+     * @param device is the remote device for which we set the preferred microphone for calls enable
+     *     status
+     * @param enabled {@code true} to enable the preferred microphone for calls
+     * @return whether the preferred microphone for call enable status was set properly
+     */
+    public int setMicrophonePreferredForCalls(BluetoothDevice device, boolean enabled) {
+        synchronized (mMetadataCache) {
+            String address = device.getAddress();
+
+            if (!mMetadataCache.containsKey(address)) {
+                Log.e(TAG, "device is not bonded");
+                return BluetoothStatusCodes.ERROR_DEVICE_NOT_BONDED;
+            }
+
+            Metadata metadata = mMetadataCache.get(address);
+            Log.i(TAG, "setMicrophoneForCallEnabled(" + device + ", " + enabled + ")");
+            metadata.is_preferred_microphone_for_calls = enabled;
+
+            updateDatabase(metadata);
+        }
+        return BluetoothStatusCodes.SUCCESS;
+    }
+
+    /**
+     * Gets the preferred microphone for calls enable status for this device. See {@link
+     * BluetoothDevice#isMicrophonePreferredForCalls()} for more details.
+     *
+     * @param device is the remote device for which we get the preferred microphone for calls enable
+     *     status
+     * @return {@code true} if the preferred microphone is enabled for calls
+     */
+    public boolean isMicrophonePreferredForCalls(BluetoothDevice device) {
+        synchronized (mMetadataCache) {
+            String address = device.getAddress();
+
+            if (!mMetadataCache.containsKey(address)) {
+                Log.e(TAG, "device is not bonded");
+                return true;
+            }
+
+            Metadata metadata = mMetadataCache.get(address);
+
+            return metadata.is_preferred_microphone_for_calls;
+        }
+    }
+
+    /**
+     * Get the {@link Looper} for the handler thread. This is used in testing and helper objects
      *
      * @return {@link Looper} for the handler thread
      */
@@ -1034,12 +1160,11 @@ public class DatabaseManager {
      * @param database the Bluetooth storage {@link MetadataDatabase}
      */
     public void start(MetadataDatabase database) {
-        Log.d(TAG, "start()");
-
         if (database == null) {
-            Log.e(TAG, "stat failed, database is null.");
+            Log.e(TAG, "start failed, database is null.");
             return;
         }
+        Log.d(TAG, "start()");
 
         synchronized (mDatabaseLock) {
             mDatabase = database;
@@ -1058,14 +1183,11 @@ public class DatabaseManager {
     }
 
     String getDatabaseAbsolutePath() {
-        //TODO backup database when Bluetooth turn off and FOTA?
-        return mAdapterService.getDatabasePath(MetadataDatabase.DATABASE_NAME)
-                .getAbsolutePath();
+        // TODO backup database when Bluetooth turn off and FOTA?
+        return mAdapterService.getDatabasePath(MetadataDatabase.DATABASE_NAME).getAbsolutePath();
     }
 
-    /**
-     * Clear all persistence data in database
-     */
+    /** Clear all persistence data in database */
     public void factoryReset() {
         Log.w(TAG, "factoryReset");
         Message message = mHandler.obtainMessage(MSG_CLEAR_DATABASE);
@@ -1074,6 +1196,12 @@ public class DatabaseManager {
 
     /** Close and de-init the DatabaseManager */
     public void cleanup() {
+        synchronized (mDatabaseLock) {
+            if (mDatabase == null) {
+                Log.w(TAG, "cleanup called on non started database");
+                return;
+            }
+        }
         removeUnusedMetadata();
         mAdapterService.unregisterReceiver(mReceiver);
         if (mHandlerThread != null) {
@@ -1113,19 +1241,21 @@ public class DatabaseManager {
     void removeUnusedMetadata() {
         BluetoothDevice[] bondedDevices = mAdapterService.getBondedDevices();
         synchronized (mMetadataCache) {
-            mMetadataCache.forEach((address, metadata) -> {
-                if (!address.equals(LOCAL_STORAGE)
-                        && !Arrays.asList(bondedDevices).stream().anyMatch(device ->
-                        address.equals(device.getAddress()))) {
-                    List<Integer> list = metadata.getChangedCustomizedMeta();
-                    for (int key : list) {
-                        mAdapterService.metadataChanged(address, key, null);
-                    }
-                    Log.i(TAG, "remove unpaired device from database "
-                               + metadata.getAnonymizedAddress());
-                    deleteDatabase(mMetadataCache.get(address));
-                }
-            });
+            mMetadataCache.forEach(
+                    (address, metadata) -> {
+                        if (!address.equals(LOCAL_STORAGE)
+                                && !Arrays.asList(bondedDevices).stream()
+                                        .anyMatch(device -> address.equals(device.getAddress()))) {
+                            List<Integer> list = metadata.getChangedCustomizedMeta();
+                            BluetoothDevice device =
+                                    BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address);
+                            for (int key : list) {
+                                mAdapterService.onMetadataChanged(device, key, null);
+                            }
+                            Log.i(TAG, "remove unpaired device from database " + device);
+                            deleteDatabase(mMetadataCache.get(address));
+                        }
+                    });
         }
     }
 
@@ -1167,68 +1297,96 @@ public class DatabaseManager {
         ContentResolver contentResolver = mAdapterService.getContentResolver();
 
         for (BluetoothDevice device : bondedDevices) {
-            int a2dpConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyA2dpSinkPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int a2dpSinkConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyA2dpSrcPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int hearingaidConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyHearingAidPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int headsetConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyHeadsetPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int headsetClientConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyHeadsetPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int hidHostConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyHidHostPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int mapConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyMapPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int mapClientConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyMapClientPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int panConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyPanPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int pbapConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyPbapClientPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int pbapClientConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacyPbapClientPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int sapConnectionPolicy = Settings.Global.getInt(contentResolver,
-                    getLegacySapPriorityKey(device.getAddress()),
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
-            int a2dpSupportsOptionalCodec = Settings.Global.getInt(contentResolver,
-                    getLegacyA2dpSupportsOptionalCodecsKey(device.getAddress()),
-                    BluetoothA2dp.OPTIONAL_CODECS_SUPPORT_UNKNOWN);
-            int a2dpOptionalCodecEnabled = Settings.Global.getInt(contentResolver,
-                    getLegacyA2dpOptionalCodecsEnabledKey(device.getAddress()),
-                    BluetoothA2dp.OPTIONAL_CODECS_PREF_UNKNOWN);
+            int a2dpConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyA2dpSinkPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int a2dpSinkConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyA2dpSrcPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int hearingaidConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyHearingAidPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int headsetConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyHeadsetPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int headsetClientConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyHeadsetPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int hidHostConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyHidHostPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int mapConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyMapPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int mapClientConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyMapClientPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int panConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyPanPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int pbapConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyPbapClientPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int pbapClientConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyPbapClientPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int sapConnectionPolicy =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacySapPriorityKey(device.getAddress()),
+                            BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            int a2dpSupportsOptionalCodec =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyA2dpSupportsOptionalCodecsKey(device.getAddress()),
+                            BluetoothA2dp.OPTIONAL_CODECS_SUPPORT_UNKNOWN);
+            int a2dpOptionalCodecEnabled =
+                    Settings.Global.getInt(
+                            contentResolver,
+                            getLegacyA2dpOptionalCodecsEnabledKey(device.getAddress()),
+                            BluetoothA2dp.OPTIONAL_CODECS_PREF_UNKNOWN);
 
             String address = device.getAddress();
             Metadata data = new Metadata(address);
             data.setProfileConnectionPolicy(BluetoothProfile.A2DP, a2dpConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.A2DP_SINK, a2dpSinkConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.HEADSET, headsetConnectionPolicy);
-            data.setProfileConnectionPolicy(BluetoothProfile.HEADSET_CLIENT,
-                    headsetClientConnectionPolicy);
+            data.setProfileConnectionPolicy(
+                    BluetoothProfile.HEADSET_CLIENT, headsetClientConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.HID_HOST, hidHostConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.PAN, panConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.PBAP, pbapConnectionPolicy);
-            data.setProfileConnectionPolicy(BluetoothProfile.PBAP_CLIENT,
-                    pbapClientConnectionPolicy);
+            data.setProfileConnectionPolicy(
+                    BluetoothProfile.PBAP_CLIENT, pbapClientConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.MAP, mapConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.MAP_CLIENT, mapClientConnectionPolicy);
             data.setProfileConnectionPolicy(BluetoothProfile.SAP, sapConnectionPolicy);
-            data.setProfileConnectionPolicy(BluetoothProfile.HEARING_AID,
-                    hearingaidConnectionPolicy);
-            data.setProfileConnectionPolicy(BluetoothProfile.LE_AUDIO,
-                    BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
+            data.setProfileConnectionPolicy(
+                    BluetoothProfile.HEARING_AID, hearingaidConnectionPolicy);
+            data.setProfileConnectionPolicy(
+                    BluetoothProfile.LE_AUDIO, BluetoothProfile.CONNECTION_POLICY_UNKNOWN);
             data.a2dpSupportsOptionalCodecs = a2dpSupportsOptionalCodec;
             data.a2dpOptionalCodecsEnabled = a2dpOptionalCodecEnabled;
             mMetadataCache.put(address, data);
@@ -1243,36 +1401,26 @@ public class DatabaseManager {
 
         // Reload database after migration is completed
         loadDatabase();
-
     }
 
-    /**
-     * Get the key that retrieves a bluetooth headset's priority.
-     */
+    /** Get the key that retrieves a bluetooth headset's priority. */
     private static String getLegacyHeadsetPriorityKey(String address) {
         return LEGACY_HEADSET_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth a2dp sink's priority.
-     */
+    /** Get the key that retrieves a bluetooth a2dp sink's priority. */
     private static String getLegacyA2dpSinkPriorityKey(String address) {
         return LEGACY_A2DP_SINK_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth a2dp src's priority.
-     */
+    /** Get the key that retrieves a bluetooth a2dp src's priority. */
     private static String getLegacyA2dpSrcPriorityKey(String address) {
         return LEGACY_A2DP_SRC_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth a2dp device's ability to support optional codecs.
-     */
+    /** Get the key that retrieves a bluetooth a2dp device's ability to support optional codecs. */
     private static String getLegacyA2dpSupportsOptionalCodecsKey(String address) {
-        return LEGACY_A2DP_SUPPORTS_OPTIONAL_CODECS_PREFIX
-                + address.toUpperCase(Locale.ROOT);
+        return LEGACY_A2DP_SUPPORTS_OPTIONAL_CODECS_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
     /**
@@ -1280,55 +1428,40 @@ public class DatabaseManager {
      * enabled.
      */
     private static String getLegacyA2dpOptionalCodecsEnabledKey(String address) {
-        return LEGACY_A2DP_OPTIONAL_CODECS_ENABLED_PREFIX
-                + address.toUpperCase(Locale.ROOT);
+        return LEGACY_A2DP_OPTIONAL_CODECS_ENABLED_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth Input Device's priority.
-     */
+    /** Get the key that retrieves a bluetooth Input Device's priority. */
     private static String getLegacyHidHostPriorityKey(String address) {
         return LEGACY_INPUT_DEVICE_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth pan client priority.
-     */
+    /** Get the key that retrieves a bluetooth pan client priority. */
     private static String getLegacyPanPriorityKey(String address) {
         return LEGACY_PAN_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth hearing aid priority.
-     */
+    /** Get the key that retrieves a bluetooth hearing aid priority. */
     private static String getLegacyHearingAidPriorityKey(String address) {
         return LEGACY_HEARING_AID_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth map priority.
-     */
+    /** Get the key that retrieves a bluetooth map priority. */
     private static String getLegacyMapPriorityKey(String address) {
         return LEGACY_MAP_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth map client priority.
-     */
+    /** Get the key that retrieves a bluetooth map client priority. */
     private static String getLegacyMapClientPriorityKey(String address) {
         return LEGACY_MAP_CLIENT_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth pbap client priority.
-     */
+    /** Get the key that retrieves a bluetooth pbap client priority. */
     private static String getLegacyPbapClientPriorityKey(String address) {
         return LEGACY_PBAP_CLIENT_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Get the key that retrieves a bluetooth sap priority.
-     */
+    /** Get the key that retrieves a bluetooth sap priority. */
     private static String getLegacySapPriorityKey(String address) {
         return LEGACY_SAP_PRIORITY_PREFIX + address.toUpperCase(Locale.ROOT);
     }
@@ -1370,8 +1503,8 @@ public class DatabaseManager {
     }
 
     private void logManufacturerInfo(BluetoothDevice device, int key, byte[] bytesValue) {
-        String callingApp = mAdapterService.getPackageManager().getNameForUid(
-                Binder.getCallingUid());
+        String callingApp =
+                mAdapterService.getPackageManager().getNameForUid(Binder.getCallingUid());
         String manufacturerName = "";
         String modelName = "";
         String hardwareVersion = "";
@@ -1394,10 +1527,16 @@ public class DatabaseManager {
                 return;
         }
         String[] macAddress = device.getAddress().split(":");
-        BluetoothStatsLog.write(BluetoothStatsLog.BLUETOOTH_DEVICE_INFO_REPORTED,
+        BluetoothStatsLog.write(
+                BluetoothStatsLog.BLUETOOTH_DEVICE_INFO_REPORTED,
                 mAdapterService.obfuscateAddress(device),
-                BluetoothProtoEnums.DEVICE_INFO_EXTERNAL, callingApp, manufacturerName, modelName,
-                hardwareVersion, softwareVersion, mAdapterService.getMetricId(device),
+                BluetoothProtoEnums.DEVICE_INFO_EXTERNAL,
+                callingApp,
+                manufacturerName,
+                modelName,
+                hardwareVersion,
+                softwareVersion,
+                mAdapterService.getMetricId(device),
                 device.getAddressType(),
                 Integer.parseInt(macAddress[0], 16),
                 Integer.parseInt(macAddress[1], 16),
@@ -1407,8 +1546,8 @@ public class DatabaseManager {
     private void logMetadataChange(Metadata data, String log) {
         String time = Utils.getLocalTimeString();
         String uidPid = Utils.getUidPidString();
-        mMetadataChangedLog.add(time + " (" + uidPid + ") " + data.getAnonymizedAddress()
-                                + " " + log);
+        mMetadataChangedLog.add(
+                time + " (" + uidPid + ") " + data.getAnonymizedAddress() + " " + log);
     }
 
     /**

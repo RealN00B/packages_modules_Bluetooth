@@ -22,11 +22,13 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"  // Must be first to define build configuration
+#include <bluetooth/log.h>
+
 #include "bta/gatt/bta_gatts_int.h"
+#include "internal_include/bt_target.h"
 #include "stack/include/bt_hdr.h"
 
-#include <base/logging.h>
+using namespace bluetooth;
 
 /* GATTS control block */
 tBTA_GATTS_CB bta_gatts_cb;
@@ -83,24 +85,26 @@ bool bta_gatts_hdl_event(const BT_HDR_RIGID* p_msg) {
 
     case BTA_GATTS_API_DEL_SRVC_EVT: {
       tBTA_GATTS_SRVC_CB* p_srvc_cb = bta_gatts_find_srvc_cb_by_srvc_id(
-          p_cb, ((tBTA_GATTS_DATA*)p_msg)->api_add_service.hdr.layer_specific);
+              p_cb, ((tBTA_GATTS_DATA*)p_msg)->api_add_service.hdr.layer_specific);
 
-      if (p_srvc_cb != NULL)
+      if (p_srvc_cb != NULL) {
         bta_gatts_delete_service(p_srvc_cb, (tBTA_GATTS_DATA*)p_msg);
-      else
-        LOG(ERROR) << __func__ << ": can't delete service - no srvc_cb found";
+      } else {
+        log::error("can't delete service - no srvc_cb found");
+      }
 
       break;
     }
 
     case BTA_GATTS_API_STOP_SRVC_EVT: {
       tBTA_GATTS_SRVC_CB* p_srvc_cb = bta_gatts_find_srvc_cb_by_srvc_id(
-          p_cb, ((tBTA_GATTS_DATA*)p_msg)->api_add_service.hdr.layer_specific);
+              p_cb, ((tBTA_GATTS_DATA*)p_msg)->api_add_service.hdr.layer_specific);
 
-      if (p_srvc_cb != NULL)
+      if (p_srvc_cb != NULL) {
         bta_gatts_stop_service(p_srvc_cb, (tBTA_GATTS_DATA*)p_msg);
-      else
-        LOG(ERROR) << __func__ << ": can't stop service - no srvc_cb found";
+      } else {
+        log::error("can't stop service - no srvc_cb found");
+      }
 
       break;
     }
@@ -113,5 +117,5 @@ bool bta_gatts_hdl_event(const BT_HDR_RIGID* p_msg) {
       break;
   }
 
-  return (true);
+  return true;
 }

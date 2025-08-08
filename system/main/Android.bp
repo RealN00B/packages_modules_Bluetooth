@@ -11,9 +11,6 @@ package {
 filegroup {
     name: "LibBluetoothSources",
     srcs: [
-        "bte_conf.cc",
-        "bte_init_cpp_logging.cc",
-        "bte_logmsg.cc",
         "stack_config.cc",
     ],
 }
@@ -22,6 +19,7 @@ cc_library_static {
     name: "libbte",
     defaults: ["fluoride_defaults"],
     srcs: [
+        ":BluetoothStackManagerSources",
         ":LibBluetoothShimSources",
         ":LibBluetoothSources",
     ],
@@ -32,11 +30,9 @@ cc_library_static {
         "packages/modules/Bluetooth/system/bta/include",
         "packages/modules/Bluetooth/system/bta/sys",
         "packages/modules/Bluetooth/system/btif/co",
-        "packages/modules/Bluetooth/system/btif/include",
         "packages/modules/Bluetooth/system/embdrv/sbc/decoder/include",
         "packages/modules/Bluetooth/system/embdrv/sbc/encoder/include",
         "packages/modules/Bluetooth/system/gd",
-        "packages/modules/Bluetooth/system/internal_include",
         "packages/modules/Bluetooth/system/stack/a2dp",
         "packages/modules/Bluetooth/system/stack/avdt",
         "packages/modules/Bluetooth/system/stack/btm",
@@ -45,22 +41,19 @@ cc_library_static {
         "packages/modules/Bluetooth/system/udrv/include",
         "system/security/keystore/include",
     ],
-    generated_headers: [
-        "BluetoothGeneratedBundlerSchema_h_bfbs",
-        "BluetoothGeneratedDumpsysDataSchema_h",
-    ],
     apex_available: [
         "com.android.btservices",
     ],
     host_supported: true,
     min_sdk_version: "Tiramisu",
     static_libs: [
+        "bluetooth_flags_c_lib",
         "libbluetooth_gd",
+        "libbluetooth_log",
         "libbt-platform-protos-lite",
-        "libbt_shim_bridge",
+        "libcom.android.sysprop.bluetooth.wrapped",
     ],
     header_libs: ["libbluetooth_headers"],
-    cflags: ["-Wno-unused-parameter"],
 }
 
 cc_library {
@@ -68,7 +61,6 @@ cc_library {
     visibility: [
         "//cts/hostsidetests:__subpackages__",
         "//packages/modules/Bluetooth:__subpackages__",
-        "//vendor:__subpackages__",
     ],
     defaults: ["fluoride_defaults"],
     header_libs: ["libbluetooth_headers"],
@@ -80,10 +72,8 @@ cc_library {
         "packages/modules/Bluetooth/system/bta/include",
         "packages/modules/Bluetooth/system/bta/sys",
         "packages/modules/Bluetooth/system/btif/co",
-        "packages/modules/Bluetooth/system/btif/include",
         "packages/modules/Bluetooth/system/embdrv/sbc/decoder/include",
         "packages/modules/Bluetooth/system/embdrv/sbc/encoder/include",
-        "packages/modules/Bluetooth/system/internal_include",
         "packages/modules/Bluetooth/system/stack/a2dp",
         "packages/modules/Bluetooth/system/stack/avdt",
         "packages/modules/Bluetooth/system/stack/btm",
@@ -109,9 +99,6 @@ cc_library {
     // that might link statically with some of the code in the library, and
     // also dlopen(3) the shared library.
     ldflags: ["-Wl,-Bsymbolic,-Bsymbolic-functions"],
-    cflags: [
-        "-DBUILDCFG",
-    ],
     sanitize: {
         scs: true,
     },
@@ -127,6 +114,7 @@ cc_library_static {
     defaults: ["fluoride_defaults"],
 
     srcs: [
+        ":BluetoothStackManagerSources",
         ":LibBluetoothShimSources",
         ":LibBluetoothSources",
     ],
@@ -134,28 +122,18 @@ cc_library_static {
     include_dirs: [
         "packages/modules/Bluetooth/system",
         "packages/modules/Bluetooth/system/bta/include",
-        "packages/modules/Bluetooth/system/btif/include",
         "packages/modules/Bluetooth/system/gd",
-        "packages/modules/Bluetooth/system/internal_include",
         "packages/modules/Bluetooth/system/stack/include",
-    ],
-    generated_headers: [
-        "BluetoothGeneratedBundlerSchema_h_bfbs",
-        "BluetoothGeneratedDumpsysDataSchema_h",
-    ],
-    cflags: [
-        "-DBUILDCFG",
-        "-Wno-unused-parameter",
-    ],
-    shared_libs: [
     ],
     whole_static_libs: [
         "libbluetooth_gd", // Gabeldorsche
     ],
     header_libs: ["libbluetooth_headers"],
     static_libs: [
+        "bluetooth_flags_c_lib",
+        "libbluetooth_log",
         "libbt-platform-protos-lite",
-        "libbt_shim_bridge",
+        "libcom.android.sysprop.bluetooth.wrapped",
     ],
 }
 
@@ -180,24 +158,23 @@ cc_test {
         ":BluetoothOsSources_host",
         ":TestCommonMainHandler",
         ":TestCommonMockFunctions",
+        ":TestFakeOsi",
         ":TestMockBta",
         ":TestMockBtif",
         ":TestMockBtu",
+        ":TestMockJni",
         ":TestMockLegacyHciCommands",
         ":TestMockLegacyHciInterface",
         ":TestMockMainShimEntry",
         ":TestMockStack",
         "shim/acl.cc",
         "shim/acl_api.cc",
-        "shim/acl_legacy_interface.cc",
-        "shim/btm.cc",
+        "shim/acl_interface.cc",
         "shim/btm_api.cc",
         "shim/config.cc",
-        "shim/controller.cc",
         "shim/distance_measurement_manager.cc",
         "shim/dumpsys.cc",
         "shim/hci_layer.cc",
-        "shim/l2c_api.cc",
         "shim/le_advertising_manager.cc",
         "shim/le_scanning_manager.cc",
         "shim/metric_id_api.cc",
@@ -210,24 +187,33 @@ cc_test {
         "test/main_shim_test.cc",
     ],
     static_libs: [
-        "libbluetooth-dumpsys",
+        "bluetooth_flags_c_lib_for_test",
+        "libbase",
         "libbluetooth-types",
+        "libbluetooth_core_rs_bridge",
         "libbluetooth_crypto_toolbox",
         "libbluetooth_gd",
         "libbluetooth_hci_pdl",
+        "libbluetooth_log",
         "libbt-common",
         "libbt-platform-protos-lite",
-        "libbt_shim_bridge",
-        "libbt_shim_ffi",
         "libbtdevice",
         "libchrome",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libevent",
         "libflatbuffers-cpp",
         "libgmock",
         "liblog",
         "libosi",
     ],
+    aidl: {
+        libs: ["bluetooth_constants"],
+    },
     shared_libs: [
+        "libPlatformProperties",
+        "libaconfig_storage_read_api_cc",
+        "libbinder",
+        "libbinder_ndk",
         "libcrypto",
         "server_configurable_flags",
     ],
@@ -241,11 +227,6 @@ cc_test {
             undefined: true,
         },
     },
-    generated_headers: [
-        "BluetoothGeneratedBundlerSchema_h_bfbs",
-        "BluetoothGeneratedDumpsysDataSchema_h",
-    ],
     min_sdk_version: "Tiramisu",
     header_libs: ["libbluetooth_headers"],
-    cflags: ["-Wno-unused-parameter"],
 }

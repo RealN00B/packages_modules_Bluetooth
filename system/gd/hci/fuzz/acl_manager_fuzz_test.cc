@@ -14,17 +14,19 @@
  * limitations under the License.
  */
 
+#include <fuzzer/FuzzedDataProvider.h>
 #include <stddef.h>
 #include <stdint.h>
+
 #include "fuzz/helpers.h"
 #include "hci/acl_manager.h"
 #include "hci/fuzz/fuzz_hci_layer.h"
 #include "hci/hci_layer.h"
 #include "module.h"
 #include "os/fake_timer/fake_timerfd.h"
-#include "os/log.h"
 
-#include <fuzzer/FuzzedDataProvider.h>
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
 
 using bluetooth::FuzzTestModuleRegistry;
 using bluetooth::fuzz::GetArbitraryBytes;
@@ -57,7 +59,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
     switch (action) {
       case 1: {
-        uint64_t advanceTime = dataProvider.ConsumeIntegralInRange<uint64_t>(kMinTimeAdvanced, kMaxTotalTimeAdvanced);
+        uint64_t advanceTime = dataProvider.ConsumeIntegralInRange<uint64_t>(kMinTimeAdvanced,
+                                                                             kMaxTotalTimeAdvanced);
         totalAdvanceTime += advanceTime;
         if (totalAdvanceTime < kMaxTotalTimeAdvanced) {
           fake_timerfd_advance(advanceTime);

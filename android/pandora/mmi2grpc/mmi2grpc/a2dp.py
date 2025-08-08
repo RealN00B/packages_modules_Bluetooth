@@ -1,10 +1,10 @@
-# Copyright 2022 Google LLC
+# Copyright (C) 2024 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     https://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,12 +17,11 @@ import time
 from typing import Optional
 
 from grpc import RpcError
-
 from mmi2grpc._audio import AudioSignal
 from mmi2grpc._helpers import assert_description, match_description
 from mmi2grpc._proxy import ProfileProxy
 from pandora.a2dp_grpc import A2DP
-from pandora.a2dp_pb2 import Sink, Source, PlaybackAudioRequest
+from pandora.a2dp_pb2 import PlaybackAudioRequest, Sink, Source
 from pandora.host_grpc import Host
 from pandora.host_pb2 import Connection
 
@@ -67,7 +66,13 @@ class A2DPProxy(ProfileProxy):
         the IUT connects to PTS to establish pairing.
         """
 
-        if "SRC" in test:
+        if "A2DP/SRC/AVP" in test or "A2DP/SNK/AVP" in test:
+            # WaitSource is blocking and cannot be invoked in these tests
+            # because Android will initiate the AVDTP connection after a
+            # timeout if the remote device is inactive.
+            self.connection = self.host.WaitConnection(address=pts_addr).connection
+
+        elif "SRC" in test:
             self.connection = self.host.WaitConnection(address=pts_addr).connection
             try:
                 if "INT" in test:

@@ -29,8 +29,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
-import android.content.Context;
 import android.os.Binder;
 import android.os.RemoteException;
 
@@ -54,16 +54,13 @@ import java.io.PrintWriter;
 
 @SmallTest
 @RunWith(AndroidJUnit4.class)
+@SuppressLint("AndroidFrameworkRequiresPermission")
 public class BluetoothShellCommandTest {
     @Rule public final Expect expect = Expect.create();
 
-    @Mock
-    BluetoothManagerService mManagerService;
+    @Mock BluetoothManagerService mManagerService;
 
     @Mock BluetoothServiceBinder mBinder;
-
-    @Mock
-    Context mContext;
 
     BluetoothShellCommand mShellCommand;
 
@@ -72,10 +69,14 @@ public class BluetoothShellCommandTest {
         MockitoAnnotations.initMocks(this);
         doReturn(mBinder).when(mManagerService).getBinder();
 
-        mShellCommand = new BluetoothShellCommand(mManagerService, mContext);
+        mShellCommand = new BluetoothShellCommand(mManagerService);
         mShellCommand.init(
-                mock(Binder.class), mock(FileDescriptor.class), mock(FileDescriptor.class),
-                mock(FileDescriptor.class), new String[0], -1);
+                mock(Binder.class),
+                mock(FileDescriptor.class),
+                mock(FileDescriptor.class),
+                mock(FileDescriptor.class),
+                new String[0],
+                -1);
     }
 
     @After
@@ -116,15 +117,13 @@ public class BluetoothShellCommandTest {
 
         expect.that(waitCmd.getName()).isEqualTo("wait-for-state");
         String[] validCmd = {
-            "wait-for-state:STATE_OFF",
-            "wait-for-state:STATE_ON",
+            "wait-for-state:STATE_OFF", "wait-for-state:STATE_ON",
         };
         for (String m : validCmd) {
             expect.that(waitCmd.isMatch(m)).isTrue();
         }
         String[] falseCmd = {
-            "wait-for-stateSTATE_ON",
-            "wait-for-foo:STATE_ON",
+            "wait-for-stateSTATE_ON", "wait-for-foo:STATE_ON",
         };
         for (String m : falseCmd) {
             expect.that(waitCmd.isMatch(m)).isFalse();

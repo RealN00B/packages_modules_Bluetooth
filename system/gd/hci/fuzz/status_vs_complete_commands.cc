@@ -15,6 +15,7 @@
  */
 
 #include "hci/fuzz/status_vs_complete_commands.h"
+
 #include <map>
 
 namespace bluetooth {
@@ -24,7 +25,7 @@ namespace fuzz {
 using ::bluetooth::hci::OpCode;
 
 constexpr OpCode StatusOpCodes[] = {
-    OpCode::RESET,
+        OpCode::RESET,
 };
 
 static std::map<OpCode, bool> commands_that_use_status;
@@ -42,6 +43,11 @@ static void maybe_populate_list() {
 bool uses_command_status(OpCode code) {
   maybe_populate_list();
   return commands_that_use_status.find(code) != commands_that_use_status.end();
+}
+
+bool uses_command_status_or_complete(OpCode code) {
+  bool is_vendor_specific = (static_cast<int>(code) >> 10) == 0x3f;
+  return is_vendor_specific;
 }
 
 }  // namespace fuzz

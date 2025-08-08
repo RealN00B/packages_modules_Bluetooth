@@ -19,8 +19,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "os/log.h"
-
 namespace bluetooth {
 namespace packet {
 
@@ -62,29 +60,17 @@ bool RawBuilder::AddOctets(size_t octets, uint64_t value) {
   return AddOctets(octets, val_vector);
 }
 
-bool RawBuilder::AddOctets1(uint8_t value) {
-  return AddOctets(1, value);
-}
+bool RawBuilder::AddOctets1(uint8_t value) { return AddOctets(1, value); }
 
-bool RawBuilder::AddOctets2(uint16_t value) {
-  return AddOctets(2, value);
-}
+bool RawBuilder::AddOctets2(uint16_t value) { return AddOctets(2, value); }
 
-bool RawBuilder::AddOctets3(uint32_t value) {
-  return AddOctets(3, value);
-}
+bool RawBuilder::AddOctets3(uint32_t value) { return AddOctets(3, value); }
 
-bool RawBuilder::AddOctets4(uint32_t value) {
-  return AddOctets(4, value);
-}
+bool RawBuilder::AddOctets4(uint32_t value) { return AddOctets(4, value); }
 
-bool RawBuilder::AddOctets6(uint64_t value) {
-  return AddOctets(6, value);
-}
+bool RawBuilder::AddOctets6(uint64_t value) { return AddOctets(6, value); }
 
-bool RawBuilder::AddOctets8(uint64_t value) {
-  return AddOctets(8, value);
-}
+bool RawBuilder::AddOctets8(uint64_t value) { return AddOctets(8, value); }
 
 bool RawBuilder::CanAddOctets(size_t num_bytes) const {
   return payload_.size() + num_bytes <= max_bytes_;
@@ -96,8 +82,6 @@ void RawBuilder::Serialize(BitInserter& it) const {
   }
 }
 
-size_t RawBuilder::size() const {
-  return payload_.size();
-}
+size_t RawBuilder::size() const { return payload_.size(); }
 }  // namespace packet
 }  // namespace bluetooth

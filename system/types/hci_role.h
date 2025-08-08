@@ -37,13 +37,25 @@ inline std::string hci_role_text(const tHCI_ROLE& role) {
 }
 
 inline tHCI_ROLE to_hci_role(const uint8_t& role) {
-  if (role == 0)
+  if (role == 0) {
     return HCI_ROLE_CENTRAL;
-  else if (role == 1)
+  } else if (role == 1) {
     return HCI_ROLE_PERIPHERAL;
-  else
+  } else {
     return HCI_ROLE_UNKNOWN;
+  }
 }
 
 typedef tHCI_ROLE hci_role_t;         // LEGACY
 const auto RoleText = hci_role_text;  // LEGACY
+
+#if __has_include(<bluetooth/log.h>)
+
+#include <bluetooth/log.h>
+
+namespace std {
+template <>
+struct formatter<tHCI_ROLE> : enum_formatter<tHCI_ROLE> {};
+}  // namespace std
+
+#endif  // __has_include(<bluetooth/log.h>)

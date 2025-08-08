@@ -34,31 +34,12 @@ namespace test {
 namespace mock {
 namespace bta_sys_main {
 
-// Shared state between mocked functions and tests
-// Name: BTA_sys_signal_hw_error
-// Params:
-// Return: void
-struct BTA_sys_signal_hw_error {
-  std::function<void()> body{[]() {}};
-  void operator()() { body(); };
-};
-extern struct BTA_sys_signal_hw_error BTA_sys_signal_hw_error;
-
-// Name: bta_set_forward_hw_failures
-// Params: bool value
-// Return: void
-struct bta_set_forward_hw_failures {
-  std::function<void(bool value)> body{[](bool value) {}};
-  void operator()(bool value) { body(value); };
-};
-extern struct bta_set_forward_hw_failures bta_set_forward_hw_failures;
-
 // Name: bta_sys_deregister
 // Params: uint8_t id
 // Return: void
 struct bta_sys_deregister {
-  std::function<void(uint8_t id)> body{[](uint8_t id) {}};
-  void operator()(uint8_t id) { body(id); };
+  std::function<void(uint8_t id)> body{[](uint8_t /* id */) {}};
+  void operator()(uint8_t id) { body(id); }
 };
 extern struct bta_sys_deregister bta_sys_deregister;
 
@@ -67,7 +48,7 @@ extern struct bta_sys_deregister bta_sys_deregister;
 // Return: void
 struct bta_sys_disable {
   std::function<void()> body{[]() {}};
-  void operator()() { body(); };
+  void operator()() { body(); }
 };
 extern struct bta_sys_disable bta_sys_disable;
 
@@ -76,7 +57,7 @@ extern struct bta_sys_disable bta_sys_disable;
 // Return: void
 struct bta_sys_init {
   std::function<void(void)> body{[](void) {}};
-  void operator()(void) { body(); };
+  void operator()(void) { body(); }
 };
 extern struct bta_sys_init bta_sys_init;
 
@@ -85,9 +66,8 @@ extern struct bta_sys_init bta_sys_init;
 // Return: bool
 struct bta_sys_is_register {
   bool return_value{false};
-  std::function<bool(uint8_t id)> body{
-      [this](uint8_t id) { return return_value; }};
-  bool operator()(uint8_t id) { return body(id); };
+  std::function<bool(uint8_t id)> body{[this](uint8_t /* id */) { return return_value; }};
+  bool operator()(uint8_t id) { return body(id); }
 };
 extern struct bta_sys_is_register bta_sys_is_register;
 
@@ -96,8 +76,8 @@ extern struct bta_sys_is_register bta_sys_is_register;
 // Return: void
 struct bta_sys_register {
   std::function<void(uint8_t id, const tBTA_SYS_REG* p_reg)> body{
-      [](uint8_t id, const tBTA_SYS_REG* p_reg) {}};
-  void operator()(uint8_t id, const tBTA_SYS_REG* p_reg) { body(id, p_reg); };
+          [](uint8_t /* id */, const tBTA_SYS_REG* /* p_reg */) {}};
+  void operator()(uint8_t id, const tBTA_SYS_REG* p_reg) { body(id, p_reg); }
 };
 extern struct bta_sys_register bta_sys_register;
 
@@ -105,20 +85,18 @@ extern struct bta_sys_register bta_sys_register;
 // Params: void* p_msg
 // Return: void
 struct bta_sys_sendmsg {
-  std::function<void(void* p_msg)> body{[](void* p_msg) {}};
-  void operator()(void* p_msg) { body(p_msg); };
+  std::function<void(void* p_msg)> body{[](void* /* p_msg */) {}};
+  void operator()(void* p_msg) { body(p_msg); }
 };
 extern struct bta_sys_sendmsg bta_sys_sendmsg;
 
 // Name: bta_sys_sendmsg_delayed
-// Params: void* p_msg, const base::TimeDelta& delay
+// Params: void* p_msg, std::chrono::microseconds delay
 // Return: void
 struct bta_sys_sendmsg_delayed {
-  std::function<void(void* p_msg, const base::TimeDelta& delay)> body{
-      [](void* p_msg, const base::TimeDelta& delay) {}};
-  void operator()(void* p_msg, const base::TimeDelta& delay) {
-    body(p_msg, delay);
-  };
+  std::function<void(void* p_msg, std::chrono::microseconds delay)> body{
+          [](void* /* p_msg */, std::chrono::microseconds /* delay */) {}};
+  void operator()(void* p_msg, std::chrono::microseconds delay) { body(p_msg, delay); }
 };
 extern struct bta_sys_sendmsg_delayed bta_sys_sendmsg_delayed;
 
@@ -126,14 +104,12 @@ extern struct bta_sys_sendmsg_delayed bta_sys_sendmsg_delayed;
 // Params: alarm_t* alarm, uint64_t interval_ms, uint16_t event, uint16_t
 // layer_specific Return: void
 struct bta_sys_start_timer {
-  std::function<void(alarm_t* alarm, uint64_t interval_ms, uint16_t event,
-                     uint16_t layer_specific)>
-      body{[](alarm_t* alarm, uint64_t interval_ms, uint16_t event,
-              uint16_t layer_specific) {}};
-  void operator()(alarm_t* alarm, uint64_t interval_ms, uint16_t event,
-                  uint16_t layer_specific) {
+  std::function<void(alarm_t* alarm, uint64_t interval_ms, uint16_t event, uint16_t layer_specific)>
+          body{[](alarm_t* /* alarm */, uint64_t /* interval_ms */, uint16_t /* event */,
+                  uint16_t /* layer_specific */) {}};
+  void operator()(alarm_t* alarm, uint64_t interval_ms, uint16_t event, uint16_t layer_specific) {
     body(alarm, interval_ms, event, layer_specific);
-  };
+  }
 };
 extern struct bta_sys_start_timer bta_sys_start_timer;
 

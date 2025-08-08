@@ -17,8 +17,10 @@
 package com.android.bluetooth.mcp;
 
 import static java.util.Map.entry;
+import static java.util.Objects.requireNonNull;
 
 import android.annotation.NonNull;
+import android.bluetooth.BluetoothAvrcp;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothLeAudio;
 import android.bluetooth.BluetoothUuid;
@@ -36,11 +38,13 @@ import com.android.bluetooth.Utils;
 import com.android.bluetooth.audio_util.MediaData;
 import com.android.bluetooth.audio_util.MediaPlayerList;
 import com.android.bluetooth.audio_util.MediaPlayerWrapper;
+import com.android.bluetooth.btservice.AdapterService;
+import com.android.bluetooth.flags.Flags;
 import com.android.bluetooth.le_audio.ContentControlIdKeeper;
 import com.android.internal.annotations.VisibleForTesting;
 
-import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -61,18 +65,20 @@ import java.util.stream.Stream;
  * Implemented according to Media Control Service v1.0 specification.
  */
 public class MediaControlProfile implements MediaControlServiceCallbacks {
-    private static final String TAG = "MediaControlProfile";
-    private static final boolean DBG = Log.isLoggable(TAG, Log.DEBUG);
-    private final Context mContext;
+    private static final String TAG = MediaControlProfile.class.getSimpleName();
 
     private static final int LOG_NB_EVENTS = 100;
-    private final BluetoothEventLogger mEventLogger;
+
+    private final BluetoothEventLogger mEventLogger =
+            new BluetoothEventLogger(LOG_NB_EVENTS, TAG + " event log");
+    private final Context mContext;
+    private final McpService mMcpService;
+    private final Map<String, MediaControlGattServiceInterface> mServiceMap = new HashMap<>();
 
     // Media players data
-    private MediaPlayerList mMediaPlayerList;
+    private final MediaPlayerList mMediaPlayerList;
     private MediaData mCurrentData;
 
-    private McpService mMcpService;
     // MCP service instance
     private MediaControlGattServiceInterface mGMcsService;
 
@@ -80,11 +86,6 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
     private List<PlayerStateField> mPendingStateRequest;
 
     private MediaPlayerWrapper mLastActivePlayer = null;
-
-    static MediaPlayerList sMediaPlayerListForTesting = null;
-    static void setsMediaPlayerListForTesting(MediaPlayerList mediaPlayerList) {
-        sMediaPlayerListForTesting = mediaPlayerList;
-    }
 
     // Same base feature set as the player item features defined in `avrcp/get_foder_items.cc`
     private static final long BASE_PLAYER_ACTION_SET =
@@ -114,7 +115,6 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
 
             if (metadata || state || queue) {
                 mEventLogger.logd(
-                        DBG,
                         TAG,
                         "onMediaUpdated: track_changed="
                                 + metadata
@@ -134,7 +134,6 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
         @Override
         public void run(boolean availablePlayers, boolean addressedPlayers, boolean uids) {
             mEventLogger.logd(
-                    DBG,
                     TAG,
                     "onFolderUpdated: available_players= "
                             + availablePlayers
@@ -154,7 +153,7 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
     }
 
     private void onCurrentPlayerQueueUpdated() {
-        if (DBG) Log.d(TAG, "onCurrentPlayerQueueUpdated: not implemented");
+        Log.d(TAG, "onCurrentPlayerQueueUpdated: not implemented");
 
         /* TODO: Implement once we have the Object Transfer Service */
         if (mCurrentData.queue == null) return;
@@ -181,7 +180,7 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                     mEventLogger.loge(
                             TAG,
                             "onCurrentPlayerStateUpdated: base actions not supported, player"
-                                + " actions= "
+                                    + " actions= "
                                     + Long.toHexString(mCurrentData.state.getActions())
                                     + ", expected at least= "
                                     + Long.toHexString(BASE_PLAYER_ACTION_SET));
@@ -195,12 +194,12 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                             PlayerStateField.SEEKING_SPEED, mCurrentData.state.getPlaybackSpeed());
                     state_map.put(
                             PlayerStateField.PLAYBACK_SPEED, mCurrentData.state.getPlaybackSpeed());
-                    state_map.put(PlayerStateField.TRACK_POSITION,
+                    state_map.put(
+                            PlayerStateField.TRACK_POSITION,
                             getDriftCorrectedTrackPosition(mCurrentData.state));
                 }
 
                 mEventLogger.logd(
-                        DBG,
                         TAG,
                         "onCurrentPlayerStateUpdated state= "
                                 + playback_state
@@ -220,33 +219,39 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
         if (metadataChanged) {
             if (mCurrentData.metadata != null) {
                 mEventLogger.logd(
-                        DBG,
                         TAG,
                         "onCurrentPlayerStateUpdated metadata: title= '"
                                 + mCurrentData.metadata.title
                                 + "', duration= "
                                 + mCurrentData.metadata.duration);
 
-                state_map.put(PlayerStateField.TRACK_DURATION,
+                state_map.put(
+                        PlayerStateField.TRACK_DURATION,
                         mCurrentData.metadata.duration != null
                                 ? Long.valueOf(mCurrentData.metadata.duration)
-                                : Long.valueOf(MediaControlGattServiceInterface
-                                                       .TRACK_DURATION_UNAVAILABLE));
+                                : Long.valueOf(
+                                        MediaControlGattServiceInterface
+                                                .TRACK_DURATION_UNAVAILABLE));
 
-                state_map.put(PlayerStateField.TRACK_TITLE,
+                state_map.put(
+                        PlayerStateField.TRACK_TITLE,
                         mCurrentData.metadata.title != null ? mCurrentData.metadata.title : "");
 
                 // Update the position if track has changed
-                state_map.put(PlayerStateField.TRACK_POSITION,
+                state_map.put(
+                        PlayerStateField.TRACK_POSITION,
                         mCurrentData.state != null
                                 ? getDriftCorrectedTrackPosition(mCurrentData.state)
-                                : Long.valueOf(MediaControlGattServiceInterface
-                                                       .TRACK_POSITION_UNAVAILABLE));
+                                : Long.valueOf(
+                                        MediaControlGattServiceInterface
+                                                .TRACK_POSITION_UNAVAILABLE));
             } else {
-                state_map.put(PlayerStateField.TRACK_DURATION,
+                state_map.put(
+                        PlayerStateField.TRACK_DURATION,
                         Long.valueOf(MediaControlGattServiceInterface.TRACK_DURATION_UNAVAILABLE));
                 state_map.put(PlayerStateField.TRACK_TITLE, "");
-                state_map.put(PlayerStateField.TRACK_POSITION,
+                state_map.put(
+                        PlayerStateField.TRACK_POSITION,
                         Long.valueOf(MediaControlGattServiceInterface.TRACK_POSITION_UNAVAILABLE));
             }
         }
@@ -270,31 +275,28 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
     }
 
     public MediaControlProfile(@NonNull McpService mcpService) {
+        this(mcpService, new MediaPlayerList(Looper.myLooper(), mcpService));
+    }
+
+    public MediaControlProfile(@NonNull McpService mcpService, MediaPlayerList mediaPlayerList) {
         Log.v(TAG, "Creating Generic Media Control Service");
 
+        mMcpService = requireNonNull(mcpService);
         mContext = mcpService;
-        mMcpService = mcpService;
-        mServiceMap = new HashMap<>();
 
-        if (sMediaPlayerListForTesting != null) {
-            mMediaPlayerList = sMediaPlayerListForTesting;
-        } else {
-            mMediaPlayerList = new MediaPlayerList(Looper.myLooper(), mContext);
-        }
-
-        mEventLogger = new BluetoothEventLogger(LOG_NB_EVENTS, TAG + " event log");
+        mMediaPlayerList = requireNonNull(mediaPlayerList);
     }
 
     @Override
-    public void onServiceInstanceRegistered(ServiceStatus status,
-            MediaControlGattServiceInterface service) {
-        mEventLogger.logd(DBG, TAG, "onServiceInstanceRegistered: status= " + status);
+    public void onServiceInstanceRegistered(
+            ServiceStatus status, MediaControlGattServiceInterface service) {
+        mEventLogger.logd(TAG, "onServiceInstanceRegistered: status= " + status);
         mGMcsService = service;
     }
 
     @Override
     public void onServiceInstanceUnregistered(ServiceStatus status) {
-        mEventLogger.logd(DBG, TAG, "onServiceInstanceUnregistered: status= " + status);
+        mEventLogger.logd(TAG, "onServiceInstanceUnregistered: status= " + status);
         mGMcsService = null;
     }
 
@@ -345,13 +347,13 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
 
     @Override
     public long onGetCurrentTrackPosition() {
-        mEventLogger.logd(DBG, TAG, "getCurrentTrackPosition");
+        mEventLogger.logd(TAG, "getCurrentTrackPosition");
         return getLatestTrackPosition();
     }
 
     @Override
     public void onTrackPositionSetRequest(long position) {
-        mEventLogger.logd(DBG, TAG, "GMCS onTrackPositionSetRequest");
+        mEventLogger.logd(TAG, "GMCS onTrackPositionSetRequest");
 
         if (mMediaPlayerList.getActivePlayer() == null) return;
         if ((getCurrentPlayerSupportedActions() & PlaybackState.ACTION_SEEK_TO) != 0) {
@@ -362,54 +364,69 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
             state_map.put(PlayerStateField.TRACK_POSITION, getLatestTrackPosition());
 
             if (mGMcsService != null) {
-              mGMcsService.updatePlayerState(state_map);
+                mGMcsService.updatePlayerState(state_map);
             }
         }
     }
 
     @Override
     public void onCurrentTrackMetadataRequest() {
-        mEventLogger.logd(DBG, TAG, "GMCS onCurrentTrackMetadataRequest");
+        mEventLogger.logd(TAG, "GMCS onCurrentTrackMetadataRequest");
         // FIXME: Seems to be not used right now
     }
 
     @Override
     public void onPlayingOrderSetRequest(int order) {
-        mEventLogger.logd(DBG, TAG, "GMCS onPlayingOrderSetRequest");
+        mEventLogger.logd(TAG, "GMCS onPlayingOrderSetRequest");
         // Notice: MediaPlayerWrapper does not support play order control.
         // Ignore the request for now.
     }
 
     @Override
     public void onPlaybackSpeedSetRequest(float speed) {
-        mEventLogger.logd(DBG, TAG, "GMCS onPlaybackSpeedSetRequest");
+        mEventLogger.logd(TAG, "GMCS onPlaybackSpeedSetRequest");
         if (mMediaPlayerList.getActivePlayer() == null) return;
         mMediaPlayerList.getActivePlayer().setPlaybackSpeed(speed);
     }
 
     @Override
     public void onSetObjectIdRequest(int objField, long objectId) {
-        mEventLogger.logd(DBG, TAG, "GMCS onSetObjectIdRequest");
+        mEventLogger.logd(TAG, "GMCS onSetObjectIdRequest");
         // TODO: Implement once we have the Object Transfer Service
     }
 
     @Override
     public void onSearchRequest(SearchRequest request) {
-        mEventLogger.logd(DBG, TAG, "GMCS onSearchRequest");
+        mEventLogger.logd(TAG, "GMCS onSearchRequest");
         // TODO: Implement once we have the Object Transfer Service
     }
 
     @Override
     public void onMediaControlRequest(Request request) {
         mEventLogger.logd(
-                DBG,
                 TAG,
                 "GMCS onMediaControlRequest: opcode= "
                         + Request.Opcodes.toString(request.getOpcode()));
         Request.Results status = Request.Results.COMMAND_CANNOT_BE_COMPLETED;
 
-        if (mMediaPlayerList.getActivePlayer() == null && mGMcsService != null) {
-            mGMcsService.setMediaControlRequestResult(request, status);
+        if (Flags.mcpAllowPlayWithoutActivePlayer()
+                && !Utils.isPtsTestMode()
+                && mMediaPlayerList.getActivePlayer() == null
+                && request.getOpcode() == Request.Opcodes.PLAY) {
+            Log.d(TAG, "Player is not active. GMCS send media key for PLAY");
+            mMediaPlayerList.sendMediaKeyEvent(BluetoothAvrcp.PASSTHROUGH_ID_PLAY, true);
+            mMediaPlayerList.sendMediaKeyEvent(BluetoothAvrcp.PASSTHROUGH_ID_PLAY, false);
+            return;
+        }
+
+        if (mMediaPlayerList.getActivePlayer() == null || mCurrentData.state == null) {
+            Log.w(TAG, "no active MediaPlayer or mCurrentData is null");
+            if (mGMcsService != null) {
+                mGMcsService.setMediaControlRequestResult(request, status);
+            } else {
+                Log.e(TAG, "mGMcsService is null");
+            }
+            return;
         }
 
         long actions = getCurrentPlayerSupportedActions();
@@ -469,7 +486,8 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                     long current_pos_ms = getLatestTrackPosition();
                     long track_duration_ms = getCurrentTrackDuration();
 
-                    if (track_duration_ms != MediaControlGattServiceInterface.TRACK_DURATION_UNAVAILABLE) {
+                    if (track_duration_ms
+                            != MediaControlGattServiceInterface.TRACK_DURATION_UNAVAILABLE) {
                         current_pos_ms = current_pos_ms + requested_offset_ms;
                         if (current_pos_ms < 0) {
                             current_pos_ms = 0;
@@ -582,7 +600,7 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
     }
 
     private void processPendingPlayerStateRequest() {
-        if (DBG) Log.d(TAG, "GMCS processPendingPlayerStateRequest");
+        Log.d(TAG, "GMCS processPendingPlayerStateRequest");
 
         Map<PlayerStateField, Object> handled_request_map = new HashMap<>();
 
@@ -594,7 +612,8 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                 switch (settings_field) {
                     case PLAYBACK_STATE:
                         if (mCurrentData.state != null) {
-                            handled_request_map.put(settings_field,
+                            handled_request_map.put(
+                                    settings_field,
                                     playerState2McsState(mCurrentData.state.getState()));
                         }
                         break;
@@ -611,7 +630,7 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                         float seeking_speed = 1.0f;
                         if (mCurrentData.state != null) {
                             if ((mCurrentData.state.getState()
-                                    == PlaybackState.STATE_FAST_FORWARDING)
+                                            == PlaybackState.STATE_FAST_FORWARDING)
                                     || (mCurrentData.state.getState()
                                             == PlaybackState.STATE_REWINDING)) {
                                 seeking_speed = mCurrentData.state.getPlaybackSpeed();
@@ -626,8 +645,8 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                     case TRACK_POSITION:
                         if (mCurrentData.state != null) {
                             handled_request_map.put(
-                                    settings_field, getDriftCorrectedTrackPosition(
-                                            mCurrentData.state));
+                                    settings_field,
+                                    getDriftCorrectedTrackPosition(mCurrentData.state));
                         }
                         break;
                     case PLAYER_NAME:
@@ -655,11 +674,13 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                                             getCurrentPlayerSupportedActions());
                             handled_request_map.put(settings_field, opcodes);
                             mEventLogger.logd(
-                                    DBG,
                                     TAG,
                                     "updateSupportedOpcodes setting supported opcodes to: "
                                             + opcodes);
                         }
+                        break;
+                    case TRACK_TITLE:
+                        // Not implemented
                         break;
                 }
             }
@@ -668,17 +689,15 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
         if (!handled_request_map.isEmpty()) {
             removePendingStateRequests(handled_request_map.keySet());
             if (mGMcsService != null) {
-              mGMcsService.updatePlayerState(handled_request_map);
+                mGMcsService.updatePlayerState(handled_request_map);
             }
         }
 
-        if (DBG) {
-            synchronized (this) {
-                if (mPendingStateRequest != null && !mPendingStateRequest.isEmpty()) {
-                    Log.w(TAG, "MCS service state fields left unhandled: ");
-                    for (PlayerStateField item : mPendingStateRequest) {
-                        Log.w(TAG, "   > " + item);
-                    }
+        synchronized (this) {
+            if (mPendingStateRequest != null && !mPendingStateRequest.isEmpty()) {
+                Log.w(TAG, "MCS service state fields left unhandled: ");
+                for (PlayerStateField item : mPendingStateRequest) {
+                    Log.w(TAG, "   > " + item);
                 }
             }
         }
@@ -735,7 +754,7 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
             ApplicationInfo info = pm.getApplicationInfo(player.getPackageName(), 0);
             player_name = info.loadLabel(pm).toString();
         } catch (PackageManager.NameNotFoundException e) {
-            e.printStackTrace();
+            Log.e(TAG, e.toString() + "\n" + Log.getStackTraceString(new Throwable()));
         }
         return player_name;
     }
@@ -752,8 +771,11 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
             }
 
             // Instantiate a Service Instance and it's state machine
-            int ccid = ContentControlIdKeeper.acquireCcid(BluetoothUuid.GENERIC_MEDIA_CONTROL,
-                    BluetoothLeAudio.CONTEXT_TYPE_MEDIA | BluetoothLeAudio.CONTEXT_TYPE_LIVE);
+            int ccid =
+                    ContentControlIdKeeper.acquireCcid(
+                            BluetoothUuid.GENERIC_MEDIA_CONTROL,
+                            BluetoothLeAudio.CONTEXT_TYPE_MEDIA
+                                    | BluetoothLeAudio.CONTEXT_TYPE_LIVE);
             if (ccid == ContentControlIdKeeper.CCID_INVALID) {
                 Log.e(TAG, "Unable to acquire valid CCID!");
                 return;
@@ -763,7 +785,6 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
             boolean isGenericMcs = appToken.equals(mContext.getPackageName());
 
             mEventLogger.logd(
-                    DBG,
                     TAG,
                     "Register MediaControlGattService instance ccid= "
                             + ccid
@@ -771,8 +792,10 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
                             + ServiceFeature.featuresToString(SUPPORTED_FEATURES, "\n\t\t\t"));
 
             MediaControlGattService svc = new MediaControlGattService(mMcpService, this, ccid);
-            svc.init(isGenericMcs ? BluetoothUuid.GENERIC_MEDIA_CONTROL.getUuid()
-                    : BluetoothUuid.MEDIA_CONTROL.getUuid());
+            svc.init(
+                    isGenericMcs
+                            ? BluetoothUuid.GENERIC_MEDIA_CONTROL.getUuid()
+                            : BluetoothUuid.MEDIA_CONTROL.getUuid());
             mServiceMap.put(appToken, svc);
         }
     }
@@ -782,10 +805,7 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
     }
 
     public void cleanup() {
-        if (mMediaPlayerList != null) {
-            mMediaPlayerList.cleanup();
-        }
-        mMediaPlayerList = null;
+        mMediaPlayerList.cleanup();
 
         unregisterServiceInstance(mContext.getPackageName());
 
@@ -805,41 +825,48 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
         return playback_state;
     }
 
-    private static final Map<Integer, MediaState> sPlayerState2McsStateMap = Map.ofEntries(
-            entry(PlaybackState.STATE_NONE, MediaState.INACTIVE),
-            entry(PlaybackState.STATE_STOPPED, MediaState.PAUSED),
-            entry(PlaybackState.STATE_PAUSED, MediaState.PAUSED),
-            entry(PlaybackState.STATE_PLAYING, MediaState.PLAYING),
-            entry(PlaybackState.STATE_FAST_FORWARDING, MediaState.SEEKING),
-            entry(PlaybackState.STATE_REWINDING, MediaState.SEEKING),
-            entry(PlaybackState.STATE_BUFFERING, MediaState.PAUSED),
-            entry(PlaybackState.STATE_ERROR, MediaState.INACTIVE),
-            entry(PlaybackState.STATE_CONNECTING, MediaState.INACTIVE),
-            entry(PlaybackState.STATE_SKIPPING_TO_PREVIOUS, MediaState.PAUSED),
-            entry(PlaybackState.STATE_SKIPPING_TO_NEXT, MediaState.PAUSED),
-            entry(PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM, MediaState.PAUSED));
+    private static final Map<Integer, MediaState> sPlayerState2McsStateMap =
+            Map.ofEntries(
+                    entry(PlaybackState.STATE_NONE, MediaState.INACTIVE),
+                    entry(PlaybackState.STATE_STOPPED, MediaState.PAUSED),
+                    entry(PlaybackState.STATE_PAUSED, MediaState.PAUSED),
+                    entry(PlaybackState.STATE_PLAYING, MediaState.PLAYING),
+                    entry(PlaybackState.STATE_FAST_FORWARDING, MediaState.SEEKING),
+                    entry(PlaybackState.STATE_REWINDING, MediaState.SEEKING),
+                    entry(PlaybackState.STATE_BUFFERING, MediaState.PAUSED),
+                    entry(PlaybackState.STATE_ERROR, MediaState.INACTIVE),
+                    entry(PlaybackState.STATE_CONNECTING, MediaState.INACTIVE),
+                    entry(PlaybackState.STATE_SKIPPING_TO_PREVIOUS, MediaState.PAUSED),
+                    entry(PlaybackState.STATE_SKIPPING_TO_NEXT, MediaState.PAUSED),
+                    entry(PlaybackState.STATE_SKIPPING_TO_QUEUE_ITEM, MediaState.PAUSED));
 
-    private static final long SUPPORTED_FEATURES = ServiceFeature.PLAYER_NAME
-            | ServiceFeature.PLAYER_NAME_NOTIFY
-            // It seems that can't provide player icon URIs that easily
-            // BluetoothMcs.ServiceFeature.PLAYER_ICON_URL |
-            | ServiceFeature.TRACK_CHANGED | ServiceFeature.TRACK_TITLE
-            | ServiceFeature.TRACK_TITLE_NOTIFY | ServiceFeature.TRACK_DURATION
-            | ServiceFeature.TRACK_DURATION_NOTIFY | ServiceFeature.TRACK_POSITION
-            | ServiceFeature.TRACK_POSITION_NOTIFY | ServiceFeature.PLAYBACK_SPEED
-            | ServiceFeature.PLAYBACK_SPEED_NOTIFY | ServiceFeature.SEEKING_SPEED
-            | ServiceFeature.SEEKING_SPEED_NOTIFY | ServiceFeature.PLAYING_ORDER
-            | ServiceFeature.PLAYING_ORDER_NOTIFY | ServiceFeature.PLAYING_ORDER_SUPPORTED
-            | ServiceFeature.MEDIA_STATE | ServiceFeature.MEDIA_CONTROL_POINT
-            | ServiceFeature.MEDIA_CONTROL_POINT_OPCODES_SUPPORTED
-            | ServiceFeature.MEDIA_CONTROL_POINT_OPCODES_SUPPORTED_NOTIFY
-            | ServiceFeature.CONTENT_CONTROL_ID;
-
-
-    private final Map<String, MediaControlGattServiceInterface> mServiceMap;
+    private static final long SUPPORTED_FEATURES =
+            ServiceFeature.PLAYER_NAME
+                    | ServiceFeature.PLAYER_NAME_NOTIFY
+                    // It seems that can't provide player icon URIs that easily
+                    // BluetoothMcs.ServiceFeature.PLAYER_ICON_URL |
+                    | ServiceFeature.TRACK_CHANGED
+                    | ServiceFeature.TRACK_TITLE
+                    | ServiceFeature.TRACK_TITLE_NOTIFY
+                    | ServiceFeature.TRACK_DURATION
+                    | ServiceFeature.TRACK_DURATION_NOTIFY
+                    | ServiceFeature.TRACK_POSITION
+                    | ServiceFeature.TRACK_POSITION_NOTIFY
+                    | ServiceFeature.PLAYBACK_SPEED
+                    | ServiceFeature.PLAYBACK_SPEED_NOTIFY
+                    | ServiceFeature.SEEKING_SPEED
+                    | ServiceFeature.SEEKING_SPEED_NOTIFY
+                    | ServiceFeature.PLAYING_ORDER
+                    | ServiceFeature.PLAYING_ORDER_NOTIFY
+                    | ServiceFeature.PLAYING_ORDER_SUPPORTED
+                    | ServiceFeature.MEDIA_STATE
+                    | ServiceFeature.MEDIA_CONTROL_POINT
+                    | ServiceFeature.MEDIA_CONTROL_POINT_OPCODES_SUPPORTED
+                    | ServiceFeature.MEDIA_CONTROL_POINT_OPCODES_SUPPORTED_NOTIFY
+                    | ServiceFeature.CONTENT_CONTROL_ID;
 
     public void unregisterServiceInstance(String appToken) {
-        mEventLogger.logd(DBG, TAG, "unregisterServiceInstance");
+        mEventLogger.logd(TAG, "unregisterServiceInstance");
 
         synchronized (mServiceMap) {
             MediaControlGattServiceInterface service = mServiceMap.get(appToken);
@@ -876,7 +903,9 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
     List<ParcelUuid> getNotificationSubscriptions(int ccid, BluetoothDevice device) {
         // TODO: Support multiple MCS instances
         if (isGenericMediaService(ccid)) {
-            byte[] gmcs_cccd = device.getMetadata(BluetoothDevice.METADATA_GMCS_CCCD);
+            byte[] gmcs_cccd =
+                    AdapterService.getAdapterService()
+                            .getMetadata(device, BluetoothDevice.METADATA_GMCS_CCCD);
             if ((gmcs_cccd != null) && (gmcs_cccd.length != 0)) {
                 return Arrays.asList(Utils.byteArrayToUuid(gmcs_cccd));
             }
@@ -887,39 +916,42 @@ public class MediaControlProfile implements MediaControlServiceCallbacks {
     void setNotificationSubscription(
             int ccid, BluetoothDevice device, ParcelUuid charUuid, boolean doNotify) {
         // TODO: Support multiple MCS instances
-        if (isGenericMediaService(ccid)) {
-            byte[] gmcs_cccd = device.getMetadata(BluetoothDevice.METADATA_GMCS_CCCD);
-            List<ParcelUuid> uuidList;
+        if (!isGenericMediaService(ccid)) {
+            return;
+        }
+        AdapterService adapterService = AdapterService.getAdapterService();
+        byte[] gmcs_cccd = adapterService.getMetadata(device, BluetoothDevice.METADATA_GMCS_CCCD);
+        List<ParcelUuid> uuidList;
 
-            if ((gmcs_cccd == null) || (gmcs_cccd.length == 0)) {
-                uuidList = new ArrayList<ParcelUuid>();
-            } else {
-                uuidList =
-                        new ArrayList<ParcelUuid>(Arrays.asList(Utils.byteArrayToUuid(gmcs_cccd)));
-            }
+        if ((gmcs_cccd == null) || (gmcs_cccd.length == 0)) {
+            uuidList = new ArrayList<>();
+        } else {
+            uuidList = new ArrayList<>(Arrays.asList(Utils.byteArrayToUuid(gmcs_cccd)));
+        }
 
-            boolean updateDb = false;
-            if (doNotify) {
-                if (!uuidList.contains(charUuid)) {
-                    uuidList.add(charUuid);
-                    updateDb = true;
-                }
-            } else if (uuidList.contains(charUuid)) {
-                uuidList.remove(charUuid);
+        boolean updateDb = false;
+        if (doNotify) {
+            if (!uuidList.contains(charUuid)) {
+                uuidList.add(charUuid);
                 updateDb = true;
             }
+        } else if (uuidList.contains(charUuid)) {
+            uuidList.remove(charUuid);
+            updateDb = true;
+        }
 
-            if (updateDb) {
-                if (!device.setMetadata(
-                        BluetoothDevice.METADATA_GMCS_CCCD,
-                        Utils.uuidsToByteArray(uuidList.toArray(new ParcelUuid[0])))) {
-                    Log.e(
-                            TAG,
-                            "Can't set CCCD for GMCS characteristic UUID: "
-                                    + charUuid.toString()
-                                    + ", (remove)");
-                }
-            }
+        if (!updateDb) {
+            return;
+        }
+        if (!adapterService.setMetadata(
+                device,
+                BluetoothDevice.METADATA_GMCS_CCCD,
+                Utils.uuidsToByteArray(uuidList.toArray(new ParcelUuid[0])))) {
+            Log.e(
+                    TAG,
+                    "Can't set CCCD for GMCS characteristic UUID: "
+                            + charUuid.toString()
+                            + ", (remove)");
         }
     }
 

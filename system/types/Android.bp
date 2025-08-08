@@ -41,10 +41,8 @@ cc_library_static {
     host_supported: true,
     srcs: [
         "bluetooth/uuid.cc",
-        "class_of_device.cc",
         "raw_address.cc",
     ],
-    static_libs: ["libchrome"],
     header_libs: ["libbluetooth-types-header"],
     export_header_lib_headers: ["libbluetooth-types-header"],
     apex_available: [
@@ -57,8 +55,10 @@ cc_library_static {
 cc_test {
     name: "net_test_types",
     static_libs: [
+        "libbase",
         "libbluetooth-types",
-        "libchrome",
+        "libbluetooth_log",
+        "libcom.android.sysprop.bluetooth.wrapped",
         "libosi", // strlcpy
     ],
     test_suites: ["general-tests"],
@@ -68,13 +68,13 @@ cc_test {
     ],
     include_dirs: [
         "packages/modules/Bluetooth/system",
+        "packages/modules/Bluetooth/system/include",
     ],
     host_supported: true,
     srcs: [
         "test/ble_address_with_type_unittest.cc",
         "test/bluetooth/uuid_unittest.cc",
         "test/bt_name_test.cc",
-        "test/class_of_device_unittest.cc",
         "test/raw_address_unittest.cc",
     ],
     shared_libs: ["liblog"],

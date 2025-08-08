@@ -5,10 +5,14 @@
       "name": "CtsBluetoothTestCases"
     },
     {
+      "name": "CtsStrictJavaPackagesTestCases"
+    },
+    {
       "name": "BluetoothInstrumentationTests"
     },
     {
-      "name": "GoogleBluetoothInstrumentationTests"
+      "name": "GoogleBluetoothInstrumentationTests",
+      "keywords": ["internal"]
     },
     {
       "name": "FrameworkBluetoothTests"
@@ -21,9 +25,6 @@
     //{
     //  "name": "bluetooth-test-audio-hal-interface"
     //},
-    {
-      "name": "net_test_audio_a2dp_hw"
-    },
     {
       "name": "net_test_audio_hearing_aid_hw"
     },
@@ -55,7 +56,7 @@
       "name": "net_test_device_iot_config"
     },
     {
-      "name": "net_test_gatt_conn_multiplexing"
+      "name": "net_test_conn_multiplexing"
     },
     {
       "name": "net_test_hci"
@@ -107,12 +108,6 @@
       "name": "bluetooth_test_common"
     },
     {
-      "name": "bluetooth_test_gd_unit"
-    },
-    {
-      "name": "bluetooth_test_sdp"
-    },
-    {
       "name": "bluetooth_vc_test"
     },
     {
@@ -126,9 +121,6 @@
     },
     {
       "name": "net_test_btcore"
-    },
-    {
-      "name": "net_test_btif_config_cache"
     },
     {
       "name": "net_test_btif_hh"
@@ -226,9 +218,6 @@
     //  "name": "bluetooth-test-audio-hal-interface"
     //},
     {
-      "name": "net_test_audio_a2dp_hw"
-    },
-    {
       "name": "net_test_audio_hearing_aid_hw"
     },
     {
@@ -259,7 +248,7 @@
       "name": "net_test_device_iot_config"
     },
     {
-      "name": "net_test_gatt_conn_multiplexing"
+      "name": "net_test_conn_multiplexing"
     },
     {
       "name": "net_test_stack"
@@ -274,24 +263,17 @@
     {
       "name": "bluetooth_flatbuffer_tests"
     },
-    // b/271319421
-    // {
-    //   "name": "bluetooth_le_audio_test"
-    // },
     {
-      "name": "bluetooth_test_common"
+      "name": "bluetooth_le_audio_test"
     },
     {
-      "name": "bluetooth_test_sdp"
+      "name": "bluetooth_test_common"
     },
     {
       "name": "bluetooth_vc_test"
     },
     {
       "name": "net_test_avrcp"
-    },
-    {
-      "name": "net_test_btif_config_cache"
     },
     {
       "name": "net_test_btpackets"
@@ -321,6 +303,18 @@
   "postsubmit": [
     {
       "name": "bluetooth_le_audio_codec_manager_test"
+    },
+    {
+      "name": "bluetooth-test-audio-hal-a2dp-provider-info"
+    },
+    {
+      "name": "net_test_bta_jv"
+    },
+    {
+      "name": "net_test_stack_avctp"
+    },
+    {
+      "name": "asrc_resampler_test"
     }
   ]
 }

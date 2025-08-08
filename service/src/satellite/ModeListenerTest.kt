@@ -35,14 +35,32 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TestName
 import org.junit.runner.RunWith
-import org.mockito.Mockito.times
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class ModeListenerTest {
+    companion object {
+        internal fun setupSatelliteModeToOn(
+            resolver: ContentResolver,
+            looper: Looper,
+            callback: (m: Boolean) -> Unit
+        ) {
+            enableSensitive(resolver, looper, SETTINGS_SATELLITE_MODE_RADIOS)
+            enableMode(resolver, looper, SETTINGS_SATELLITE_MODE_ENABLED)
+
+            initialize(looper, resolver, callback)
+        }
+
+        internal fun setupSatelliteModeToOff(resolver: ContentResolver, looper: Looper) {
+            disableSensitive(resolver, looper, SETTINGS_SATELLITE_MODE_RADIOS)
+            disableMode(resolver, looper, SETTINGS_SATELLITE_MODE_ENABLED)
+        }
+    }
+
+    @get:Rule val testName = TestName()
+
     private val resolver: ContentResolver =
         ApplicationProvider.getApplicationContext<Context>().getContentResolver()
-    @JvmField @Rule val testName = TestName()
 
     private val looper: Looper = Looper.getMainLooper()
 

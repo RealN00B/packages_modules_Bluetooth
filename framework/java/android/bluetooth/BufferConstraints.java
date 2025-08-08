@@ -27,11 +27,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-
 /**
  * A parcelable collection of buffer constraints by codec type.
  *
- * {@hide}
+ * @hide
  */
 @SystemApi
 public final class BufferConstraints implements Parcelable {
@@ -42,20 +41,18 @@ public final class BufferConstraints implements Parcelable {
     private Map<Integer, BufferConstraint> mBufferConstraints;
     private List<BufferConstraint> mBufferConstraintList;
 
-    public BufferConstraints(@NonNull List<BufferConstraint>
-            bufferConstraintList) {
+    public BufferConstraints(@NonNull List<BufferConstraint> bufferConstraintList) {
 
-        mBufferConstraintList = new ArrayList<BufferConstraint>(bufferConstraintList);
-        mBufferConstraints = new HashMap<Integer, BufferConstraint>();
+        mBufferConstraintList = new ArrayList<>(bufferConstraintList);
+        mBufferConstraints = new HashMap<>();
         for (int i = 0; i < BUFFER_CODEC_MAX_NUM; i++) {
             mBufferConstraints.put(i, bufferConstraintList.get(i));
         }
     }
 
     BufferConstraints(Parcel in) {
-        mBufferConstraintList = new ArrayList<BufferConstraint>();
-        mBufferConstraints = new HashMap<Integer, BufferConstraint>();
-        in.readList(mBufferConstraintList, BufferConstraint.class.getClassLoader());
+        mBufferConstraints = new HashMap<>();
+        mBufferConstraintList = in.createTypedArrayList(BufferConstraint.CREATOR);
         for (int i = 0; i < mBufferConstraintList.size(); i++) {
             mBufferConstraints.put(i, mBufferConstraintList.get(i));
         }
@@ -74,7 +71,7 @@ public final class BufferConstraints implements Parcelable {
 
     @Override
     public void writeToParcel(@NonNull Parcel out, int flags) {
-        out.writeList(mBufferConstraintList);
+        out.writeTypedList(mBufferConstraintList);
     }
 
     @Override

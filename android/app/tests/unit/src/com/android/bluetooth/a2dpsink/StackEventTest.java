@@ -19,29 +19,23 @@ import static com.google.common.truth.Truth.assertThat;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
-import android.content.Context;
+import android.bluetooth.BluetoothProfile;
 
-import androidx.test.InstrumentationRegistry;
 import androidx.test.runner.AndroidJUnit4;
 
-import com.android.bluetooth.R;
-
 import org.junit.After;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 public class StackEventTest {
-    private Context mTargetContext = null;
     private BluetoothAdapter mAdapter = null;
     private BluetoothDevice mDevice = null;
     private static final String TEST_ADDRESS = "11:11:11:11:11:11";
 
     @Before
     public void setUp() throws Exception {
-        mTargetContext = InstrumentationRegistry.getTargetContext();
         mAdapter = BluetoothAdapter.getDefaultAdapter();
         assertThat(mAdapter).isNotNull();
         mDevice = mAdapter.getRemoteDevice(TEST_ADDRESS);
@@ -49,29 +43,28 @@ public class StackEventTest {
 
     @After
     public void tearDown() throws Exception {
-        mTargetContext = null;
         mAdapter = null;
         mDevice = null;
     }
 
     @Test
     public void testCreateConnectionStateChangedDisconnectedEvent() {
-        testConnectionStateChangedBase(StackEvent.CONNECTION_STATE_DISCONNECTED);
+        testConnectionStateChangedBase(BluetoothProfile.STATE_DISCONNECTED);
     }
 
     @Test
     public void testCreateConnectionStateChangedConnectingEvent() {
-        testConnectionStateChangedBase(StackEvent.CONNECTION_STATE_CONNECTING);
+        testConnectionStateChangedBase(BluetoothProfile.STATE_CONNECTING);
     }
 
     @Test
     public void testCreateConnectionStateChangedConnectedEvent() {
-        testConnectionStateChangedBase(StackEvent.CONNECTION_STATE_CONNECTED);
+        testConnectionStateChangedBase(BluetoothProfile.STATE_CONNECTED);
     }
 
     @Test
     public void testCreateConnectionStateChangedDisconnectingEvent() {
-        testConnectionStateChangedBase(StackEvent.CONNECTION_STATE_DISCONNECTING);
+        testConnectionStateChangedBase(BluetoothProfile.STATE_DISCONNECTING);
     }
 
     private void testConnectionStateChangedBase(int state) {

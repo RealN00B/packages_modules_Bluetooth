@@ -1,10 +1,10 @@
-# Copyright 2022 Google LLC
+# Copyright (C) 2024 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     https://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,10 +17,9 @@ import sys
 
 from mmi2grpc._helpers import assert_description
 from mmi2grpc._proxy import ProfileProxy
-
 from pandora.host_grpc import Host
-from pandora_experimental.pan_grpc import PAN
 from pandora_experimental.os_grpc import Os
+from pandora_experimental.pan_grpc import PAN
 
 # IP address of PTS
 TSPX_PTS_IP_ADDRESS = "192.168.168.100"

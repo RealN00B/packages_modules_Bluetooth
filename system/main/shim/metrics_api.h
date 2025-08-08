@@ -20,6 +20,8 @@
 #include <frameworks/proto_logging/stats/enums/bluetooth/hci/enums.pb.h>
 #include <frameworks/proto_logging/stats/enums/bluetooth/le/enums.pb.h>
 
+#include "hci/address.h"
+#include "hci/hci_packets.h"
 #include "os/metrics.h"
 #include "types/raw_address.h"
 
@@ -41,11 +43,11 @@ namespace shim {
  * @param cmd_status Command status associated with this event, if any
  * @param reason_code Reason code associated with this event, if any
  */
-void LogMetricLinkLayerConnectionEvent(
-    const RawAddress* address, uint32_t connection_handle,
-    android::bluetooth::DirectionEnum direction, uint16_t link_type,
-    uint32_t hci_cmd, uint16_t hci_event, uint16_t hci_ble_event,
-    uint16_t cmd_status, uint16_t reason_code);
+void LogMetricLinkLayerConnectionEvent(const RawAddress* address, uint32_t connection_handle,
+                                       android::bluetooth::DirectionEnum direction,
+                                       uint16_t link_type, uint32_t hci_cmd, uint16_t hci_event,
+                                       uint16_t hci_ble_event, uint16_t cmd_status,
+                                       uint16_t reason_code);
 
 /**
  * Log A2DP audio buffer underrun event
@@ -55,8 +57,7 @@ void LogMetricLinkLayerConnectionEvent(
  * @param num_missing_pcm_bytes number of PCM bytes that cannot be read from
  *                              the source
  */
-void LogMetricA2dpAudioUnderrunEvent(const RawAddress& address,
-                                     uint64_t encoding_interval_millis,
+void LogMetricA2dpAudioUnderrunEvent(const RawAddress& address, uint64_t encoding_interval_millis,
                                      int num_missing_pcm_bytes);
 
 /**
@@ -70,10 +71,8 @@ void LogMetricA2dpAudioUnderrunEvent(const RawAddress& address,
  * @param num_dropped_encoded_bytes number of encoded bytes dropped from Tx
  *                                  queue
  */
-void LogMetricA2dpAudioOverrunEvent(const RawAddress& address,
-                                    uint64_t encoding_interval_millis,
-                                    int num_dropped_buffers,
-                                    int num_dropped_encoded_frames,
+void LogMetricA2dpAudioOverrunEvent(const RawAddress& address, uint64_t encoding_interval_millis,
+                                    int num_dropped_buffers, int num_dropped_encoded_frames,
                                     int num_dropped_encoded_bytes);
 
 /**
@@ -83,9 +82,34 @@ void LogMetricA2dpAudioOverrunEvent(const RawAddress& address,
  * @param playback_state A2DP audio playback state, on/off
  * @param audio_coding_mode A2DP audio codec encoding mode, hw/sw
  */
-void LogMetricA2dpPlaybackEvent(const RawAddress& raw_address,
-                                int playback_state, int audio_coding_mode);
+void LogMetricA2dpPlaybackEvent(const RawAddress& raw_address, int playback_state,
+                                int audio_coding_mode);
 
+/**
+ * Log A2DP audio session metrics event
+ *
+ * @param address A2DP device associated with this session
+ * @param audio_duration_ms duration of the A2DP session
+ * @param media_timer_min_ms min time interval for the media timer
+ * @param media_timer_max_ms max time interval for the media timer
+ * @param media_timer_avg_ms avg time interval for the media timer
+ * @param total_scheduling_count total scheduling count
+ * @param buffer_overruns_max_count max count of Tx queue messages dropped
+                                    caused by buffer overruns
+ * @param buffer_overruns_total total count of Tx queue messages dropped
+                                caused by buffer overruns
+ * @param buffer_underruns_average  avg number of bytes short in buffer
+                                    underruns
+ * @param buffer_underruns_count count of buffer underruns
+ * @param codec_index A2DP codec index (SBC=0, AAC=1, etc...)
+ * @param is_a2dp_offload if A2DP is offload
+ */
+void LogMetricA2dpSessionMetricsEvent(const RawAddress& address, int64_t audio_duration_ms,
+                                      int media_timer_min_ms, int media_timer_max_ms,
+                                      int media_timer_avg_ms, int total_scheduling_count,
+                                      int buffer_overruns_max_count, int buffer_overruns_total,
+                                      float buffer_underruns_average, int buffer_underruns_count,
+                                      int64_t codec_index, bool is_a2dp_offload);
 /**
  * Log HFP audio capture packet loss statistics
  *
@@ -94,8 +118,7 @@ void LogMetricA2dpPlaybackEvent(const RawAddress& raw_address,
  * @param packet_loss_ratio ratio of packet loss frames
  * @param codec_id codec ID of the packet (mSBC=2, LC3=3)
  */
-void LogMetricHfpPacketLossStats(const RawAddress& address,
-                                 int num_decoded_frames,
+void LogMetricHfpPacketLossStats(const RawAddress& address, int num_decoded_frames,
                                  double packet_loss_ratio, uint16_t codec_id);
 
 /**
@@ -106,8 +129,8 @@ void LogMetricHfpPacketLossStats(const RawAddress& address,
  * @param num_requests the number of transcoding requests in the session
  * @param codec_type codec type used in this session
  */
-void LogMetricMmcTranscodeRttStats(int maximum_rtt, double mean_rtt,
-                                   int num_requests, int codec_type);
+void LogMetricMmcTranscodeRttStats(int maximum_rtt, double mean_rtt, int num_requests,
+                                   int codec_type);
 
 /**
  * Log read RSSI result
@@ -118,8 +141,8 @@ void LogMetricMmcTranscodeRttStats(int maximum_rtt, double mean_rtt,
  * @param cmd_status command status from read RSSI command
  * @param rssi rssi value in dBm
  */
-void LogMetricReadRssiResult(const RawAddress& address, uint16_t handle,
-                             uint32_t cmd_status, int8_t rssi);
+void LogMetricReadRssiResult(const RawAddress& address, uint16_t handle, uint32_t cmd_status,
+                             int8_t rssi);
 
 /**
  * Log failed contact counter report
@@ -131,10 +154,8 @@ void LogMetricReadRssiResult(const RawAddress& address, uint16_t handle,
  * @param failed_contact_counter Number of consecutive failed contacts for a
  *                               connection corresponding to the Handle
  */
-void LogMetricReadFailedContactCounterResult(const RawAddress& address,
-                                             uint16_t handle,
-                                             uint32_t cmd_status,
-                                             int32_t failed_contact_counter);
+void LogMetricReadFailedContactCounterResult(const RawAddress& address, uint16_t handle,
+                                             uint32_t cmd_status, int32_t failed_contact_counter);
 
 /**
  * Log transmit power level for a particular device after read
@@ -147,8 +168,7 @@ void LogMetricReadFailedContactCounterResult(const RawAddress& address,
  *                             device
  */
 void LogMetricReadTxPowerLevelResult(const RawAddress& address, uint16_t handle,
-                                     uint32_t cmd_status,
-                                     int32_t transmit_power_level);
+                                     uint32_t cmd_status, int32_t transmit_power_level);
 
 /**
  * Logs when there is an event related to Bluetooth Security Manager Protocol
@@ -174,9 +194,8 @@ void LogMetricSmpPairingEvent(const RawAddress& address, uint16_t smp_cmd,
  * @param reason_code Reason code associated with this event
  * @param event_value A status value related to this specific event
  */
-void LogMetricClassicPairingEvent(const RawAddress& address, uint16_t handle,
-                                  uint32_t hci_cmd, uint16_t hci_event,
-                                  uint16_t cmd_status, uint16_t reason_code,
+void LogMetricClassicPairingEvent(const RawAddress& address, uint16_t handle, uint32_t hci_cmd,
+                                  uint16_t hci_event, uint16_t cmd_status, uint16_t reason_code,
                                   int64_t event_value);
 
 /**
@@ -189,9 +208,8 @@ void LogMetricClassicPairingEvent(const RawAddress& address, uint16_t handle,
  * @param attribute_value pointer to the attribute data, must be larger than
  *                        attribute_size
  */
-void LogMetricSdpAttribute(const RawAddress& address, uint16_t protocol_uuid,
-                           uint16_t attribute_id, size_t attribute_size,
-                           const char* attribute_value);
+void LogMetricSdpAttribute(const RawAddress& address, uint16_t protocol_uuid, uint16_t attribute_id,
+                           size_t attribute_size, const char* attribute_value);
 
 /**
  * Logs when there is a change in Bluetooth socket connection state
@@ -208,11 +226,10 @@ void LogMetricSdpAttribute(const RawAddress& address, uint16_t protocol_uuid,
  * @param socket_role role of this socket, server or connection
  * @param uid socket owner's uid
  */
-void LogMetricSocketConnectionState(
-    const RawAddress& address, int port, int type,
-    android::bluetooth::SocketConnectionstateEnum connection_state,
-    int64_t tx_bytes, int64_t rx_bytes, int uid, int server_port,
-    android::bluetooth::SocketRoleEnum socket_role);
+void LogMetricSocketConnectionState(const RawAddress& address, int port, int type,
+                                    android::bluetooth::SocketConnectionstateEnum connection_state,
+                                    int64_t tx_bytes, int64_t rx_bytes, int uid, int server_port,
+                                    android::bluetooth::SocketRoleEnum socket_role);
 
 /**
  * Logs when a Bluetooth device's manufacturer information is learnt
@@ -225,20 +242,46 @@ void LogMetricSocketConnectionState(
  * @param hardware_version hardware version of this device
  * @param software_version software version of this device
  */
-void LogMetricManufacturerInfo(
-    const RawAddress& address, android::bluetooth::AddressTypeEnum address_type,
-    android::bluetooth::DeviceInfoSrcEnum source_type,
-    const std::string& source_name, const std::string& manufacturer,
-    const std::string& model, const std::string& hardware_version,
-    const std::string& software_version);
+void LogMetricManufacturerInfo(const RawAddress& address,
+                               android::bluetooth::AddressTypeEnum address_type,
+                               android::bluetooth::DeviceInfoSrcEnum source_type,
+                               const std::string& source_name, const std::string& manufacturer,
+                               const std::string& model, const std::string& hardware_version,
+                               const std::string& software_version);
+
+/**
+ * Logs the Pairing Failed Command
+ * @param raw_address Address of the device
+ * @param failure_reason The reason for the pairing failure (smp status)
+ * @param is_outgoing the direction in which the command was sent
+ */
+void LogMetricLePairingFail(const RawAddress& raw_address, uint8_t failure_reason,
+                            bool is_outgoing);
+
+/**
+ * Logs GATT connect/disconnect status
+ * @param address Address of the device
+ * @param is_connect indicates connection or disconnection
+ * @param reason the reason/status for the connection event
+ */
+void LogMetricLeConnectionStatus(hci::Address address, bool is_connect, hci::ErrorCode reason);
+
+/**
+ * Logs LE filter accept list events
+ * @param address Address of the device
+ * @param is_add indicates addition or removal of the device in the accept list
+ */
+void LogMetricLeDeviceInAcceptList(hci::Address address, bool is_connect);
+
+/**
+ * Logs GATT lifecycle events
+ * @param address Address of the device
+ * @param is_connect indicates connection or disconnection
+ * @param is_direct indicates direct or background connection, ignored for disconnection
+ */
+void LogMetricLeConnectionLifecycle(hci::Address address, bool is_connect, bool is_direct);
 
 bool CountCounterMetrics(int32_t key, int64_t count);
 
-void LogMetricBluetoothLEConnectionMetricEvent(
-    const RawAddress& raw_address,
-    android::bluetooth::le::LeConnectionOriginType origin_type,
-    android::bluetooth::le::LeConnectionType connection_type,
-    android::bluetooth::le::LeConnectionState transaction_state,
-    std::vector<std::pair<os::ArgumentType, int>> argument_list);
 }  // namespace shim
 }  // namespace bluetooth

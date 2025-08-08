@@ -19,15 +19,18 @@
 #pragma once
 
 #include <base/strings/stringprintf.h>
+#include <bluetooth/log.h>
 
 #include <cstdint>
 #include <string>
 
+#include "macros.h"
 #include "stack/include/bt_dev_class.h"
 #include "stack/include/bt_name.h"
 #include "stack/include/bt_octets.h"
 #include "stack/include/hcidefs.h"
 #include "stack/include/smp_api_types.h"
+#include "stack/include/smp_status.h"
 #include "types/bt_transport.h"
 #include "types/raw_address.h"
 
@@ -96,7 +99,7 @@ enum : uint16_t {
 };
 
 /* Security Flags [bit mask] (BTM_GetSecurityFlags)
-*/
+ */
 #define BTM_SEC_FLAG_AUTHENTICATED 0x02
 #define BTM_SEC_FLAG_ENCRYPTED 0x04
 #define BTM_SEC_FLAG_LKEY_KNOWN 0x10
@@ -104,7 +107,7 @@ enum : uint16_t {
 
 /* Link Key types used to generate the new link key.
  * returned in link key notification callback function
-*/
+ */
 #define BTM_LKEY_TYPE_COMBINATION HCI_LKEY_TYPE_COMBINATION
 #define BTM_LKEY_TYPE_REMOTE_UNIT HCI_LKEY_TYPE_REMOTE_UNIT
 #define BTM_LKEY_TYPE_DEBUG_COMB HCI_LKEY_TYPE_DEBUG_COMB
@@ -172,7 +175,7 @@ typedef uint8_t tBTM_LINK_KEY_TYPE;
  * trusted services
  ******************************************************************************/
 
-enum {
+typedef enum : uint8_t {
   BTM_SP_IO_REQ_EVT,    /* received IO_CAPABILITY_REQUEST event */
   BTM_SP_IO_RSP_EVT,    /* received IO_CAPABILITY_RESPONSE event */
   BTM_SP_CFM_REQ_EVT,   /* received USER_CONFIRMATION_REQUEST event */
@@ -180,8 +183,21 @@ enum {
   BTM_SP_KEY_REQ_EVT,   /* received USER_PASSKEY_REQUEST event */
   BTM_SP_LOC_OOB_EVT,   /* received result for READ_LOCAL_OOB_DATA command */
   BTM_SP_RMT_OOB_EVT,   /* received REMOTE_OOB_DATA_REQUEST event */
-};
-typedef uint8_t tBTM_SP_EVT;
+} tBTM_SP_EVT;
+
+inline std::string sp_evt_to_text(const tBTM_SP_EVT evt) {
+  switch (evt) {
+    CASE_RETURN_TEXT(BTM_SP_IO_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_SP_IO_RSP_EVT);
+    CASE_RETURN_TEXT(BTM_SP_CFM_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_SP_KEY_NOTIF_EVT);
+    CASE_RETURN_TEXT(BTM_SP_KEY_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_SP_LOC_OOB_EVT);
+    CASE_RETURN_TEXT(BTM_SP_RMT_OOB_EVT);
+  }
+
+  return base::StringPrintf("UNKNOWN[%hhu]", evt);
+}
 
 enum : uint8_t {
   BTM_IO_CAP_OUT = 0,    /* DisplayOnly */
@@ -261,12 +277,6 @@ enum {
 
 typedef uint8_t tBTM_OOB_DATA;
 
-#ifndef CASE_RETURN_TEXT
-#define CASE_RETURN_TEXT(code) \
-  case code:                   \
-    return #code
-#endif
-
 inline std::string btm_oob_data_text(const tBTM_OOB_DATA& data) {
   switch (data) {
     CASE_RETURN_TEXT(BTM_OOB_NONE);
@@ -279,8 +289,6 @@ inline std::string btm_oob_data_text(const tBTM_OOB_DATA& data) {
   }
 }
 
-#undef CASE_RETURN_TEXT
-
 /* data type for BTM_SP_IO_REQ_EVT */
 typedef struct {
   RawAddress bd_addr;     /* peer address */
@@ -292,21 +300,20 @@ typedef struct {
 
 /* data type for BTM_SP_IO_RSP_EVT */
 typedef struct {
-  RawAddress bd_addr; /* peer address */
-  tBTM_IO_CAP io_cap; /* peer IO capabilities */
-  tBTM_OOB_DATA
-      oob_data; /* OOB data present at peer device for the local device */
+  RawAddress bd_addr;     /* peer address */
+  tBTM_IO_CAP io_cap;     /* peer IO capabilities */
+  tBTM_OOB_DATA oob_data; /* OOB data present at peer device for the local device */
   tBTM_AUTH_REQ auth_req; /* Authentication required for peer device */
 } tBTM_SP_IO_RSP;
 
 /* data type for BTM_SP_CFM_REQ_EVT */
 typedef struct {
-  RawAddress bd_addr;   /* peer address */
-  DEV_CLASS dev_class;  /* peer CoD */
-  tBTM_BD_NAME bd_name; /* peer device name */
-  uint32_t num_val; /* the numeric value for comparison. If just_works, do not
-                       show this number to UI */
-  bool just_works;  /* true, if "Just Works" association model */
+  RawAddress bd_addr;         /* peer address */
+  DEV_CLASS dev_class;        /* peer CoD */
+  BD_NAME bd_name;            /* peer device name */
+  uint32_t num_val;           /* the numeric value for comparison. If just_works, do not
+                                 show this number to UI */
+  bool just_works;            /* true, if "Just Works" association model */
   tBTM_AUTH_REQ loc_auth_req; /* Authentication required for local device */
   tBTM_AUTH_REQ rmt_auth_req; /* Authentication required for peer device */
   tBTM_IO_CAP loc_io_caps;    /* IO Capabilities of the local device */
@@ -315,31 +322,33 @@ typedef struct {
 
 /* data type for BTM_SP_KEY_REQ_EVT */
 typedef struct {
-  RawAddress bd_addr;   /* peer address */
-  DEV_CLASS dev_class;  /* peer CoD */
-  tBTM_BD_NAME bd_name; /* peer device name */
+  RawAddress bd_addr;  /* peer address */
+  DEV_CLASS dev_class; /* peer CoD */
+  BD_NAME bd_name;     /* peer device name */
 } tBTM_SP_KEY_REQ;
 
 /* data type for BTM_SP_KEY_NOTIF_EVT */
 typedef struct {
-  RawAddress bd_addr;   /* peer address */
-  DEV_CLASS dev_class;  /* peer CoD */
-  tBTM_BD_NAME bd_name; /* peer device name */
-  uint32_t passkey;     /* passkey */
+  RawAddress bd_addr;  /* peer address */
+  DEV_CLASS dev_class; /* peer CoD */
+  BD_NAME bd_name;     /* peer device name */
+  uint32_t passkey;    /* passkey */
 } tBTM_SP_KEY_NOTIF;
 
 /* data type for BTM_SP_LOC_OOB_EVT */
 typedef struct {
   tBTM_STATUS status; /* */
-  Octet16 c;          /* Simple Pairing Hash C */
-  Octet16 r;          /* Simple Pairing Randomnizer R */
+  Octet16 c_192;      /* Simple Pairing Hash C from P-192 public key */
+  Octet16 r_192;      /* Simple Pairing Randomnizer R from P-192 public key */
+  Octet16 c_256;      /* Simple Pairing Hash C from P-256 public key */
+  Octet16 r_256;      /* Simple Pairing Randomnizer R from P-256 public key */
 } tBTM_SP_LOC_OOB;
 
 /* data type for BTM_SP_RMT_OOB_EVT */
 typedef struct {
-  RawAddress bd_addr;   /* peer address */
-  DEV_CLASS dev_class;  /* peer CoD */
-  tBTM_BD_NAME bd_name; /* peer device name */
+  RawAddress bd_addr;  /* peer address */
+  DEV_CLASS dev_class; /* peer CoD */
+  BD_NAME bd_name;     /* peer device name */
 } tBTM_SP_RMT_OOB;
 
 typedef union {
@@ -354,12 +363,10 @@ typedef union {
 
 /* Simple Pairing Events.  Called by the stack when Simple Pairing related
  * events occur.
-*/
-typedef tBTM_STATUS(tBTM_SP_CALLBACK)(tBTM_SP_EVT event,
-                                      tBTM_SP_EVT_DATA* p_data);
+ */
+typedef tBTM_STATUS(tBTM_SP_CALLBACK)(tBTM_SP_EVT event, tBTM_SP_EVT_DATA* p_data);
 
-typedef void(tBTM_MKEY_CALLBACK)(const RawAddress& bd_addr, uint8_t status,
-                                 uint8_t key_flag);
+typedef void(tBTM_MKEY_CALLBACK)(const RawAddress& bd_addr, uint8_t status, uint8_t key_flag);
 
 /* Encryption enabled/disabled complete: Optionally passed with
  * BTM_SetEncryption.
@@ -367,47 +374,76 @@ typedef void(tBTM_MKEY_CALLBACK)(const RawAddress& bd_addr, uint8_t status,
  *              BD Address of remote
  *              optional data passed in by BTM_SetEncryption
  *              tBTM_STATUS - result of the operation
-*/
-typedef void(tBTM_SEC_CALLBACK)(const RawAddress* bd_addr,
-                                tBT_TRANSPORT trasnport, void* p_ref_data,
+ */
+typedef void(tBTM_SEC_CALLBACK)(RawAddress bd_addr, tBT_TRANSPORT transport, void* p_ref_data,
                                 tBTM_STATUS result);
 typedef tBTM_SEC_CALLBACK tBTM_SEC_CALLBACK;
 
 /* Bond Cancel complete. Parameters are
  *              Result of the cancel operation
  *
-*/
+ */
 typedef void(tBTM_BOND_CANCEL_CMPL_CALLBACK)(tBTM_STATUS result);
 
-/* LE related event and data structure */
-/* received IO_CAPABILITY_REQUEST event */
-#define BTM_LE_IO_REQ_EVT SMP_IO_CAP_REQ_EVT
-/* security request event */
-#define BTM_LE_SEC_REQUEST_EVT SMP_SEC_REQUEST_EVT
-/* received USER_PASSKEY_NOTIFY event */
-#define BTM_LE_KEY_NOTIF_EVT SMP_PASSKEY_NOTIF_EVT
-/* received USER_PASSKEY_REQUEST event */
-#define BTM_LE_KEY_REQ_EVT SMP_PASSKEY_REQ_EVT
-/* OOB data request event */
-#define BTM_LE_OOB_REQ_EVT SMP_OOB_REQ_EVT
-/* Numeric Comparison request event */
-#define BTM_LE_NC_REQ_EVT SMP_NC_REQ_EVT
-/* Peer keypress notification recd event */
-#define BTM_LE_PR_KEYPR_NOT_EVT SMP_PEER_KEYPR_NOT_EVT
-/* SC OOB request event (both local and peer OOB data) can be expected in
- * response */
-#define BTM_LE_SC_OOB_REQ_EVT SMP_SC_OOB_REQ_EVT
-/* SC OOB local data set is created (as result of SMP_CrLocScOobData(...)) */
-#define BTM_LE_SC_LOC_OOB_EVT SMP_SC_LOC_OOB_DATA_UP_EVT
-/* SMP complete event */
-#define BTM_LE_COMPLT_EVT SMP_COMPLT_EVT
-#define BTM_LE_LAST_FROM_SMP SMP_BR_KEYS_REQ_EVT
-/* KEY update event */
-#define BTM_LE_KEY_EVT (BTM_LE_LAST_FROM_SMP + 1)
-#define BTM_LE_CONSENT_REQ_EVT SMP_CONSENT_REQ_EVT
-/* Identity address associate event */
-#define BTM_LE_ADDR_ASSOC_EVT SMP_LE_ADDR_ASSOC_EVT
-typedef uint8_t tBTM_LE_EVT;
+typedef enum : uint8_t {
+  /* LE related event and data structure */
+  /* received IO_CAPABILITY_REQUEST event */
+  BTM_LE_IO_REQ_EVT = SMP_IO_CAP_REQ_EVT,
+  /* security request event */
+  BTM_LE_SEC_REQUEST_EVT = SMP_SEC_REQUEST_EVT,
+
+  /* received USER_PASSKEY_NOTIFY event */
+  BTM_LE_KEY_NOTIF_EVT = SMP_PASSKEY_NOTIF_EVT,
+
+  /* received USER_PASSKEY_REQUEST event */
+  BTM_LE_KEY_REQ_EVT = SMP_PASSKEY_REQ_EVT,
+
+  /* OOB data request event */
+  BTM_LE_OOB_REQ_EVT = SMP_OOB_REQ_EVT,
+
+  /* Numeric Comparison request event */
+  BTM_LE_NC_REQ_EVT = SMP_NC_REQ_EVT,
+
+  /* Peer keypress notification recd event */
+  BTM_LE_PR_KEYPR_NOT_EVT = SMP_PEER_KEYPR_NOT_EVT,
+
+  /* SC OOB request event (both local and peer OOB data) can be expected in
+   * response */
+  BTM_LE_SC_OOB_REQ_EVT = SMP_SC_OOB_REQ_EVT,
+
+  /* SC OOB local data set is created (as result of SMP_CrLocScOobData(...)) */
+  BTM_LE_SC_LOC_OOB_EVT = SMP_SC_LOC_OOB_DATA_UP_EVT,
+  /* SMP complete event */
+  BTM_LE_COMPLT_EVT = SMP_COMPLT_EVT,
+  BTM_LE_LAST_FROM_SMP = SMP_BR_KEYS_REQ_EVT,
+  /* KEY update event */
+  BTM_LE_KEY_EVT = (BTM_LE_LAST_FROM_SMP + 1),
+  BTM_LE_CONSENT_REQ_EVT = SMP_CONSENT_REQ_EVT,
+
+  /* Identity address associate event */
+  BTM_LE_ADDR_ASSOC_EVT = SMP_LE_ADDR_ASSOC_EVT,
+} tBTM_LE_EVT;
+
+inline std::string ble_evt_to_text(const tBTM_LE_EVT evt) {
+  switch (evt) {
+    CASE_RETURN_TEXT(BTM_LE_IO_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_LE_SEC_REQUEST_EVT);
+    CASE_RETURN_TEXT(BTM_LE_KEY_NOTIF_EVT);
+    CASE_RETURN_TEXT(BTM_LE_KEY_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_LE_OOB_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_LE_NC_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_LE_PR_KEYPR_NOT_EVT);
+    CASE_RETURN_TEXT(BTM_LE_SC_OOB_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_LE_SC_LOC_OOB_EVT);
+    CASE_RETURN_TEXT(BTM_LE_COMPLT_EVT);
+    CASE_RETURN_TEXT(BTM_LE_LAST_FROM_SMP);
+    CASE_RETURN_TEXT(BTM_LE_KEY_EVT);
+    CASE_RETURN_TEXT(BTM_LE_CONSENT_REQ_EVT);
+    CASE_RETURN_TEXT(BTM_LE_ADDR_ASSOC_EVT);
+  }
+
+  return base::StringPrintf("UNKNOWN[%hhu]", evt);
+}
 
 enum : uint8_t {
   BTM_LE_KEY_NONE = 0,
@@ -456,7 +492,7 @@ typedef struct {
 
 /* data type for tBTM_LE_COMPLT */
 typedef struct {
-  uint8_t reason;
+  tSMP_STATUS reason;
   uint8_t sec_level;
   bool is_pair_cancel;
   bool smp_over_br;
@@ -479,10 +515,6 @@ enum tBTM_BOND_TYPE : uint8_t {
   BOND_TYPE_TEMPORARY = 2
 };
 
-#define CASE_RETURN_TEXT(code) \
-  case code:                   \
-    return #code
-
 inline std::string bond_type_text(const tBTM_BOND_TYPE& bond_type) {
   switch (bond_type) {
     CASE_RETURN_TEXT(BOND_TYPE_UNKNOWN);
@@ -493,4 +525,9 @@ inline std::string bond_type_text(const tBTM_BOND_TYPE& bond_type) {
   }
 }
 
-#undef CASE_RETURN_TEXT
+namespace std {
+template <>
+struct formatter<tBTM_BLE_SEC_ACT> : enum_formatter<tBTM_BLE_SEC_ACT> {};
+template <>
+struct formatter<tBTM_BOND_TYPE> : enum_formatter<tBTM_BOND_TYPE> {};
+}  // namespace std

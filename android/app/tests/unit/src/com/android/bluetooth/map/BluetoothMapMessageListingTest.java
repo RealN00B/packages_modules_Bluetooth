@@ -33,7 +33,6 @@ import org.xmlpull.v1.XmlPullParserException;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.text.SimpleDateFormat;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -47,7 +46,6 @@ public class BluetoothMapMessageListingTest {
     private static final boolean TEST_REPORT_READ = true;
     private static final String TEST_VERSION = "test_version";
 
-    private final SimpleDateFormat format = new SimpleDateFormat("yyyyMMdd'T'HHmmss");
     private final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss");
 
     private BluetoothMapMessageListingElement mListingElementEarliestWithReadFalse;
@@ -126,8 +124,8 @@ public class BluetoothMapMessageListingTest {
 
         assertThat(listingToAppend.getList().size()).isEqualTo(2);
 
-        final InputStream listingStream = new ByteArrayInputStream(
-                listingToAppend.encode(false, TEST_VERSION));
+        final InputStream listingStream =
+                new ByteArrayInputStream(listingToAppend.encode(false, TEST_VERSION));
 
         BluetoothMapMessageListing listing = new BluetoothMapMessageListing();
         appendFromXml(listingStream, listing);
@@ -188,8 +186,10 @@ public class BluetoothMapMessageListingTest {
             String attributeName = parser.getAttributeName(i).trim();
             String attributeValue = parser.getAttributeValue(i);
             if (attributeName.equalsIgnoreCase("datetime")) {
-                newElement.setDateTime(LocalDateTime.parse(attributeValue, formatter).toInstant(
-                        ZoneOffset.ofTotalSeconds(0)).toEpochMilli());
+                newElement.setDateTime(
+                        LocalDateTime.parse(attributeValue, formatter)
+                                .toInstant(ZoneOffset.ofTotalSeconds(0))
+                                .toEpochMilli());
             } else if (attributeName.equalsIgnoreCase("read")) {
                 newElement.setRead(true, true);
             }

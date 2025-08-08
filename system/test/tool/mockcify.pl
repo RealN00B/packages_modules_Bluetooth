@@ -18,6 +18,9 @@ use File::Basename;
 
 ## mockcify version
 ##
+## 0.7.1 Add tBTA_JV_STATUS return value
+##       Remove unused compiler definition HAS_NO_BDROID_BUILDCFG
+##
 ## 0.7.0 Comment out unused mock variables
 ##
 ## 0.6.3 Streamline inclusion for headers and source
@@ -44,7 +47,7 @@ use File::Basename;
 ##
 ## 0.2.0 First version
 ##
-my $VERSION = "0.7.0";
+my $VERSION = "0.7.1";
 
 use diagnostics;
 use strict;
@@ -207,7 +210,6 @@ if ($COMPILE_SCREEN_ENABLED) {
 sub reject_include_list {
     my @incs = ();
     foreach (@_) {
-      next if (/init_flags/);
       push(@incs, $_);
     }
     return @incs;
@@ -236,7 +238,6 @@ sub compilation_screen {
     ## Verious external or generated header not needed for mocks
     foreach((
             "test/mock/mock.h",
-            "src/init_flags.rs.h",
             "src/message_loop_thread.rs.h",
             "android/hardware/bluetooth/audio/2.2/IBluetoothAudioProvidersFactory.h",
             "android/hardware/bluetooth/audio/2.2/types.h",
@@ -257,14 +258,14 @@ sub compilation_screen {
         "test/mock/",
         "types/",
     );
-    my @defs = (
-        "HAS_NO_BDROID_BUILDCFG",
+    ## Any additional compiler definitions that may be required
+    my @compiler_defs = (
     );
 
     my $link="test/mock/$hdr";
     unlink "$INCDIR/$link";
     symlink "$OUTDIR/$hdr", "$INCDIR/$link";
-    system("$CC -c -std=c++17 -o /dev/null -D" . join(" -D", @defs) . " -I" . join(" -I", @incs) . " $OUTDIR/$src");
+    system("$CC -c -std=c++20 -o /dev/null -D" . join(" -D", @compiler_defs) . " -I" . join(" -I", @incs) . " $OUTDIR/$src");
     my $rc = $?;
          ($? == 0)
          ? printf(STDERR "SUCCESS Compiled unit \'$src\'\n")
@@ -582,6 +583,8 @@ sub get_default_return_value_from_type {
     return "BTA_SDP_SUCCESS";
   } elsif(/tBTA_STATUS/) {
     return "BTA_SUCCESS";
+  } elsif(/tBTA_JV_STATUS/) {
+    return "tBTA_JV_STATUS::SUCCESS";
   } else {
     ## Decay to int type
     return "0";

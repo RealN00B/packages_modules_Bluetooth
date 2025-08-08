@@ -29,11 +29,11 @@
 #include "btif_sock_thread.h"
 
 #include <alloca.h>
+#include <bluetooth/log.h>
 #include <fcntl.h>
 #include <features.h>
 #include <poll.h>
 #include <pthread.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
@@ -47,28 +47,28 @@
 #include <mutex>
 #include <optional>
 
-#include "os/log.h"
 #include "osi/include/osi.h"  // OSI_NO_INTR
 
-#define asrt(s)                                                       \
-  do {                                                                \
-    if (!(s))                                                         \
-      LOG_ERROR("## %s assert %s failed at line:%d ##", __func__, #s, \
-                __LINE__);                                            \
+#define asrt(s)                                 \
+  do {                                          \
+    if (!(s))                                   \
+      log::error("## assert {} failed ##", #s); \
   } while (0)
 
 #define MAX_THREAD 8
 #define MAX_POLL 64
 #define POLL_EXCEPTION_EVENTS (POLLHUP | POLLRDHUP | POLLERR | POLLNVAL)
-#define IS_EXCEPTION(e) ((e)&POLL_EXCEPTION_EVENTS)
-#define IS_READ(e) ((e)&POLLIN)
-#define IS_WRITE(e) ((e)&POLLOUT)
+#define IS_EXCEPTION(e) ((e) & POLL_EXCEPTION_EVENTS)
+#define IS_READ(e) ((e) & POLLIN)
+#define IS_WRITE(e) ((e) & POLLOUT)
 /*cmd executes in socket poll thread */
 #define CMD_WAKEUP 1
 #define CMD_EXIT 2
 #define CMD_ADD_FD 3
 #define CMD_REMOVE_FD 4
 #define CMD_USER_PRIVATE 5
+
+using namespace bluetooth;
 
 struct poll_slot_t {
   struct pollfd pfd;
@@ -91,13 +91,11 @@ static thread_slot_t ts[MAX_THREAD];
 static void* sock_poll_thread(void* arg);
 static inline void close_cmd_fd(int h);
 
-static inline void add_poll(int h, int fd, int type, int flags,
-                            uint32_t user_id);
+static inline void add_poll(int h, int fd, int type, int flags, uint32_t user_id);
 
 static std::recursive_mutex thread_slot_lock;
 
-static inline int create_thread(void* (*start_routine)(void*), void* arg,
-                                pthread_t* thread_id) {
+static inline int create_thread(void* (*start_routine)(void*), void* arg, pthread_t* thread_id) {
   pthread_attr_t thread_attr;
   pthread_attr_init(&thread_attr);
   pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_JOINABLE);
@@ -108,7 +106,7 @@ static inline int create_thread(void* (*start_routine)(void*), void* arg,
 
   ret = pthread_create(thread_id, &thread_attr, start_routine, arg);
   if (ret != 0) {
-    LOG_ERROR("pthread_create : %s", strerror(errno));
+    log::error("pthread_create : {}", strerror(errno));
     return ret;
   }
   /* We need to lower the priority of this thread to ensure the stack gets
@@ -132,15 +130,16 @@ static int alloc_thread_slot() {
       return i;
     }
   }
-  LOG_ERROR("execeeded max thread count");
+  log::error("execeeded max thread count");
   return -1;
 }
 static void free_thread_slot(int h) {
   if (0 <= h && h < MAX_THREAD) {
     close_cmd_fd(h);
     ts[h].used = 0;
-  } else
-    LOG_ERROR("invalid thread handle:%d", h);
+  } else {
+    log::error("invalid thread handle:{}", h);
+  }
 }
 void btsock_thread_init() {
   static int initialized;
@@ -157,8 +156,7 @@ void btsock_thread_init() {
     }
   }
 }
-int btsock_thread_create(btsock_signaled_cb callback,
-                         btsock_cmd_cb cmd_callback) {
+int btsock_thread_create(btsock_signaled_cb callback, btsock_cmd_cb cmd_callback) {
   asrt(callback || cmd_callback);
   int h = alloc_thread_slot();
   if (h >= 0) {
@@ -166,7 +164,7 @@ int btsock_thread_create(btsock_signaled_cb callback,
     pthread_t thread;
     int status = create_thread(sock_poll_thread, (void*)(uintptr_t)h, &thread);
     if (status) {
-      LOG_ERROR("create_thread failed: %s", strerror(status));
+      log::error("create_thread failed: {}", strerror(status));
       free_thread_slot(h);
       return -1;
     }
@@ -182,7 +180,7 @@ int btsock_thread_create(btsock_signaled_cb callback,
 static inline void init_cmd_fd(int h) {
   asrt(ts[h].cmd_fdr == -1 && ts[h].cmd_fdw == -1);
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, &ts[h].cmd_fdr) < 0) {
-    LOG_ERROR("socketpair failed: %s", strerror(errno));
+    log::error("socketpair failed: {}", strerror(errno));
     return;
   }
   // add the cmd fd for read & write
@@ -207,11 +205,11 @@ typedef struct {
 } sock_cmd_t;
 int btsock_thread_add_fd(int h, int fd, int type, int flags, uint32_t user_id) {
   if (h < 0 || h >= MAX_THREAD) {
-    LOG_ERROR("invalid bt thread handle:%d", h);
+    log::error("invalid bt thread handle:{}", h);
     return false;
   }
   if (ts[h].cmd_fdw == -1) {
-    LOG_ERROR("cmd socket is not created. socket thread may not initialized");
+    log::error("cmd socket is not created. socket thread may not initialized");
     return false;
   }
   if (flags & SOCK_THREAD_ADD_FD_SYNC) {
@@ -222,8 +220,7 @@ int btsock_thread_add_fd(int h, int fd, int type, int flags, uint32_t user_id) {
       add_poll(h, fd, type, flags, user_id);
       return true;
     }
-    LOG_WARN(
-        "THREAD_ADD_FD_SYNC is not called in poll thread, fallback to async");
+    log::warn("THREAD_ADD_FD_SYNC is not called in poll thread, fallback to async");
   }
   sock_cmd_t cmd = {CMD_ADD_FD, fd, type, flags, user_id};
 
@@ -232,63 +229,13 @@ int btsock_thread_add_fd(int h, int fd, int type, int flags, uint32_t user_id) {
 
   return ret == sizeof(cmd);
 }
-
-bool btsock_thread_remove_fd_and_close(int thread_handle, int fd) {
-  if (thread_handle < 0 || thread_handle >= MAX_THREAD) {
-    LOG_ERROR("%s invalid thread handle: %d", __func__, thread_handle);
-    return false;
-  }
-  if (fd == -1) {
-    LOG_ERROR("%s invalid file descriptor.", __func__);
-    return false;
-  }
-
-  sock_cmd_t cmd = {CMD_REMOVE_FD, fd, 0, 0, 0};
-
-  ssize_t ret;
-  OSI_NO_INTR(ret = send(ts[thread_handle].cmd_fdw, &cmd, sizeof(cmd), 0));
-
-  return ret == sizeof(cmd);
-}
-
-int btsock_thread_post_cmd(int h, int type, const unsigned char* data, int size,
-                           uint32_t user_id) {
-  if (h < 0 || h >= MAX_THREAD) {
-    LOG_ERROR("invalid bt thread handle:%d", h);
-    return false;
-  }
-  if (ts[h].cmd_fdw == -1) {
-    LOG_ERROR("cmd socket is not created. socket thread may not initialized");
-    return false;
-  }
-  sock_cmd_t cmd = {CMD_USER_PRIVATE, 0, type, size, user_id};
-  sock_cmd_t* cmd_send = &cmd;
-  int size_send = sizeof(cmd);
-  if (data && size) {
-    size_send = sizeof(cmd) + size;
-    cmd_send = (sock_cmd_t*)alloca(size_send);
-    if (cmd_send) {
-      *cmd_send = cmd;
-      memcpy(cmd_send + 1, data, size);
-    } else {
-      LOG_ERROR("alloca failed at h:%d, cmd type:%d, size:%d", h, type,
-                size_send);
-      return false;
-    }
-  }
-
-  ssize_t ret;
-  OSI_NO_INTR(ret = send(ts[h].cmd_fdw, cmd_send, size_send, 0));
-
-  return ret == size_send;
-}
 int btsock_thread_wakeup(int h) {
   if (h < 0 || h >= MAX_THREAD) {
-    LOG_ERROR("invalid bt thread handle:%d", h);
+    log::error("invalid bt thread handle:{}", h);
     return false;
   }
   if (ts[h].cmd_fdw == -1) {
-    LOG_ERROR("thread handle:%d, cmd socket is not created", h);
+    log::error("thread handle:{}, cmd socket is not created", h);
     return false;
   }
   sock_cmd_t cmd = {CMD_WAKEUP, 0, 0, 0, 0};
@@ -300,11 +247,11 @@ int btsock_thread_wakeup(int h) {
 }
 int btsock_thread_exit(int h) {
   if (h < 0 || h >= MAX_THREAD) {
-    LOG_ERROR("invalid bt thread slot:%d", h);
+    log::error("invalid bt thread slot:{}", h);
     return false;
   }
   if (ts[h].cmd_fdw == -1) {
-    LOG_ERROR("cmd socket is not created");
+    log::error("cmd socket is not created");
     return false;
   }
   sock_cmd_t cmd = {CMD_EXIT, 0, 0, 0, 0};
@@ -336,26 +283,28 @@ static void init_poll(int h) {
 }
 static inline unsigned int flags2pevents(int flags) {
   unsigned int pevents = 0;
-  if (flags & SOCK_THREAD_FD_WR) pevents |= POLLOUT;
-  if (flags & SOCK_THREAD_FD_RD) pevents |= POLLIN;
+  if (flags & SOCK_THREAD_FD_WR) {
+    pevents |= POLLOUT;
+  }
+  if (flags & SOCK_THREAD_FD_RD) {
+    pevents |= POLLIN;
+  }
   pevents |= POLL_EXCEPTION_EVENTS;
   return pevents;
 }
 
-static inline void set_poll(poll_slot_t* ps, int fd, int type, int flags,
-                            uint32_t user_id) {
+static inline void set_poll(poll_slot_t* ps, int fd, int type, int flags, uint32_t user_id) {
   ps->pfd.fd = fd;
   ps->user_id = user_id;
-  if (ps->type != 0 && ps->type != type)
-    LOG_ERROR("poll socket type should not changed! type was:%d, type now:%d",
-              ps->type, type);
+  if (ps->type != 0 && ps->type != type) {
+    log::error("poll socket type should not changed! type was:{}, type now:{}", ps->type, type);
+  }
   ps->type = type;
   ps->flags = flags;
   ps->pfd.events = flags2pevents(flags);
   ps->pfd.revents = 0;
 }
-static inline void add_poll(int h, int fd, int type, int flags,
-                            uint32_t user_id) {
+static inline void add_poll(int h, int fd, int type, int flags, uint32_t user_id) {
   asrt(fd != -1);
   int i;
   int empty = -1;
@@ -367,8 +316,9 @@ static inline void add_poll(int h, int fd, int type, int flags,
 
       set_poll(&ps[i], fd, type, flags | ps[i].flags, user_id);
       return;
-    } else if (empty < 0 && ps[i].pfd.fd == -1)
+    } else if (empty < 0 && ps[i].pfd.fd == -1) {
       empty = i;
+    }
   }
   if (empty >= 0) {
     asrt(ts[h].poll_count < MAX_POLL);
@@ -376,7 +326,7 @@ static inline void add_poll(int h, int fd, int type, int flags,
     ++ts[h].poll_count;
     return;
   }
-  LOG_ERROR("exceeded max poll slot:%d!", MAX_POLL);
+  log::error("exceeded max poll slot:{}!", MAX_POLL);
 }
 static inline void remove_poll(int h, poll_slot_t* ps, int flags) {
   if (flags == ps->flags) {
@@ -399,7 +349,7 @@ static int process_cmd_sock(int h) {
   OSI_NO_INTR(ret = recv(fd, &cmd, sizeof(cmd), MSG_WAITALL));
 
   if (ret != sizeof(cmd)) {
-    LOG_ERROR("recv cmd errno:%d", errno);
+    log::error("recv cmd errno:{}", errno);
     return false;
   }
   switch (cmd.id) {
@@ -420,27 +370,27 @@ static int process_cmd_sock(int h) {
       break;
     case CMD_USER_PRIVATE:
       asrt(ts[h].cmd_callback);
-      if (ts[h].cmd_callback)
+      if (ts[h].cmd_callback) {
         ts[h].cmd_callback(fd, cmd.type, cmd.flags, cmd.user_id);
+      }
       break;
     case CMD_EXIT:
       return false;
     default:
-      LOG_WARN("unknown cmd: %d", cmd.id);
+      log::warn("unknown cmd: {}", cmd.id);
       break;
   }
   return true;
 }
 
-static void process_data_sock(int h, struct pollfd* pfds, int pfds_count,
-                              int event_count) {
+static void process_data_sock(int h, struct pollfd* pfds, int pfds_count, int event_count) {
   asrt(event_count <= pfds_count);
   int i;
   for (i = 1; i < pfds_count; i++) {
     if (pfds[i].revents) {
       int ps_i = ts[h].psi[i];
       if (ts[h].ps[ps_i].pfd.fd == -1) {
-        LOG_INFO("Socket has been removed from poll set");
+        log::info("Socket has been removed from poll set");
         continue;
       }
       asrt(pfds[i].fd == ts[h].ps[ps_i].pfd.fd);
@@ -457,10 +407,13 @@ static void process_data_sock(int h, struct pollfd* pfds, int pfds_count,
         flags |= SOCK_THREAD_FD_EXCEPTION;
         // remove the whole slot not flags
         remove_poll(h, &ts[h].ps[ps_i], ts[h].ps[ps_i].flags);
-      } else if (flags)
+      } else if (flags) {
         remove_poll(h, &ts[h].ps[ps_i],
                     flags);  // remove the monitor flags that already processed
-      if (flags) ts[h].callback(pfds[i].fd, type, flags, user_id);
+      }
+      if (flags) {
+        ts[h].callback(pfds[i].fd, type, flags, user_id);
+      }
     }
   }
 }
@@ -472,10 +425,10 @@ static void prepare_poll_fds(int h, struct pollfd* pfds) {
   asrt(ts[h].poll_count <= MAX_POLL);
   while (count < ts[h].poll_count) {
     if (ps_i >= MAX_POLL) {
-      LOG_ERROR(
-          "exceed max poll range, ps_i:%d, MAX_POLL:%d, count:%d, "
-          "ts[h].poll_count:%d",
-          ps_i, MAX_POLL, count, ts[h].poll_count);
+      log::error(
+              "exceed max poll range, ps_i:{}, MAX_POLL:{}, count:{}, "
+              "ts[h].poll_count:{}",
+              ps_i, MAX_POLL, count, ts[h].poll_count);
       return;
     }
     if (ts[h].ps[ps_i].pfd.fd >= 0) {
@@ -497,8 +450,7 @@ static void* sock_poll_thread(void* arg) {
     int ret;
     OSI_NO_INTR(ret = poll(pfds.data(), ts[h].poll_count, -1));
     if (ret == -1) {
-      LOG_ERROR("poll ret -1, exit the thread, errno:%d, err:%s", errno,
-                strerror(errno));
+      log::error("poll ret -1, exit the thread, errno:{}, err:{}", errno, strerror(errno));
       break;
     }
     if (ret != 0) {
@@ -508,20 +460,22 @@ static void* sock_poll_thread(void* arg) {
       {
         asrt(pfds[0].fd == ts[h].cmd_fdr);
         if (!process_cmd_sock(h)) {
-          LOG_INFO("h:%d, process_cmd_sock return false, exit...", h);
+          log::info("h:{}, process_cmd_sock return false, exit...", h);
           break;
         }
-        if (ret == 1)
+        if (ret == 1) {
           need_process_data_fd = false;
-        else
+        } else {
           ret--;  // exclude the cmd fd
+        }
       }
-      if (need_process_data_fd)
+      if (need_process_data_fd) {
         process_data_sock(h, pfds.data(), pfds_count, ret);
+      }
     } else {
-      LOG_INFO("no data, select ret: %d", ret);
+      log::info("no data, select ret: {}", ret);
     };
   }
-  LOG_INFO("socket poll thread exiting, h:%d", h);
+  log::info("socket poll thread exiting, h:{}", h);
   return 0;
 }

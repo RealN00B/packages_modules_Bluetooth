@@ -23,14 +23,17 @@
 
 #include "test/common/mock_functions.h"
 
+// TODO(b/369381361) Enfore -Wmissing-prototypes
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
 namespace bluetooth {
 namespace bqr {
 
-void DumpLmpLlMessage(uint8_t length, const uint8_t* p_event) {
+void DumpLmpLlMessage(uint8_t /* length */, const uint8_t* /* p_event */) {
   inc_func_call_count(__func__);
 }
 
-void DumpBtScheduling(uint8_t length, const uint8_t* p_event) {
+void DumpBtScheduling(uint8_t /* length */, const uint8_t* /* p_event */) {
   inc_func_call_count(__func__);
 }
 
